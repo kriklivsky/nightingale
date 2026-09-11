@@ -2,12 +2,14 @@
 
 import os
 import subprocess
+from unittest.mock import patch
 
 import numpy as np
 import soundfile as sf
 import torch
 
 from gpu import gpu_model
+from uvr_backend import UvrBackendError, get_rknn_backend, select_uvr_backend
 from whisper_compat import progress
 
 KARAOKE_MODEL = "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt"
@@ -120,6 +122,8 @@ def separate_stems_uvr(audio_path: str, work_dir: str, models_dir: str) -> tuple
     """
     from audio_separator.separator import Separator
 
+    backend_name = select_uvr_backend(models_dir)
+
     with gpu_model("uvr-karaoke") as held:
         progress(5, "Loading karaoke separation model...")
         separator = Separator(
@@ -127,7 +131,56 @@ def separate_stems_uvr(audio_path: str, work_dir: str, models_dir: str) -> tuple
             output_dir=work_dir,
         )
         held.append(separator)
-        separator.load_model(KARAOKE_MODEL)
+
+        backend = None
+        if backend_name == "rknn":
+            from audio_separator.separator.roformer.model_loading_result import (
+                ImplementationVersion,
+                ModelLoadingResult,
+            )
+            from audio_separator.separator.roformer.roformer_loader import RoformerLoader
+
+            try:
+                backend = get_rknn_backend(models_dir)
+            except UvrBackendError as exc:
+                requested = os.environ.get("NIGHTINGALE_UVR_BACKEND", "auto").strip().lower()
+                if requested != "auto":
+                    raise
+                print(
+                    f"[nightingale:LOG] UVR backend: existing "
+                    f"(RKNN initialization failed: {exc})",
+                    flush=True,
+                )
+                backend_name = "existing"
+
+        if backend_name == "rknn":
+            assert backend is not None
+            proxy = backend.make_proxy_model()
+
+            def load_rknn_model(_loader, model_path, config, device="cpu"):
+                del _loader, model_path, config, device
+                result = ModelLoadingResult.success_result(
+                    model=proxy,
+                    implementation=ImplementationVersion.NEW,
+                    config=backend.model_data(),
+                )
+                result.add_model_info("model_type", "mel_band_roformer")
+                result.add_model_info("loading_method", "nightingale-rknn")
+                result.add_model_info("device", "rknpu")
+                return result
+
+            separator.download_model_files = lambda _filename: (
+                KARAOKE_MODEL,
+                "MDXC",
+                "Mel-Roformer-Karaoke-Aufr33-Viperx (RKNN)",
+                str(backend.model_path),
+                "nightingale-rknn-config",
+            )
+            separator.load_model_data_from_yaml = lambda _filename: backend.model_data()
+            with patch.object(RoformerLoader, "load_model", load_rknn_model):
+                separator.load_model(KARAOKE_MODEL)
+        else:
+            separator.load_model(KARAOKE_MODEL)
 
         progress(15, "Preparing audio for stem separation...")
         load_path = _ensure_wav(audio_path, work_dir)

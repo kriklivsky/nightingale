@@ -706,6 +706,15 @@ pub fn step_install_packages() -> Result<(), String> {
         pkg_args.push("torchaudio<2.3");
     }
 
+    if cfg!(target_os = "linux")
+        && cfg!(target_arch = "aarch64")
+        && std::fs::read("/proc/device-tree/compatible")
+            .is_ok_and(|compatible| compatible.windows(6).any(|part| part == b"rk3588"))
+    {
+        // Runtime only. rknn-toolkit2 remains a build-time-only dependency.
+        pkg_args.push("rknn-toolkit-lite2==2.3.2");
+    }
+
     pkg_args.push("--python");
     pkg_args.push(&py_str);
 
