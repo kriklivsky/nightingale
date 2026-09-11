@@ -63,16 +63,18 @@ and writes `manifest.json` only after every component succeeds.
 
 Install the official matching AArch64 `librknnrt.so` in the system library path and
 the matching `rknn-toolkit-lite2` wheel in Nightingale's analyzer environment. Copy
-the complete bundle directory to the Nightingale models directory as:
+the complete bundle directory below Nightingale's `models/audio_separator`
+directory as:
 
 ```text
-mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.rk3588.fp16/
-  manifest.json
-  band-split.rknn
-  transformer-00-time.rknn
-  transformer-00-frequency.rknn
-  ...
-  mask-50-60.rknn
+models/audio_separator/
+  mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.rk3588.fp16/
+    manifest.json
+    band-split.rknn
+    transformer-00-time.rknn
+    transformer-00-frequency.rknn
+    ...
+    mask-50-60.rknn
 ```
 
 For a development bundle elsewhere, point directly to its manifest or directory:
