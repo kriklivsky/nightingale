@@ -1,4 +1,5 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { platform } from '@tauri-apps/plugin-os';
 
 import { windowImmersive } from '@/bridge/window';
 
@@ -40,5 +41,9 @@ export const setFullScreen = async (next: boolean): Promise<void> => {
     }
     return;
   }
-  await tauriWindow().setSimpleFullscreen(next);
+  if (platform() === 'macos') {
+    await tauriWindow().setSimpleFullscreen(next);
+  } else {
+    await tauriWindow().setFullscreen(next);
+  }
 };

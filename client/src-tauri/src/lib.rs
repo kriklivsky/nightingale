@@ -50,25 +50,25 @@ fn frontend_ready(window: tauri::Window) -> Result<(), String> {
     window.show().map_err(|error| error.to_string())
 }
 
-/// True for native fullscreen or macOS "simple" fullscreen (`set_simple_fullscreen`), where
-/// `isFullscreen()` stays false but the window fills the screen.
+/// True for native fullscreen or a borderless window that already fills its monitor.
+/// The size fallback also covers lightweight TV sessions without an EWMH window manager,
+/// where the compositor cannot acknowledge the usual fullscreen state request.
 #[tauri::command]
 fn window_immersive(window: tauri::WebviewWindow) -> Result<bool, String> {
     if window.is_fullscreen().map_err(|e| e.to_string())? {
         return Ok(true);
     }
-    #[cfg(target_os = "macos")]
-    {
-        let inner = window.inner_size().map_err(|e| e.to_string())?;
-        if let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? {
-            let ms = monitor.size();
-            let dw = (inner.width as i32 - ms.width as i32).abs();
-            let dh = (inner.height as i32 - ms.height as i32).abs();
-            if dw <= 2 && dh <= 2 {
-                return Ok(true);
-            }
+
+    let inner = window.inner_size().map_err(|e| e.to_string())?;
+    if let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? {
+        let monitor_size = monitor.size();
+        let width_delta = (inner.width as i32 - monitor_size.width as i32).abs();
+        let height_delta = (inner.height as i32 - monitor_size.height as i32).abs();
+        if width_delta <= 2 && height_delta <= 2 {
+            return Ok(true);
         }
     }
+
     Ok(false)
 }
 
@@ -223,7 +223,10 @@ pub fn run() {
                 .map_err(|e| e.to_string())?;
 
             if config.fullscreen == Some(true) {
+                #[cfg(target_os = "macos")]
                 let _ = window.set_simple_fullscreen(true);
+                #[cfg(not(target_os = "macos"))]
+                let _ = window.set_fullscreen(true);
             }
 
             Ok(())
