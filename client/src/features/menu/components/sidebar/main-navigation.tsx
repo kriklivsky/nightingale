@@ -4,16 +4,20 @@ import {
   FileQuestionMark,
   DiscIcon,
   ListMusicIcon,
+  StarIcon,
   UserIcon,
   type LucideIcon,
 } from 'lucide-react';
 import { Fragment, useCallback, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router';
 
+import { useFavoriteHashes } from '@/features/library/hooks/use-favorites';
 import { ANALYSIS_STATUS_STYLES } from '@/features/library/lib/analysis-status-styles';
 import {
+  FAVORITES_LIBRARY_FILTER,
   isLibraryMenuItemActive,
   libraryFilterFromMenuSelection,
+  libraryFiltersEqual,
   type LibraryMenuSection,
 } from '@/features/library/lib/library-menu-filter';
 import { useLibraryMenuItems } from '@/features/library/queries/use-library-menu-items';
@@ -130,11 +134,15 @@ type LibraryNavSubItemProps = {
 };
 
 function LibraryNavSubItem({ section, item, filter, onSelectItem }: LibraryNavSubItemProps) {
-  const { isSidebarActive, isItemFocused, itemIndex } = useSidebarRowFocus(section, item.value);
+  const { isSidebarActive, isItemFocused, itemIndex, collapseIndex } = useSidebarRowFocus(
+    section,
+    item.value,
+  );
   return (
     <SidebarMenuSubItem>
       <SidebarMenuButton
         data-sidebar-nav-index={itemIndex}
+        data-sidebar-parent-index={collapseIndex}
         isActive={isLibraryMenuItemActive(section, item, filter)}
         className={`flex h-fit items-center justify-between gap-2 px-2 py-1.5 hover:ring-primary ${
           isSidebarActive && isItemFocused ? 'ring-2 ring-primary bg-sidebar-accent' : ''
@@ -205,7 +213,7 @@ function LibraryNavSection({
 
 type MainNavigationProps = {
   baseIndex: number;
-  registerCallbacks: (callbacks: (() => void)[]) => void;
+  registerCallbacks: (callbacks: (() => void)[], ready: boolean) => void;
   folderFocusedSidebarIndex: number;
   registerFolderCallback: (callback: ((subIndex: number) => void) | null) => void;
 };
@@ -216,7 +224,8 @@ export const MainNavigation = ({
   folderFocusedSidebarIndex,
   registerFolderCallback,
 }: MainNavigationProps) => {
-  const { data: menu } = useLibraryMenuItems();
+  const { data: menu, isLoading: isLoadingMenu } = useLibraryMenuItems();
+  const { data: favoriteHashes = [] } = useFavoriteHashes();
   const { setOpen } = useSidebar();
   const isMobile = useIsMobile();
   const { setLibraryFilter, ...filter } = useLibraryFilter();
@@ -239,6 +248,18 @@ export const MainNavigation = ({
     },
     [isMobile, navigate, setLibraryFilter, setOpen],
   );
+
+  const selectFavorites = useCallback(() => {
+    setLibraryFilter((current) => ({
+      ...FAVORITES_LIBRARY_FILTER,
+      status: current.status,
+      transcript_source: current.transcript_source,
+    }));
+    if (isMobile) {
+      setOpen(false);
+    }
+    void navigate('/');
+  }, [isMobile, navigate, setLibraryFilter, setOpen]);
 
   const visibleSections = useMemo(() => {
     if (!menu) {
@@ -265,33 +286,44 @@ export const MainNavigation = ({
   }, [visibleSections, openBySection]);
 
   useEffect(() => {
-    const callbacks = rows.map((row) => {
-      if (row.kind === 'collapse') {
-        return () => {
-          setOpenBySection((prev) => ({ ...prev, [row.section]: !prev[row.section] }));
-        };
-      }
-
-      return () => {
-        const item = menu?.[row.section].find((entry) => entry.value === row.value);
-        if (!item) {
-          return;
+    const callbacks = [
+      selectFavorites,
+      ...rows.map((row) => {
+        if (row.kind === 'collapse') {
+          return () => {
+            setOpenBySection((prev) => ({ ...prev, [row.section]: !prev[row.section] }));
+          };
         }
-        selectMenuItem(row.section, item);
-      };
-    });
 
-    registerCallbacks(callbacks);
+        return () => {
+          const item = menu?.[row.section].find((entry) => entry.value === row.value);
+          if (!item) {
+            return;
+          }
+          selectMenuItem(row.section, item);
+        };
+      }),
+    ];
+
+    registerCallbacks(callbacks, !isLoadingMenu);
 
     return () => {
-      registerCallbacks([]);
+      registerCallbacks([], false);
     };
-  }, [rows, menu, selectMenuItem, registerCallbacks, setOpenBySection]);
+  }, [
+    rows,
+    menu,
+    selectMenuItem,
+    selectFavorites,
+    registerCallbacks,
+    setOpenBySection,
+    isLoadingMenu,
+  ]);
 
   const isSidebarActive = focus.active && focus.panel === 'sidebar';
 
   useEffect(() => {
-    if (!isSidebarActive || focus.source === 'mouse') {
+    if (!isSidebarActive || focus.source === 'mouse' || isLoadingMenu) {
       return undefined;
     }
 
@@ -303,9 +335,7 @@ export const MainNavigation = ({
     });
 
     return () => cancelAnimationFrame(rafId);
-  }, [focus.sidebarIndex, focus.source, isSidebarActive]);
-
-  const showEmptyPlaceholder = !menu || visibleSections.length === 0;
+  }, [focus.sidebarIndex, focus.source, isSidebarActive, isLoadingMenu]);
 
   return (
     <SidebarContent className="overflow-hidden">
@@ -319,7 +349,7 @@ export const MainNavigation = ({
       >
         <SidebarGroup>
           <SidebarMenu>
-            {showEmptyPlaceholder ? (
+            {isLoadingMenu ? (
               <SidebarMenuItem className="px-1 py-2">
                 <div className="space-y-1">
                   <SidebarMenuSkeleton showIcon />
@@ -328,23 +358,43 @@ export const MainNavigation = ({
                 </div>
               </SidebarMenuItem>
             ) : (
-              <SidebarNavProvider rows={rows} baseIndex={baseIndex}>
-                {visibleSections.map((config) => (
-                  <LibraryNavSection
-                    key={config.section}
-                    section={config.section}
-                    label={config.label}
-                    icon={config.icon}
-                    items={config.visibleItems}
-                    filter={filter}
-                    open={openBySection[config.section]}
-                    onToggleOpen={(open) => {
-                      setOpenBySection((prev) => ({ ...prev, [config.section]: open }));
-                    }}
-                    onSelectItem={selectMenuItem}
-                  />
-                ))}
-              </SidebarNavProvider>
+              <>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    data-sidebar-nav-index={baseIndex}
+                    isActive={libraryFiltersEqual(filter, FAVORITES_LIBRARY_FILTER)}
+                    className={`flex w-full justify-between hover:ring-primary ${
+                      isSidebarActive && focus.sidebarIndex === baseIndex
+                        ? 'ring-2 ring-primary bg-sidebar-accent'
+                        : ''
+                    }`}
+                    onClick={selectFavorites}
+                  >
+                    <span className="flex items-center gap-2">
+                      <StarIcon className="size-4 shrink-0" />
+                      Favorites
+                    </span>
+                    <Badge variant="secondary">{favoriteHashes.length}</Badge>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarNavProvider rows={rows} baseIndex={baseIndex + 1}>
+                  {visibleSections.map((config) => (
+                    <LibraryNavSection
+                      key={config.section}
+                      section={config.section}
+                      label={config.label}
+                      icon={config.icon}
+                      items={config.visibleItems}
+                      filter={filter}
+                      open={openBySection[config.section]}
+                      onToggleOpen={(open) => {
+                        setOpenBySection((prev) => ({ ...prev, [config.section]: open }));
+                      }}
+                      onSelectItem={selectMenuItem}
+                    />
+                  ))}
+                </SidebarNavProvider>
+              </>
             )}
           </SidebarMenu>
         </SidebarGroup>

@@ -20,6 +20,7 @@ export type DialogMode =
   | { mode: 'language'; song: Song }
   | { mode: 'edit-lyrics'; song: Song }
   | { mode: 'song-leaderboard'; song: Song }
+  | { mode: 'delete-song'; song: Song }
   | { mode: 'clear-cache'; target: ClearCacheTarget }
   | null;
 

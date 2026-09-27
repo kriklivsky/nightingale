@@ -36,6 +36,47 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def stabilize_band_split_norms(model: onnx.ModelProto, expected_count: int) -> None:
+    producers = {
+        output: node
+        for node in model.graph.node
+        for output in node.output
+    }
+    repaired = 0
+    patched_constants: set[str] = set()
+    for node in model.graph.node:
+        if node.op_type != "Clip" or len(node.input) < 2:
+            continue
+        cast = producers.get(node.input[1])
+        if cast is None or cast.op_type != "Cast":
+            continue
+        constant = producers.get(cast.input[0])
+        if constant is None or constant.op_type != "Constant":
+            continue
+        constant_name = constant.output[0]
+        if constant_name in patched_constants:
+            repaired += 1
+            continue
+        value = next((item for item in constant.attribute if item.name == "value"), None)
+        if value is None:
+            continue
+        epsilon = onnx.numpy_helper.to_array(value.t)
+        if epsilon.size != 1 or not np.isclose(
+            float(epsilon), 1e-12, rtol=0.0, atol=1e-15
+        ):
+            continue
+        value.t.CopyFrom(
+            onnx.numpy_helper.from_array(np.asarray(1e-4, dtype=np.float32))
+        )
+        patched_constants.add(constant_name)
+        repaired += 1
+
+    if repaired != expected_count:
+        raise ValueError(
+            f"expected {expected_count} band-split normalizers, found {repaired}"
+        )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True, type=Path)
@@ -175,6 +216,9 @@ def main() -> None:
         dynamic_axes=None,
     )
     onnx_model = onnx.load(str(args.output), load_external_data=True)
+    if args.component == "band-split":
+        stabilize_band_split_norms(onnx_model, frequency_bands)
+        onnx.save(onnx_model, str(args.output))
     onnx.checker.check_model(onnx_model)
 
     if not args.skip_parity:

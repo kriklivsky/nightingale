@@ -25,7 +25,7 @@ function formatTime(seconds: number): string {
 
 function formatGuideText(volume: number): string {
   const pct = Math.round(volume * 100);
-  return pct === 0 ? 'Guide: OFF' : `Guide: ${pct}% [G +/-]`;
+  return pct === 0 ? 'Guide: OFF [←/→]' : `Guide: ${pct}% [←/→ / G]`;
 }
 
 function formatThemeText(themeIndex: number, videoFlavor: VideoFlavor): string {

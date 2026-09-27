@@ -182,6 +182,10 @@ pub struct AppConfig {
     pub library_source: Option<LibrarySource>,
     pub last_theme: Option<usize>,
     pub guide_volume: Option<f64>,
+    /// Master output volume for the playback mix (instrumental + guide) sent to
+    /// the speakers/soundbar. Kept separate from `mic_monitor_gain` so lowering
+    /// the backing track never changes the microphone monitor level.
+    pub output_volume: Option<f64>,
     pub fullscreen: Option<bool>,
     pub playback_mode: Option<String>,
     pub dark_mode: Option<bool>,
@@ -246,6 +250,7 @@ impl Default for AppConfig {
             library_source: None,
             last_theme: None,
             guide_volume: None,
+            output_volume: None,
             fullscreen: None,
             playback_mode: None,
             dark_mode: None,

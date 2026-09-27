@@ -208,6 +208,10 @@
     width: 9rem;
   }
 
+  .song-table-actions {
+    width: 8.5rem;
+  }
+
   .song-table-header {
     background-color: var(--background);
   }
@@ -255,6 +259,27 @@
 }
 
 @layer utilities {
+  .remote-navigation,
+  .remote-navigation * {
+    cursor: none;
+  }
+
+  .tvbox-session.tvbox-session,
+  .tvbox-session.tvbox-session * {
+    cursor: none;
+  }
+
+  .remote-navigation
+    [data-song-index]:hover:not([data-nav-focused='true'], [aria-selected='true'])
+    > td {
+    background-color: var(--background);
+  }
+
+  .remote-navigation [data-song-index]:hover:not([data-nav-focused='true'], [aria-pressed='true']) {
+    background-color: var(--card);
+    border-color: var(--border);
+  }
+
   .themed-scrollbar {
     scrollbar-color: color-mix(in srgb, var(--foreground) 28%, transparent) transparent;
     scrollbar-width: thin;

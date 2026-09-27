@@ -11,13 +11,15 @@ from whisper_compat import progress, align_device_for, compute_type_for, align_w
 
 
 def align_lyrics(
-    lyrics_path: str,
+    lyrics_path: str | None,
     vocals_path: str,
     device: str,
     model_name: str = "large-v3",
     language_override: str | None = None,
     whisper_model=None,
     pre_align_cleanup=None,
+    lyrics_lines: list[str] | None = None,
+    timed_lines: list[dict] | None = None,
 ) -> dict:
     """Align pre-existing lyrics to vocals audio using WhisperX.
 
@@ -32,10 +34,14 @@ def align_lyrics(
     import whisperx
 
     progress(55, "Loading lyrics...")
-    with open(lyrics_path, "r", encoding="utf-8") as f:
-        lyrics_data = json.load(f)
-
-    lines = lyrics_data.get("lines", [])
+    if lyrics_lines is None:
+        if lyrics_path is None:
+            raise ValueError("Lyrics are missing; analysis stopped.")
+        with open(lyrics_path, "r", encoding="utf-8") as f:
+            lyrics_data = json.load(f)
+        lines = lyrics_data.get("lines", [])
+    else:
+        lines = lyrics_lines
     print(f"[nightingale:LOG] Lyrics loaded: {len(lines)} lines", flush=True)
 
     clean_lines: list[str] = []
@@ -66,6 +72,7 @@ def align_lyrics(
             )
             held.append(model)
             language = detect_language_multiwindow(model, audio)
+        del model
         print(f"[nightingale:LOG] Detected language: '{language}'", flush=True)
         progress(59, f"Detected language: {language}")
 
@@ -101,7 +108,21 @@ def align_lyrics(
     else:
         full_text = " ".join(clean_lines)
 
-    raw_segments = [{"text": full_text, "start": vocal_start, "end": vocal_end}]
+    if timed_lines is not None:
+        raw_segments = []
+        align_lines = cleaned_lines if cjk.is_cjk(language) else clean_lines
+        for line, align_text in zip(timed_lines, align_lines):
+            start = max(0.0, float(line["start"]))
+            end = min(duration_secs, float(line["end"]))
+            if end <= start:
+                raise ValueError("Timed lyrics contain a line with invalid timestamps.")
+            raw_segments.append({"text": align_text, "start": start, "end": end})
+        print(
+            f"[nightingale:LOG] Aligning {len(raw_segments)} timed lyric lines separately",
+            flush=True,
+        )
+    else:
+        raw_segments = [{"text": full_text, "start": vocal_start, "end": vocal_end}]
 
     align_result = align_with_fallback(
         raw_segments, audio, cjk.align_lang_code(language), a_device, pre_align_cleanup,

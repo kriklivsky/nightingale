@@ -55,6 +55,7 @@ export const appConfigSchema: z.ZodType<AppConfig> = z.object({
   library_source: librarySourceSchema.nullable(),
   last_theme: nullableNumber,
   guide_volume: nullableNumber,
+  output_volume: nullableNumber,
   fullscreen: nullableBoolean,
   playback_mode: nullableString,
   dark_mode: nullableBoolean,

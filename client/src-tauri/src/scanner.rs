@@ -1,7 +1,10 @@
+use std::path::PathBuf;
+use tauri::{AppHandle, Emitter, State};
+
 use app_core::{
     AnalysisQueue, AppConfig, JellyfinHealth, JellyfinLoginResult, LibraryMenuItems, LibrarySource,
-    LoadSongsParams, NavidromeHealth, NavidromeLoginResult, PlexHealth, PlexPinPollResult,
-    PlexPinStart, PlexServer, Song, SongsMeta, SongsStore,
+    LoadSongsParams, NavidromeHealth, NavidromeLoginResult, PlaybackQueue, PlexHealth,
+    PlexPinPollResult, PlexPinStart, PlexServer, Song, SongsMeta, SongsStore,
 };
 
 #[tauri::command]
@@ -97,6 +100,30 @@ pub(crate) fn load_songs_by_hashes(file_hashes: Vec<String>) -> Vec<Song> {
 #[tauri::command]
 pub(crate) fn load_songs_meta() -> SongsMeta {
     SongsStore::load_meta()
+}
+
+#[tauri::command]
+pub(crate) fn load_favorite_hashes() -> Result<Vec<String>, String> {
+    app_core::load_favorite_hashes()
+}
+
+#[tauri::command]
+pub(crate) fn set_song_favorite(file_hash: String, favorite: bool) -> Result<(), String> {
+    app_core::set_song_favorite(&file_hash, favorite)
+}
+
+#[tauri::command]
+pub(crate) fn delete_local_song(
+    app: AppHandle,
+    queue: State<'_, PlaybackQueue>,
+    file_hash: String,
+    path: PathBuf,
+) -> Result<(), String> {
+    app_core::delete_local_song(&file_hash, &path)?;
+    if let Ok(entries) = queue.remove_song_path(&path) {
+        let _ = app.emit("playback-queue-changed", entries);
+    }
+    Ok(())
 }
 
 #[tauri::command]

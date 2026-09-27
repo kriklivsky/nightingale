@@ -38,7 +38,12 @@ export function getSongStatusInfo(isAnalyzed: boolean, queueStatus?: QueuedStatu
       };
     }
     if ('Failed' in queueStatus) {
-      return { label: 'Failed', variant: 'destructive' };
+      return {
+        label: queueStatus.Failed.startsWith('No synchronized lyrics found')
+          ? 'No timed lyrics'
+          : 'Failed',
+        variant: 'destructive',
+      };
     }
   }
 

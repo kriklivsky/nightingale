@@ -23,7 +23,10 @@ type SidebarSubCallback = (subIndex: number) => void;
 
 export const Sidebar = ({ children }: PropsWithChildren<{}>) => {
   const { focus, actionsRef, setFocus } = useMenuFocus();
-  const [mainNavigationCallbacks, setMainNavigationCallbacks] = useState<SidebarCallback[]>([]);
+  const [mainNavigation, setMainNavigation] = useState<{
+    callbacks: SidebarCallback[];
+    ready: boolean;
+  }>({ callbacks: [], ready: false });
 
   const focusRef = useLatestRef(focus);
   const themeCallbackRef = useRef<SidebarCallback | null>(null);
@@ -31,7 +34,7 @@ export const Sidebar = ({ children }: PropsWithChildren<{}>) => {
   const cacheCallbackRef = useRef<SidebarSubCallback | null>(null);
   const actionsCallbackRef = useRef<SidebarCallback | null>(null);
 
-  const cacheSlotIndex = MAIN_NAV_BASE_INDEX + mainNavigationCallbacks.length;
+  const cacheSlotIndex = MAIN_NAV_BASE_INDEX + mainNavigation.callbacks.length;
   const actionsSlotIndex = cacheSlotIndex + 1;
   const sidebarCount = actionsSlotIndex + 1;
 
@@ -39,9 +42,12 @@ export const Sidebar = ({ children }: PropsWithChildren<{}>) => {
     themeCallbackRef.current = callback;
   }, []);
 
-  const registerMainNavigationCallbacks = useCallback((callbacks: SidebarCallback[]) => {
-    setMainNavigationCallbacks(callbacks);
-  }, []);
+  const registerMainNavigationCallbacks = useCallback(
+    (callbacks: SidebarCallback[], ready: boolean) => {
+      setMainNavigation({ callbacks, ready });
+    },
+    [],
+  );
 
   const registerFolderCallback = useCallback((callback: SidebarSubCallback | null) => {
     folderCallbackRef.current = callback;
@@ -59,11 +65,11 @@ export const Sidebar = ({ children }: PropsWithChildren<{}>) => {
     () => [
       () => themeCallbackRef.current?.(),
       () => folderCallbackRef.current?.(focusRef.current.sidebarSubIndex),
-      ...mainNavigationCallbacks,
+      ...mainNavigation.callbacks,
       () => cacheCallbackRef.current?.(focusRef.current.sidebarSubIndex),
       () => actionsCallbackRef.current?.(),
     ],
-    [focusRef, mainNavigationCallbacks],
+    [focusRef, mainNavigation.callbacks],
   );
   const confirmSidebarSlot = useCallback(
     (index: number) => sidebarCallbacks.at(index)?.(),
@@ -81,13 +87,15 @@ export const Sidebar = ({ children }: PropsWithChildren<{}>) => {
     const actions = actionsRef.current;
     actions.sidebarCount = sidebarCount;
     actions.onConfirmSidebar = confirmSidebarSlot;
-    clampSidebarFocus();
+    if (mainNavigation.ready) {
+      clampSidebarFocus();
+    }
 
     return () => {
       actions.onConfirmSidebar = null;
       actions.sidebarCount = 0;
     };
-  }, [actionsRef, clampSidebarFocus, confirmSidebarSlot, sidebarCount]);
+  }, [actionsRef, clampSidebarFocus, confirmSidebarSlot, mainNavigation.ready, sidebarCount]);
 
   return (
     <SidebarProvider>

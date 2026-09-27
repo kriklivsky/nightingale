@@ -48,12 +48,12 @@ Toggle between dark and light themes from the sidebar. The theme preference is s
 
 | Key | Purpose |
 |---|---|
-| `asr_engine` | Selects the transcription engine. `whisper` (default) or `parakeet`. See [Lyrics & Transcription](./lyrics.md#choosing-the-asr-engine). |
-| `align_backend` | Forced-alignment backend. `whisperx` (default, Python Viterbi), `ctc` (torchaudio `forced_align` C++/CUDA kernel; faster), or `qwen` (Qwen3-ForcedAligner-0.6B; 11 languages incl. CJK, runs on CUDA/MPS/CPU). All non-default backends fall back to WhisperX on error or unsupported input. See [Lyrics & Transcription](./lyrics.md#choosing-the-forced-alignment-backend). |
+| `asr_engine` | Legacy setting retained in existing configs; automatic analysis no longer uses ASR. |
+| `align_backend` | Forced-alignment backend for manually provided plain lyrics: `whisperx`, `ctc`, or `qwen`. Timed LRCLIB lyrics do not need alignment. |
 | `separator` | Stem separation model: `karaoke` (UVR, default) or `demucs`. |
 | `vocal_detection_threshold_pct` | RMS threshold (fraction of the loudest window, `0.0`–`1.0`, default `0.15`) that marks where vocals start and end. Lower values keep more quiet intros/outros and soft singing; higher values trim more silence. Shown in Settings as **Vocal detection sensitivity** (0–60%). |
-| `whisper_model` | Whisper model size: `large-v3` (default), `large-v3-turbo`, `medium`, `small`, `base`, `tiny`. Ignored when `asr_engine` is `parakeet`. |
-| `beam_size` / `batch_size` | Decoder beam width and batch size for Whisper. Higher values are more accurate but slower and use more VRAM. |
+| `whisper_model` | Legacy ASR option, unused by automatic analysis. |
+| `beam_size` / `batch_size` | Legacy ASR options, unused by automatic analysis. |
 | `mic_monitor_gain` | Live monitor gain when mic monitoring is on. Range `0.0`–`2.0` (slider shown as 0–200%). Configs from older builds that used `mic_mirror_gain` are read transparently and migrated on next save. |
 | `mic_latency_compensation_sec` | Speaker-to-mic latency compensation for pitch scoring. Tune manually or use the Settings latency test. |
 | `mic_active` / `mic_monitoring` / `preferred_mic` | Microphone state and the device chosen for scoring + monitoring. Older `mic_mirroring` configs are accepted and migrated on next save. |
@@ -64,5 +64,5 @@ Toggle between dark and light themes from the sidebar. The theme preference is s
 | `cache_paths` | Optional per-folder overrides for `songs`, `videos`, `models`, and `vendor`. Use Settings to move them so existing contents migrate safely. |
 | `last_video_flavor` | Index of the last-used Pixabay video flavor (Nature, Underwater, Space, City, Countryside). |
 | `last_theme` | Index of the last-used playback background (shaders → video → source). |
-| `language_overrides` | Per-song forced ASR language, keyed by song hash. Set this from the song-list controls. |
+| `language_overrides` | Per-song language override for manually aligned plain lyrics, keyed by song hash. |
 | `data_path` | Selected data folder root. Set during first-run setup. |

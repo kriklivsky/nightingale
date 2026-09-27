@@ -303,6 +303,26 @@ async fn dispatch(state: AppState, name: &str, payload: Value) -> CmdResult {
             )
         }
         "load_songs_meta" => Ok(serde_json::to_value(SongsStore::load_meta()).map_err(serde_err)?),
+        "load_favorite_hashes" => {
+            let hashes = app_core::load_favorite_hashes().map_err(ApiError::internal)?;
+            Ok(serde_json::to_value(hashes).map_err(serde_err)?)
+        }
+        "set_song_favorite" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Args {
+                file_hash: String,
+                favorite: bool,
+            }
+            let args: Args = deserialize(payload)?;
+            tokio::task::spawn_blocking(move || {
+                app_core::set_song_favorite(&args.file_hash, args.favorite)
+            })
+            .await
+            .map_err(blocking_task_err)?
+            .map_err(ApiError::bad_request)?;
+            Ok(Value::Null)
+        }
         "load_analysis_queue" => {
             Ok(serde_json::to_value(AnalysisQueue::load()).map_err(serde_err)?)
         }

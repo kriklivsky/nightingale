@@ -13,9 +13,42 @@ below.
 
 ## [Unreleased]
 
+### Features
+
+- Added a confirmed Delete button beside Favorite and Play for local songs in the desktop app. UltraStar deletion includes referenced media and artwork; shared files and songs undergoing analysis are protected.
+
+- Added persistent song favorites with a top-level Favorites library view, plus remote-focusable Favorite and Play buttons on each song row and grid card. Grid cards now let the TV remote move Right through Favorite, Play, and the next card. TV-box sessions now hide the native mouse pointer.
+
+- LRCLIB lyric search now retries by song title and matches Cyrillic/Latin artist spellings (for example, «Монеточка» and «Monetochka») while retaining synchronized-lyrics and duration checks.
+
+- Automatic analysis now uses synchronized LRCLIB lyrics instead of Whisper transcription. It prefers Lyricsfile word timestamps and otherwise aligns words from timed LRC; songs without timed lyrics stop before stem separation with an actionable error.
+
+- TV-remote navigation now hides the idle mouse cursor and hover highlight, ignores stationary pointer events, keeps the selected sidebar row after playback, and uses Left/Right to enter or leave expanded sidebar sections.
+- During playback, the Up/Down arrows (keyboard, gamepad D-pad/stick, and CEC remote) now adjust the speaker output volume of the backing mix while a song is playing, and the level is remembered between sessions. The microphone monitor gain stays a separate control. Outside playback the arrows keep their normal navigation behavior.
+- During playback, the Left/Right arrows (keyboard, gamepad D-pad/stick, and CEC remote) now adjust the guide vocal volume while a song with guide vocals is playing — right is louder, left is quieter — and the level is remembered between sessions. When guide vocals are unavailable or the song is paused, the arrows keep their normal navigation behavior; the `G` toggle and `+` / `-` hotkeys still work as before.
+
 ### Fixes
 
+- On the Orange Pi TV box, restore the native 4K HDMI picture when the TV selects its soundbar/Orange Pi CEC route. Use the confirmed working 30 Hz mode and a soft refresh-rate retrain because the soundbar reports "No signal" at 60 Hz after wake; retry CEC address allocation until TV remote navigation returns. Power-on and remote button presses do not trigger source switching or HDMI retraining.
+
+- Align timed LRCLIB lyrics one line at a time, release RKNN memory before word alignment, resume interrupted analysis queues after restart, and retry unfinished LRC songs with word alignment instead of silently accepting line-only timings.
+- Keep RKNN song analysis below Orange Pi memory limits by streaming its 19 model components and limiting PyTorch CPU workers; an analyzer OOM no longer tears down the TV session.
+
+- Prevent RK3588 UVR inference from producing non-finite output on silent audio by using an FP16-safe band-normalization floor during model export.
+
+- Preserve failed analysis statuses across restarts and reject missing or empty transcripts before processing audio.
+- Recover the configured microphone monitor when a USB audio interface appears after startup, and refresh the open microphone selector automatically.
+- If RKNN karaoke separation returns non-finite audio, restart the analyzer and retry on CPU so album analysis can continue without retaining NPU memory.
+
+- Report completed UVR separation chunks during analysis instead of displaying 20% for the entire separation stage.
 - Analysis status sorting now orders ready songs by the transcript source shown in their status badge.
+- The "Measure latency" button in Settings now sits on its own row below the latency slider, so a TV remote can reach it with the arrow keys instead of it being trapped in the slider's row.
+
+### Performance
+
+- Key detection now decodes audio with ffmpeg directly, avoiding an unnecessary WhisperX import on the automatic LRCLIB path.
+- Lowered the microphone monitor round-trip latency by targeting a 512-frame ALSA period (~10.7 ms) instead of the previous fixed 2048-frame buffer. If USB xruns or POLLERR storms return, the buffer now escalates automatically (512 → 1024 → 2048 → 4096 frames) and steps back down after stable runs, so the monitor degrades to a stable size instead of dropping audio.
+- Bound the live microphone's shared PCM queue to two capture periods so USB/HDMI clock drift cannot accumulate into growing vocal delay; skip the HDMI monitor stream when monitoring is disabled.
 
 ## [1.2.0] - 2026-09-02
 

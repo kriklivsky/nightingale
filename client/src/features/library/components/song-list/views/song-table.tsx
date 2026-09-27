@@ -94,6 +94,7 @@ export const SongTable = ({
               onSort={onSort}
             />
           ))}
+          <th className="song-table-actions px-2 py-2 text-right font-medium">Actions</th>
         </tr>
       </thead>
       <tbody>

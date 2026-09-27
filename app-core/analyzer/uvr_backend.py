@@ -15,8 +15,9 @@ import os
 import platform
 import time
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 import torch
@@ -263,6 +264,10 @@ class RknnUvrBackend(UvrInferenceBackend):
         self.model_path = metadata_path
         self.metadata = _validate_metadata(metadata_path)
         self._runtimes: list[tuple[dict[str, Any], Any]] = []
+        self._stream_components = (
+            os.environ.get("NIGHTINGALE_RKNN_STREAM_COMPONENTS", "").strip() == "1"
+        )
+        self._closed = False
         self.last_profile: dict[str, float] | None = None
         self._initialise_runtimes()
 
@@ -278,6 +283,21 @@ class RknnUvrBackend(UvrInferenceBackend):
         }
         self.stft_window = torch.hann_window(self.stft_kwargs["win_length"])
 
+    def _load_runtime(self, component: dict[str, Any]) -> Any:
+        from rknnlite.api import RKNNLite
+
+        model_path = self.model_path.parent / component["file"]
+        runtime = RKNNLite(verbose=False)
+        try:
+            if runtime.load_rknn(str(model_path)) != 0:
+                raise UvrBackendError(f"failed to load RKNN model {model_path}")
+            if runtime.init_runtime(core_mask=self._core_mask) != 0:
+                raise UvrBackendError(f"failed to initialise RKNN model {model_path}")
+        except Exception:
+            runtime.release()
+            raise
+        return runtime
+
     def _initialise_runtimes(self) -> None:
         from rknnlite.api import RKNNLite
 
@@ -292,16 +312,15 @@ class RknnUvrBackend(UvrInferenceBackend):
         }
         if core_name not in masks:
             raise UvrBackendError(f"unsupported NIGHTINGALE_RKNN_CORE={core_name!r}")
+        self._core_mask = masks[core_name]
+        components = (
+            self.metadata["components"][:1]
+            if self._stream_components
+            else self.metadata["components"]
+        )
         try:
-            for component in self.metadata["components"]:
-                model_path = self.model_path.parent / component["file"]
-                runtime = RKNNLite(verbose=False)
-                if runtime.load_rknn(str(model_path)) != 0:
-                    runtime.release()
-                    raise UvrBackendError(f"failed to load RKNN model {model_path}")
-                if runtime.init_runtime(core_mask=masks[core_name]) != 0:
-                    runtime.release()
-                    raise UvrBackendError(f"failed to initialise RKNN model {model_path}")
+            for component in components:
+                runtime = self._load_runtime(component)
                 self._runtimes.append((component, runtime))
         except Exception as exc:
             self.close()
@@ -313,8 +332,29 @@ class RknnUvrBackend(UvrInferenceBackend):
             flush=True,
         )
         print(f"[nightingale:LOG] RKNN model: {self.model_path}", flush=True)
-        print(f"[nightingale:LOG] RKNN contexts: {len(self._runtimes)}", flush=True)
+        if self._stream_components:
+            print(
+                f"[nightingale:LOG] RKNN contexts: 1 at a time "
+                f"({len(self.metadata['components'])} components)",
+                flush=True,
+            )
+            self._runtimes[0][1].release()
+            self._runtimes.clear()
+        else:
+            print(f"[nightingale:LOG] RKNN contexts: {len(self._runtimes)}", flush=True)
         print(f"[nightingale:LOG] RKNN NPU cores: {core_name}", flush=True)
+
+    @contextmanager
+    def _runtime(self, index: int) -> Iterator[tuple[dict[str, Any], Any]]:
+        if not self._stream_components:
+            yield self._runtimes[index]
+            return
+        component = self.metadata["components"][index]
+        runtime = self._load_runtime(component)
+        try:
+            yield component, runtime
+        finally:
+            runtime.release()
 
     def _run_component(
         self, component: dict[str, Any], runtime: Any, tensor: np.ndarray
@@ -338,6 +378,8 @@ class RknnUvrBackend(UvrInferenceBackend):
                 f"{component['file']} returned {len(outputs) if outputs else 0} outputs"
             )
         output = np.asarray(outputs[0], dtype=np.float32)
+        if self._stream_components:
+            output = output.copy()
         expected_output = tuple(component["output_shape"])
         if tuple(output.shape) != expected_output:
             raise UvrBackendError(
@@ -416,7 +458,7 @@ class RknnUvrBackend(UvrInferenceBackend):
         return reconstructed[:, 0] if self.num_stems == 1 else reconstructed
 
     def infer(self, tensor: torch.Tensor) -> torch.Tensor:
-        if not self._runtimes:
+        if self._closed or (not self._stream_components and not self._runtimes):
             raise UvrBackendError("RKNN backend is closed")
         if tensor.ndim != 3:
             raise UvrBackendError(
@@ -434,63 +476,60 @@ class RknnUvrBackend(UvrInferenceBackend):
         total_start = time.perf_counter()
         features, stft = self._preprocess(tensor)
         preprocess_end = time.perf_counter()
-        band_component, band_runtime = self._runtimes[0]
-        encoded = self._run_component(band_component, band_runtime, features)
+        with self._runtime(0) as (band_component, band_runtime):
+            encoded = self._run_component(band_component, band_runtime, features)
 
         batch, time_frames, frequency_bands, dimension = encoded.shape
         if batch != 1:
             raise UvrBackendError(f"RKNN UVR only supports batch 1, got {batch}")
-        transformer_runtimes = self._runtimes[1:13]
         for layer in range(6):
-            time_component, time_runtime = transformer_runtimes[layer * 2]
-            frequency_component, frequency_runtime = transformer_runtimes[layer * 2 + 1]
-
             time_view = encoded.transpose(0, 2, 1, 3).reshape(
                 frequency_bands, time_frames, dimension
             )
-            time_step = int(time_component["host_batch_size"])
-            time_outputs = [
-                self._run_component(
-                    time_component,
-                    time_runtime,
-                    time_view[start : start + time_step],
-                )
-                for start in range(0, frequency_bands, time_step)
-            ]
+            with self._runtime(1 + layer * 2) as (time_component, time_runtime):
+                time_step = int(time_component["host_batch_size"])
+                time_outputs = [
+                    self._run_component(
+                        time_component, time_runtime,
+                        time_view[start : start + time_step],
+                    )
+                    for start in range(0, frequency_bands, time_step)
+                ]
             encoded = np.concatenate(time_outputs, axis=0).reshape(
                 1, frequency_bands, time_frames, dimension
             ).transpose(0, 2, 1, 3)
 
             frequency_view = encoded.reshape(time_frames, frequency_bands, dimension)
-            frequency_step = int(frequency_component["host_batch_size"])
-            frequency_outputs = [
-                self._run_component(
-                    frequency_component,
-                    frequency_runtime,
-                    frequency_view[start : start + frequency_step],
-                )
-                for start in range(0, time_frames, frequency_step)
-            ]
+            with self._runtime(2 + layer * 2) as (frequency_component, frequency_runtime):
+                frequency_step = int(frequency_component["host_batch_size"])
+                frequency_outputs = [
+                    self._run_component(
+                        frequency_component, frequency_runtime,
+                        frequency_view[start : start + frequency_step],
+                    )
+                    for start in range(0, time_frames, frequency_step)
+                ]
             encoded = np.concatenate(frequency_outputs, axis=0).reshape(
                 1, time_frames, frequency_bands, dimension
             )
+            del time_outputs, frequency_outputs, time_view, frequency_view
 
         mask_outputs = []
         expected_band_start = 0
-        for component, runtime in self._runtimes[13:]:
+        for index in range(13, len(self.metadata["components"])):
+            component = self.metadata["components"][index]
             band_start = int(component["band_start"])
             band_stop = int(component["band_stop"])
             if band_start != expected_band_start:
                 raise UvrBackendError(
                     f"non-contiguous RKNN mask bands: {expected_band_start} -> {band_start}"
                 )
-            mask_outputs.append(
-                self._run_component(
-                    component,
-                    runtime,
-                    encoded[:, :, band_start:band_stop, :],
+            with self._runtime(index) as (_, runtime):
+                mask_outputs.append(
+                    self._run_component(
+                        component, runtime, encoded[:, :, band_start:band_stop, :],
+                    )
                 )
-            )
             expected_band_start = band_stop
         if expected_band_start != encoded.shape[2]:
             raise UvrBackendError(
@@ -540,6 +579,7 @@ class RknnUvrBackend(UvrInferenceBackend):
         return self.metadata["audio_separator_config"]
 
     def close(self) -> None:
+        self._closed = True
         for _component, runtime in reversed(self._runtimes):
             runtime.release()
         self._runtimes.clear()
@@ -558,9 +598,11 @@ def get_rknn_backend(models_dir: str) -> RknnUvrBackend:
     return _CACHED_RKNN_BACKEND
 
 
-def _close_cached_backend() -> None:
+def release_rknn_backend() -> None:
+    global _CACHED_RKNN_BACKEND
     if _CACHED_RKNN_BACKEND is not None:
         _CACHED_RKNN_BACKEND.close()
+        _CACHED_RKNN_BACKEND = None
 
 
-atexit.register(_close_cached_backend)
+atexit.register(release_rknn_backend)

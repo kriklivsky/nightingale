@@ -177,6 +177,10 @@ fn append_structural_filters(
             ),
             "videos" => where_parts.push("s.is_video = 1".to_string()),
             "usdx" => where_parts.push("s.transcript_source = 'usdx'".to_string()),
+            "favorites" => where_parts.push(
+                "EXISTS (SELECT 1 FROM favorite_songs f WHERE f.file_hash = s.file_hash)"
+                    .to_string(),
+            ),
             _ => {}
         }
     }

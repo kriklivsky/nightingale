@@ -24,6 +24,7 @@ export function PlaybackProviders({ song, config, children }: PlaybackProvidersP
     <PlaybackTransportProvider
       fileHash={song.file_hash}
       initialGuideVolume={config?.guide_volume ?? 0.3}
+      initialOutputVolume={config?.output_volume ?? 1}
     >
       <PlaybackThemeProvider song={song} config={config}>
         <PlaybackMicProvider config={config}>

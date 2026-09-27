@@ -14,6 +14,12 @@ export type AppConfig = {
   library_source: LibrarySource | null;
   last_theme: number | null;
   guide_volume: number | null;
+  /**
+   * Master output volume for the playback mix (instrumental + guide) sent to
+   * the speakers/soundbar. Kept separate from `mic_monitor_gain` so lowering
+   * the backing track never changes the microphone monitor level.
+   */
+  output_volume: number | null;
   fullscreen: boolean | null;
   playback_mode: string | null;
   dark_mode: boolean | null;

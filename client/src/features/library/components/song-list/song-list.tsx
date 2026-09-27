@@ -1,11 +1,15 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 
 import type { PlaybackQueueEntry } from '@/bridge/playback-queue';
+import { canDeleteLocalFiles } from '@/bridge/songs';
+import { useFavoriteHashes, useSetSongFavorite } from '@/features/library/hooks/use-favorites';
 import { useAnalysisQueue, useSongs } from '@/features/library/queries/use-songs';
+import { useDialog } from '@/features/menu/hooks/use-dialog';
 import { useLibraryFilter } from '@/features/menu/hooks/use-library-filter';
 import { useSearch } from '@/features/menu/hooks/use-search';
 import { useMenuFocus } from '@/features/menu/providers/menu-focus-context';
 import { usePlaybackQueueQuery } from '@/features/playback-queue/use-playback-queue';
+import { usePlaybackLauncher } from '@/features/playback/hooks/use-playback-launcher';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/shared/components/ui/empty';
 import { Separator } from '@/shared/components/ui/separator';
 import { useConfig } from '@/shared/config/use-config';
@@ -23,6 +27,7 @@ import { Filters, type SongListView } from './filters';
 import { Progress } from './progress';
 import { QueueSidebar } from './queue-sidebar';
 import { songKey } from './shared/song-key';
+import { getSongStatusInfo } from './shared/song-status';
 import { SongDetailsSidebar } from './song-details-sidebar';
 import type { SongItemProps } from './types';
 import { SongGrid } from './views/song-grid';
@@ -152,8 +157,15 @@ function SongSidePanel({
   return null;
 }
 
+const songListPaneClass = (song: Song | null, queueOpen: boolean): string =>
+  song || queueOpen ? 'hidden xl:flex' : 'flex';
+
 export const SongList = () => {
   const { data: queue } = useAnalysisQueue();
+  const { setMode } = useDialog();
+  const { data: favoriteHashes = [] } = useFavoriteHashes();
+  const { mutate: setFavorite, isLoading: isSavingFavorite } = useSetSongFavorite();
+  const { launch, reserveTarget } = usePlaybackLauncher();
   const { data: playbackQueue = [] } = usePlaybackQueueQuery();
   const { data: config } = useConfig();
   const { mutate: saveConfig, isPending: isSavingConfig } = useConfigMutation();
@@ -166,7 +178,8 @@ export const SongList = () => {
   const view: SongListView = config?.song_list_view === 'grid' ? 'grid' : 'table';
   const sort = songListSort(config);
   const songs = useMemo(() => data?.pages.flatMap((page) => page.processed) ?? [], [data]);
-  const selectedKey = selectedSong ? songKey(selectedSong) : null;
+  const favoriteSet = useMemo(() => new Set(favoriteHashes), [favoriteHashes]);
+  const selectedKey = selectedSong && songKey(selectedSong);
   const currentSelectedSong = songs.find((song) => songKey(song) === selectedKey) ?? selectedSong;
   const filterKey = JSON.stringify([
     search,
@@ -190,12 +203,56 @@ export const SongList = () => {
 
     setSelectedSong(null);
     resetScroll();
-    setFocus((previous) => ({ ...previous, songIndex: 0 }));
+    setFocus((previous) => ({ ...previous, songIndex: 0, songActionIndex: null }));
   }, [filterKey, resetScroll, setFocus, setSelectedSong]);
 
   useEffect(() => {
     actionsRef.current.songCount = songs.length;
   }, [songs.length, actionsRef]);
+
+  const toggleFavorite = useCallback(
+    (song: Song) => {
+      if (!isSavingFavorite) {
+        setFavorite({ fileHash: song.file_hash, favorite: !favoriteSet.has(song.file_hash) });
+      }
+    },
+    [favoriteSet, isSavingFavorite, setFavorite],
+  );
+
+  const playSong = useCallback(
+    (song: Song) => {
+      if (getSongStatusInfo(song.is_analyzed, queue?.entries[song.file_hash]).isReady !== true) {
+        return;
+      }
+      const target = reserveTarget();
+      if (target !== undefined) {
+        void launch({ song, queuePlayback: false }, target);
+      }
+    },
+    [launch, queue, reserveTarget],
+  );
+
+  const canDeleteSong = useCallback(
+    (song: Song) => {
+      const analysisStatus = queue?.entries[song.file_hash];
+      return (
+        canDeleteLocalFiles &&
+        song.origin.kind === 'local_file' &&
+        analysisStatus !== 'Queued' &&
+        (typeof analysisStatus !== 'object' || !('Analyzing' in analysisStatus))
+      );
+    },
+    [queue],
+  );
+
+  const deleteSong = useCallback(
+    (song: Song) => {
+      if (canDeleteSong(song)) {
+        setMode({ mode: 'delete-song', song });
+      }
+    },
+    [canDeleteSong, setMode],
+  );
 
   useEffect(() => {
     const actions = actionsRef.current;
@@ -208,10 +265,24 @@ export const SongList = () => {
       setQueueOpen(false);
       setSelectedSong(song);
     };
+    actions.onConfirmSongAction = (songIndex: number, actionIndex: number) => {
+      const song = songsRef.current.at(songIndex);
+      if (!song) {
+        return;
+      }
+      if (actionIndex === 0) {
+        toggleFavorite(song);
+      } else if (actionIndex === 1) {
+        playSong(song);
+      } else if (actionIndex === 2) {
+        deleteSong(song);
+      }
+    };
     return () => {
       actions.onConfirmSong = null;
+      actions.onConfirmSongAction = null;
     };
-  }, [actionsRef, setSelectedSong, songsRef]);
+  }, [actionsRef, deleteSong, playSong, setSelectedSong, songsRef, toggleFavorite]);
 
   useEffect(() => {
     const element = sentinelRef.current;
@@ -261,7 +332,17 @@ export const SongList = () => {
     index,
     isSelected: selectedKey === songKey(song),
     isFocused: isSongListActive && !focus.actionsFocused && focus.songIndex === index,
+    isFavorite: favoriteSet.has(song.file_hash),
+    focusedAction:
+      isSongListActive && !focus.actionsFocused && focus.songIndex === index
+        ? focus.songActionIndex
+        : null,
+    canPlay: getSongStatusInfo(song.is_analyzed, queue?.entries[song.file_hash]).isReady === true,
+    canDelete: canDeleteSong(song),
     onSelect: () => selectSong(song),
+    onToggleFavorite: () => toggleFavorite(song),
+    onPlay: () => playSong(song),
+    onDelete: () => deleteSong(song),
   });
 
   return (
@@ -269,7 +350,7 @@ export const SongList = () => {
       <main
         className={cn(
           'min-w-0 flex-1 flex-col gap-3 p-3 sm:p-4',
-          currentSelectedSong || queueOpen ? 'hidden xl:flex' : 'flex',
+          songListPaneClass(currentSelectedSong, queueOpen),
         )}
       >
         <Filters

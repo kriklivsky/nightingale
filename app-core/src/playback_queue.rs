@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -63,6 +64,15 @@ impl PlaybackQueue {
 
         entries.retain(|entry| entry.id != id);
 
+        Ok(entries.iter().cloned().collect())
+    }
+
+    pub fn remove_song_path(&self, path: &Path) -> Result<Vec<PlaybackQueueEntry>, String> {
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| "playback queue lock poisoned".to_string())?;
+        entries.retain(|entry| entry.song.path != path);
         Ok(entries.iter().cloned().collect())
     }
 

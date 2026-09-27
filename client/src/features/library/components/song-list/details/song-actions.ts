@@ -3,7 +3,6 @@ import {
   AudioLinesIcon,
   ImageIcon,
   LanguagesIcon,
-  MicIcon,
   PencilLineIcon,
   RefreshCwIcon,
   Trash2Icon,
@@ -24,7 +23,6 @@ type AnalysisHandlers = {
   reanalyzeFull: AnalysisHandler;
   reanalyzeTranscript: AnalysisHandler;
   realign: AnalysisHandler;
-  reanalyzeForceTranscribe: AnalysisHandler;
   refreshMetadata: (fileHash: string) => Promise<boolean | undefined>;
 };
 
@@ -91,9 +89,7 @@ export function buildActionGroups({
   }
 
   if (supportsAnalysisActions) {
-    // LRC-provided songs have no AI-generated stems/timing to rebuild, so the
-    // realign/refetch/transcribe actions don't apply. Offer editing the LRC and
-    // an explicit opt-in to replace it with full AI analysis instead.
+    // LRC-provided songs can be edited or refreshed from LRCLIB.
     if (song.transcript_source === 'Lrc') {
       groups.push([
         {
@@ -104,9 +100,9 @@ export function buildActionGroups({
         },
         {
           icon: AudioLinesIcon,
-          title: 'Analyze with AI',
-          description: 'Replace the LRC with AI stems, lyrics, timing, and key.',
-          onClick: run(`Analyzing "${song.title}" with AI`, () =>
+          title: 'Refresh LRCLIB lyrics',
+          description: 'Fetch timed lyrics from LRCLIB and rebuild stems and key.',
+          onClick: run(`Refreshing timed lyrics for "${song.title}"`, () =>
             analysis.reanalyzeFull(song.file_hash),
           ),
         },
@@ -121,18 +117,10 @@ export function buildActionGroups({
         },
         {
           icon: RefreshCwIcon,
-          title: 'Refetch lyrics & align',
-          description: 'Fetch fresh lyrics, then rebuild timing.',
-          onClick: run(`Refetching lyrics & aligning "${song.title}"`, () =>
+          title: 'Refetch timed lyrics',
+          description: 'Fetch synchronized lyrics from LRCLIB.',
+          onClick: run(`Refetching timed lyrics for "${song.title}"`, () =>
             analysis.reanalyzeTranscript(song.file_hash),
-          ),
-        },
-        {
-          icon: MicIcon,
-          title: 'Force transcribe',
-          description: 'Ignore online lyrics and transcribe the vocals.',
-          onClick: run(`Force transcribing "${song.title}"`, () =>
-            analysis.reanalyzeForceTranscribe(song.file_hash),
           ),
         },
         {

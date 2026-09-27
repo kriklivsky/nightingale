@@ -86,7 +86,7 @@ export function MicrophoneSettings({
   onLatencyChange,
 }: MicrophoneSettingsProps) {
   const { mutate } = useConfigMutation();
-  const micDevicesQuery = useMicDevicesQuery();
+  const micDevicesQuery = useMicDevicesQuery(undefined, 5_000);
   const micDevices = micDevicesQuery.data;
   const [preferredMicInput, setPreferredMic] = useState<string | null | undefined>(undefined);
   const preferredMic = preferredMicInput === undefined ? savedMicId : preferredMicInput;
@@ -143,7 +143,7 @@ export function MicrophoneSettings({
         latencySec={latencySec}
         disabled={micTestBusy}
         sliderClassName={getFocusClassName(NAV.general.micLatency, 0)}
-        buttonClassName={getFocusClassName(NAV.general.micLatency, 1)}
+        buttonClassName={getFocusClassName(NAV.general.micLatencyTest, 0)}
         onMeasuringChange={setLatencyMeasuring}
         onLatencyChange={onLatencyChange}
       />

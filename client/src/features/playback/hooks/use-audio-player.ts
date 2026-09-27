@@ -3,7 +3,8 @@
  * rAF tick that notifies subscribers for visuals (background sync, lyrics, HUD).
  * The returned API object is referentially stable across renders when its fields are unchanged.
  *
- * Graph: instrumental buffer → destination; vocals buffer → gain (guide level) → destination.
+ * Graph: instrumental buffer → master gain (output level) → destination;
+ * vocals buffer → gain (guide level) → master gain → destination.
  * Playback position is derived from AudioContext.currentTime and a (offset, contextTimeAtStart)
  * pair because BufferSourceNode is one-shot: pause/seek recreate sources rather than mutating time.
  */
@@ -27,29 +28,43 @@ export type AudioPlayer = {
   /** False for LRC-provided songs without stems: the original mix plays and
    * there is no separate guide vocal track to control. */
   guideAvailable: boolean;
+  /** Master level of the whole playback mix (instrumental + guide) reaching
+   * the speakers. Independent from the microphone monitor path. */
+  outputVolume: number;
   play: () => void;
   pause: () => void;
   resume: () => void;
   seek: (time: number) => void;
   setGuideVolume: (v: number) => void;
+  setOutputVolume: (v: number) => void;
   cleanup: () => void;
   getVocalsBuffer: () => AudioBuffer | null;
   getScoringBuffer: () => AudioBuffer | null;
   getAudioContext: () => AudioContext | null;
 };
 
-export function useAudioPlayer(
-  fileHash: string,
-  initialGuideVolume: number,
-  enabled: boolean,
-  adapter: PlaybackAdapter = playbackAdapter,
-): AudioPlayer {
+export type AudioPlayerOptions = {
+  fileHash: string;
+  initialGuideVolume: number;
+  initialOutputVolume: number;
+  enabled: boolean;
+  adapter?: PlaybackAdapter;
+};
+
+export function useAudioPlayer({
+  fileHash,
+  initialGuideVolume,
+  initialOutputVolume,
+  enabled,
+  adapter = playbackAdapter,
+}: AudioPlayerOptions): AudioPlayer {
   const ctxRef = useRef<AudioContext | null>(null);
   const instrumentalBufRef = useRef<AudioBuffer | null>(null);
   const vocalsBufRef = useRef<AudioBuffer | null>(null);
   const instrumentalSrcRef = useRef<AudioBufferSourceNode | null>(null);
   const vocalsSrcRef = useRef<AudioBufferSourceNode | null>(null);
   const vocalsGainRef = useRef<GainNode | null>(null);
+  const masterGainRef = useRef<GainNode | null>(null);
   const rafRef = useRef<number>(0);
   const currentTimeRef = useRef(0);
   const subscribersRef = useRef<Set<TimeSubscriber>>(new Set());
@@ -68,6 +83,7 @@ export function useAudioPlayer(
   const [error, setError] = useState<string | null>(null);
   const [guideVolume, setGuideVolumeState] = useState(initialGuideVolume);
   const [guideAvailable, setGuideAvailable] = useState(true);
+  const [outputVolume, setOutputVolumeState] = useState(initialOutputVolume);
 
   const getVocalsBuffer = useCallback(() => vocalsBufRef.current, []);
 
@@ -134,9 +150,14 @@ export function useAudioPlayer(
 
       const clamped = Math.max(0, Math.min(offset, instBuf.duration));
 
+      const masterGain = masterGainRef.current;
+      if (!masterGain) {
+        return;
+      }
+
       const instSrc = ctx.createBufferSource();
       instSrc.buffer = instBuf;
-      instSrc.connect(ctx.destination);
+      instSrc.connect(masterGain);
 
       instSrc.addEventListener(
         'ended',
@@ -193,9 +214,14 @@ export function useAudioPlayer(
     const ctx = new AudioContext();
     ctxRef.current = ctx;
 
+    const masterGain = ctx.createGain();
+    masterGain.gain.value = Math.max(0, Math.min(1, initialOutputVolume));
+    masterGain.connect(ctx.destination);
+    masterGainRef.current = masterGain;
+
     const gainNode = ctx.createGain();
     gainNode.gain.value = Math.max(0, Math.min(1, initialGuideVolume));
-    gainNode.connect(ctx.destination);
+    gainNode.connect(masterGain);
     vocalsGainRef.current = gainNode;
 
     const isCancelled = () => cancelled || cancelledRef.current;
@@ -297,10 +323,19 @@ export function useAudioPlayer(
       instrumentalBufRef.current = null;
       vocalsBufRef.current = null;
       vocalsGainRef.current = null;
+      masterGainRef.current = null;
       void ctx.close();
       ctxRef.current = null;
     };
-  }, [adapter, enabled, fileHash, initialGuideVolume, startSources, stopSources]);
+  }, [
+    adapter,
+    enabled,
+    fileHash,
+    initialGuideVolume,
+    initialOutputVolume,
+    startSources,
+    stopSources,
+  ]);
 
   const play = useCallback(() => {
     startSources(startOffsetRef.current);
@@ -352,6 +387,16 @@ export function useAudioPlayer(
     }
   }, []);
 
+  const setOutputVolume = useCallback((v: number) => {
+    const clamped = Math.max(0, Math.min(1, v));
+
+    setOutputVolumeState(clamped);
+
+    if (masterGainRef.current) {
+      masterGainRef.current.gain.value = clamped;
+    }
+  }, []);
+
   const cleanup = useCallback(() => {
     cancelledRef.current = true;
 
@@ -374,11 +419,13 @@ export function useAudioPlayer(
       error,
       guideVolume,
       guideAvailable,
+      outputVolume,
       play,
       pause,
       resume,
       seek,
       setGuideVolume,
+      setOutputVolume,
       cleanup,
       getVocalsBuffer,
       getScoringBuffer,
@@ -394,11 +441,13 @@ export function useAudioPlayer(
       error,
       guideVolume,
       guideAvailable,
+      outputVolume,
       play,
       pause,
       resume,
       seek,
       setGuideVolume,
+      setOutputVolume,
       cleanup,
       getVocalsBuffer,
       getScoringBuffer,

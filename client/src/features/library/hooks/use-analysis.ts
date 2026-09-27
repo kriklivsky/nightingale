@@ -7,7 +7,6 @@ import {
   deleteSongCache,
   enqueue,
   realign,
-  reanalyzeForceTranscribe,
   reanalyzeFull,
   reanalyzeTranscript,
   refreshMetadata,
@@ -164,10 +163,6 @@ export const useAnalysis = () => {
         () => realign(filtered()),
         invalidateSongs,
       ),
-      reanalyzeForceTranscribe: wrap(
-        (fileHash: string) => reanalyzeForceTranscribe(one(fileHash)),
-        invalidateSongs,
-      ),
       refreshMetadata: (fileHash: string) =>
         run(async () => (await refreshMetadata(one(fileHash))) > 0, invalidateSongs),
       refreshMetadataAll: wrapBulk(
@@ -186,12 +181,6 @@ export const useAnalysis = () => {
         BulkActionKind.Queued,
         'refetching lyrics & aligning',
         (language?: string) => reanalyzeTranscript(filtered(), language),
-        invalidateSongs,
-      ),
-      reanalyzeAllForceTranscribe: wrapBulk(
-        BulkActionKind.Queued,
-        'force transcribing',
-        () => reanalyzeForceTranscribe(filtered()),
         invalidateSongs,
       ),
     };

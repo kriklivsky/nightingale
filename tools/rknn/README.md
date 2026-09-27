@@ -22,7 +22,8 @@ RKNN files to git.
 
 The original checkpoint has 228,202,852 parameters. A monolithic ONNX export was
 killed by the Linux OOM killer on an 8 GB Orange Pi 5. The deployable bundle keeps
-the exact weights and operations but introduces only natural graph boundaries:
+the exact weights and graph structure, apart from the FP16-safe normalization floor
+described below, and introduces only natural graph boundaries:
 
 - one band-split model;
 - one time and one frequency transformer model for each of six axial layers;
@@ -30,8 +31,16 @@ the exact weights and operations but introduces only natural graph boundaries:
 
 Time attention is called with five independent mel bands at a time (12 calls per
 layer). Frequency attention is called with 89 independent time frames at a time
-(9 calls per layer because `801 = 9 * 89`). This bounds NPU activation memory while
-all 19 RKNN contexts remain initialized and are reused across audio chunks.
+(9 calls per layer because `801 = 9 * 89`). This bounds NPU activation memory. By
+default all 19 RKNN contexts remain initialized and are reused across audio chunks.
+On an 8 GB TV box, `NIGHTINGALE_RKNN_STREAM_COMPONENTS=1` loads one component at
+a time and releases it before loading the next to avoid Linux OOM during songs.
+
+The band-split export raises its 60 L2-normalization floors from `1e-12` to `1e-4`.
+The original floor underflows to zero in FP16, corrupting silent STFT frames and
+causing downstream transformer outputs to become non-finite. The new floor is
+representable in FP16; verify ONNX/RKNN parity on both silent and non-silent
+material before deploying a rebuilt bundle.
 
 ## Export and convert
 
@@ -95,6 +104,12 @@ NIGHTINGALE_UVR_BACKEND=existing  # original audio-separator implementation
 `all`, `0`, `1`, `2`, `0_1`, or `0_1_2` for hardware benchmarking. Set
 `NIGHTINGALE_RKNN_PROFILE=1` to log preprocessing, NPU inference, postprocessing
 and total time for each chunk.
+Streaming components reduces pinned NPU memory at the cost of reloading each
+component for every chunk. `OMP_NUM_THREADS=1` further bounds CPU workspaces.
+
+In `auto` mode, a non-finite RKNN output causes the analyzer to restart its
+Python process and retry on the existing CPU backend; subsequent songs use CPU
+for that session. Explicit `rknn` selection still reports the failure.
 
 ## Validation
 

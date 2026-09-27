@@ -42,7 +42,7 @@ export function useMenuNavInput({ menuFocus, refs, lock, scrollToSong }: UseMenu
         };
 
         const handleDirectionalInput = (): void => {
-          if (handleSongGridAction(action, menuFocus, scrollToSong)) {
+          if (handleSongNavigation(action, menuFocus, scrollToSong)) {
             return;
           }
           if ((action.left || action.right) && handleActionsHorizontal(action, menuFocus)) {
@@ -109,6 +109,8 @@ function handleConfirmAction(
   if (focus.panel === 'songList') {
     if (focus.actionsFocused) {
       confirmFocusedAction(actionsRef, focus.actionsIndex);
+    } else if (focus.songActionIndex !== null) {
+      actionsRef.current.onConfirmSongAction?.(focus.songIndex, focus.songActionIndex);
     } else {
       actionsRef.current.onConfirmSong?.(focus.songIndex);
     }
@@ -118,6 +120,76 @@ function handleConfirmAction(
   if (focus.panel === 'sidebar') {
     actionsRef.current.onConfirmSidebar?.(focus.sidebarIndex);
   }
+}
+
+function handleSongNavigation(
+  action: NavAction,
+  menuFocus: MenuNavHookOptions['menuFocus'],
+  scrollToSong: (index: number) => void,
+): boolean {
+  return (
+    handleSongRowActionNavigation(action, menuFocus, scrollToSong) ||
+    handleSongGridAction(action, menuFocus, scrollToSong)
+  );
+}
+
+function nextSongActionIndex(current: number | null, right: boolean): number | null {
+  if (right) {
+    return Math.min(2, (current ?? -1) + 1);
+  }
+  return current === 0 ? null : 0;
+}
+
+function moveToNextGridSong(
+  container: HTMLElement,
+  songIndex: number,
+  setFocus: MenuNavHookOptions['menuFocus']['setFocus'],
+  scrollToSong: (index: number) => void,
+): void {
+  const nextIndex = getSongGridTarget(container, songIndex, 'right');
+  if (nextIndex === null) {
+    return;
+  }
+
+  setFocus((previous) => ({
+    ...previous,
+    songIndex: nextIndex,
+    songActionIndex: null,
+    active: true,
+    source: 'nav',
+  }));
+  scrollToSong(nextIndex);
+}
+
+function handleSongRowActionNavigation(
+  action: NavAction,
+  {
+    focus,
+    scrollRef,
+    setFocus,
+  }: Pick<MenuNavHookOptions['menuFocus'], 'focus' | 'scrollRef' | 'setFocus'>,
+  scrollToSong: (index: number) => void,
+): boolean {
+  if (focus.panel !== 'songList' || focus.actionsFocused || (!action.left && !action.right)) {
+    return false;
+  }
+
+  if (focus.songActionIndex === null && !action.right) {
+    return false;
+  }
+
+  if (focus.songActionIndex === 2 && action.right && isSongGrid(scrollRef.current)) {
+    moveToNextGridSong(scrollRef.current, focus.songIndex, setFocus, scrollToSong);
+    return true;
+  }
+
+  setFocus((previous) => ({
+    ...previous,
+    songActionIndex: nextSongActionIndex(previous.songActionIndex, action.right),
+    active: true,
+    source: 'nav',
+  }));
+  return true;
 }
 
 function getGridDirection(action: NavAction): SongGridDirection | null {
@@ -140,10 +212,9 @@ function handleSongGridAction(
   action: NavAction,
   {
     focus,
-    actionsRef,
     scrollRef,
     setFocus,
-  }: Pick<MenuNavHookOptions['menuFocus'], 'focus' | 'actionsRef' | 'scrollRef' | 'setFocus'>,
+  }: Pick<MenuNavHookOptions['menuFocus'], 'focus' | 'scrollRef' | 'setFocus'>,
   scrollToSong: (index: number) => void,
 ): boolean {
   const direction = getGridDirection(action);
@@ -159,6 +230,7 @@ function handleSongGridAction(
       active: true,
       songIndex: targetIndex,
       actionsFocused: false,
+      songActionIndex: previous.songActionIndex,
       source: 'nav',
     }));
     scrollToSong(targetIndex);
@@ -171,8 +243,6 @@ function handleSongGridAction(
 
     if (direction === 'left') {
       panel = 'sidebar';
-    } else if (direction === 'right' && actionsRef.current.hasSongDetails) {
-      panel = 'songDetails';
     } else if (direction === 'up') {
       actionsFocused = true;
     }
@@ -182,6 +252,7 @@ function handleSongGridAction(
       active: true,
       panel,
       actionsFocused,
+      songActionIndex: null,
       source: 'nav',
     };
   });
@@ -226,6 +297,95 @@ function handleActionsHorizontal(
   return true;
 }
 
+type SetMenuFocus = MenuNavHookOptions['menuFocus']['setFocus'];
+
+function focusSidebarIndex(setFocus: SetMenuFocus, sidebarIndex: number): void {
+  setFocus((previous) => ({
+    ...previous,
+    sidebarIndex,
+    active: true,
+    source: 'nav',
+  }));
+}
+
+function toggleSidebarSection(
+  action: NavAction,
+  target: HTMLElement,
+  setFocus: SetMenuFocus,
+): boolean {
+  const expanded = target.getAttribute('aria-expanded');
+  if ((action.right && expanded === 'false') || (action.left && expanded === 'true')) {
+    setFocus((previous) => ({ ...previous, active: true, source: 'nav' }));
+    target.click();
+    return true;
+  }
+
+  return false;
+}
+
+function enterSidebarSection(
+  action: NavAction,
+  target: HTMLElement,
+  sidebarIndex: number,
+  setFocus: SetMenuFocus,
+): boolean {
+  if (!action.right || target.getAttribute('aria-expanded') !== 'true') {
+    return false;
+  }
+
+  const firstChild = document.querySelector<HTMLElement>(
+    `[data-sidebar-parent-index="${sidebarIndex}"]`,
+  );
+  const childIndex = Number(firstChild?.dataset.sidebarNavIndex);
+  if (!firstChild || !Number.isInteger(childIndex)) {
+    return false;
+  }
+
+  focusSidebarIndex(setFocus, childIndex);
+  return true;
+}
+
+function returnToSidebarParent(
+  action: NavAction,
+  target: HTMLElement,
+  setFocus: SetMenuFocus,
+): boolean {
+  const parentIndex = target.dataset.sidebarParentIndex;
+  if (!action.left || parentIndex === undefined) {
+    return false;
+  }
+
+  const index = Number(parentIndex);
+  if (!Number.isInteger(index)) {
+    return false;
+  }
+
+  focusSidebarIndex(setFocus, index);
+  return true;
+}
+
+function handleSidebarHierarchy(
+  action: NavAction,
+  { focus, setFocus }: Pick<MenuNavHookOptions['menuFocus'], 'focus' | 'setFocus'>,
+): boolean {
+  if (focus.panel !== 'sidebar') {
+    return false;
+  }
+
+  const target = document.querySelector<HTMLElement>(
+    `[data-sidebar-nav-index="${focus.sidebarIndex}"]`,
+  );
+  if (!target) {
+    return false;
+  }
+
+  return (
+    toggleSidebarSection(action, target, setFocus) ||
+    enterSidebarSection(action, target, focus.sidebarIndex, setFocus) ||
+    returnToSidebarParent(action, target, setFocus)
+  );
+}
+
 function handleHorizontalAction(
   action: NavAction,
   {
@@ -254,11 +414,16 @@ function handleHorizontalAction(
     }
   }
 
+  if (handleSidebarHierarchy(action, { focus, setFocus })) {
+    return true;
+  }
+
   if (action.left) {
     setFocus((prev) => ({
       ...prev,
       panel: prev.panel === 'songList' ? 'sidebar' : prev.panel,
       actionsFocused: false,
+      songActionIndex: null,
       active: true,
       source: 'nav',
     }));
@@ -277,6 +442,7 @@ function handleHorizontalAction(
       ...prev,
       panel,
       actionsFocused: false,
+      songActionIndex: null,
       active: true,
       source: 'nav',
     };
@@ -297,6 +463,7 @@ function moveSongListFocus(move: SongListMove): void {
     if (move.action.down) {
       move.next.actionsFocused = false;
       move.next.songIndex = 0;
+      move.next.songActionIndex = null;
       move.scrollToSong(0);
     }
     return;
@@ -304,6 +471,9 @@ function moveSongListFocus(move: SongListMove): void {
   if (move.action.up) {
     move.next.actionsFocused = move.previous.songIndex <= 0;
     move.next.songIndex = Math.max(0, move.previous.songIndex - 1);
+    if (move.next.actionsFocused) {
+      move.next.songActionIndex = null;
+    }
     move.scrollToSong(move.next.songIndex);
     return;
   }

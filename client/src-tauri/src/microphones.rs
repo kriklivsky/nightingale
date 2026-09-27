@@ -1,7 +1,8 @@
+use app_core::AppConfig;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use tauri::ipc::Channel;
@@ -11,13 +12,104 @@ use ts_rs::TS;
 /// Worker drains the cpal queue in fixed-size chunks before forwarding to the
 /// JS side; smaller chunks lower IPC latency at the cost of more sends/sec.
 const SAMPLE_CHUNK: usize = 512;
-const AUDIO_QUEUE_CAP: usize = 24_000;
 const PCM_QUEUE_CAP: usize = 24_000;
 const MONITOR_START_BUFFER: usize = 512;
 const DEFAULT_MONITOR_GAIN: f32 = 0.65;
 const MAX_MONITOR_GAIN: f32 = 2.0;
 
+/// cpal maps `BufferSize::Fixed(x)` to an ALSA period of `x` frames with a
+/// buffer of `2x` frames, so the monitor round trip is roughly three periods
+/// (capture period + queue prefill + playback buffer). 512 frames at 48 kHz
+/// is a ~10.7 ms period and a ~32 ms round trip, which stays responsive for
+/// live monitoring over USB.
+const MONITOR_BUFFER_LADDER: [u32; 4] = [512, 1024, 2048, 4096];
+/// A monitor stream that runs this long without an xrun/POLLERR is considered
+/// stable, so the worker steps one rung back down toward the low-latency target.
+const MONITOR_STABLE_RUN: std::time::Duration = std::time::Duration::from_secs(60);
+
 static MONITOR_GAIN_BITS: AtomicU32 = AtomicU32::new(DEFAULT_MONITOR_GAIN.to_bits());
+static MIC_STREAM_FAILED: AtomicBool = AtomicBool::new(false);
+/// Set by the worker when it wants a stream rebuilt at the current buffer step
+/// without escalating (used for the stability recovery step-down).
+static MIC_RECONFIGURE: AtomicBool = AtomicBool::new(false);
+static MONITOR_BUFFER_STEP: AtomicUsize = AtomicUsize::new(0);
+/// Lowest ladder step that failed shortly after a recovery step-down. Recovery
+/// never retries that step or lower, so a device that cannot sustain a small
+/// period settles at the stable size instead of oscillating every window.
+static MONITOR_RECOVERY_FLOOR: AtomicUsize = AtomicUsize::new(usize::MAX);
+static LAST_MONITOR_DEVICE: once_cell::sync::Lazy<Mutex<Option<String>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(None));
+
+fn report_stream_error(error: cpal::StreamError) {
+    // ALSA can keep reporting POLLERR after an underrun. Log it once and let
+    // the worker recreate the streams instead of spinning and filling disk.
+    if !MIC_STREAM_FAILED.swap(true, Ordering::Relaxed) {
+        warn!("[mic] stream failed; reopening audio devices: {error}");
+    }
+}
+
+fn monitor_buffer_step() -> usize {
+    MONITOR_BUFFER_STEP
+        .load(Ordering::Relaxed)
+        .min(MONITOR_BUFFER_LADDER.len() - 1)
+}
+
+/// Raise the monitor buffer one rung after a stream failure, capped at the top
+/// of the ladder so the size can never grow without bound.
+fn escalate_monitor_buffer() {
+    let step = monitor_buffer_step();
+    let last = MONITOR_BUFFER_LADDER.len() - 1;
+    if step < last {
+        MONITOR_BUFFER_STEP.store(step + 1, Ordering::Relaxed);
+        info!(
+            "[mic] monitor buffer raised to {} frames after stream error",
+            MONITOR_BUFFER_LADDER[step + 1]
+        );
+    }
+}
+
+/// Step back down toward the low-latency target once the current size has run
+/// stably, unless a previous recovery to that size failed immediately.
+/// Returns `true` only when the step actually changed, so the worker rebuilds
+/// the streams just once per recovery instead of retrying a floored size.
+fn recover_monitor_buffer() -> bool {
+    let step = monitor_buffer_step();
+    let floor = MONITOR_RECOVERY_FLOOR.load(Ordering::Relaxed);
+    if step > 0 && (floor == usize::MAX || step - 1 > floor) {
+        MONITOR_BUFFER_STEP.store(step - 1, Ordering::Relaxed);
+        info!(
+            "[mic] monitor buffer recovered to {} frames after a stable run",
+            MONITOR_BUFFER_LADDER[step - 1]
+        );
+        true
+    } else {
+        false
+    }
+}
+
+fn monitor_buffer_size(config: &cpal::SupportedStreamConfig) -> cpal::BufferSize {
+    let target = MONITOR_BUFFER_LADDER[monitor_buffer_step()];
+    match config.buffer_size() {
+        cpal::SupportedBufferSize::Range { min, max } => {
+            cpal::BufferSize::Fixed(target.clamp(*min, *max))
+        }
+        cpal::SupportedBufferSize::Unknown => cpal::BufferSize::Default,
+    }
+}
+
+/// Buffer-size learning is device-specific: a recovery floor learned against one
+/// interface must not pin a different interface to a larger period, and a new
+/// device should be re-learned from the low-latency target.
+fn reset_monitor_buffer_state_if_device_changed(device_name: &str) {
+    let mut last = LAST_MONITOR_DEVICE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if last.as_deref() != Some(device_name) {
+        MONITOR_BUFFER_STEP.store(0, Ordering::Relaxed);
+        MONITOR_RECOVERY_FLOOR.store(usize::MAX, Ordering::Relaxed);
+        *last = Some(device_name.to_string());
+    }
+}
 
 type SampleSink = Arc<dyn Fn(&[f32]) + Send + Sync>;
 type SampleSource = Arc<Mutex<Box<dyn FnMut() -> f32 + Send>>>;
@@ -168,19 +260,16 @@ where
     push(&floats);
 }
 
-fn strongest_input_channel(data: &[f32], channels: usize) -> usize {
-    let mut energy = vec![0.0; channels];
-    for frame in data.chunks(channels) {
-        for (channel, sample) in frame.iter().enumerate() {
-            energy[channel] += sample * sample;
-        }
+fn mix_input_frame(frame: &[f32]) -> f32 {
+    if frame.is_empty() {
+        return 0.0;
     }
 
-    energy
-        .iter()
-        .enumerate()
-        .max_by(|(_, left), (_, right)| left.total_cmp(right))
-        .map_or(0, |(channel, _)| channel)
+    // USB interfaces expose each microphone jack as a separate channel. Mix
+    // every connected microphone instead of selecting only whichever channel
+    // happened to be loudest in the current callback. Averaging preserves
+    // headroom even when both microphones receive the same loud signal.
+    frame.iter().copied().sum::<f32>() / frame.len() as f32
 }
 
 fn write_output_frames<T, F>(
@@ -219,6 +308,7 @@ static MIC_THREAD: once_cell::sync::Lazy<Mutex<Option<JoinHandle<()>>>> =
 /// teardown with a fresh spawn.
 static MIC_OP_LOCK: once_cell::sync::Lazy<Mutex<()>> =
     once_cell::sync::Lazy::new(|| Mutex::new(()));
+static MIC_MONITOR_WATCHDOG: std::sync::Once = std::sync::Once::new();
 
 fn take_mic_thread() -> Option<JoinHandle<()>> {
     MIC_THREAD.lock().unwrap_or_else(|p| p.into_inner()).take()
@@ -296,6 +386,18 @@ pub(crate) fn start_mic_capture(
 ) -> Result<String, String> {
     let _guard = MIC_OP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
+    start_mic_capture_internal(
+        preferred,
+        options.unwrap_or_default().emit_audio,
+        Some(on_samples),
+    )
+}
+
+fn start_mic_capture_internal(
+    preferred: Option<String>,
+    emit_audio: bool,
+    on_samples: Option<Channel<MicSampleFrame>>,
+) -> Result<String, String> {
     /*
      * Always tear down any prior session first. We used to short-circuit with
      * "already running" if MIC_RUNNING was true, but that hit a race where
@@ -305,8 +407,7 @@ pub(crate) fn start_mic_capture(
      */
     stop_internal();
 
-    let next_options = options.unwrap_or_default();
-    MONITOR_ENABLED.store(next_options.emit_audio, Ordering::SeqCst);
+    MONITOR_ENABLED.store(emit_audio, Ordering::SeqCst);
 
     let (device, name) = match find_device(preferred.as_deref()) {
         Ok(pair) => pair,
@@ -317,7 +418,7 @@ pub(crate) fn start_mic_capture(
     };
 
     if let Ok(mut slot) = MIC_CHANNEL.lock() {
-        *slot = Some(on_samples);
+        *slot = on_samples;
     }
 
     MIC_SHUTDOWN.store(false, Ordering::SeqCst);
@@ -327,7 +428,40 @@ pub(crate) fn start_mic_capture(
     let shutdown = Arc::clone(&MIC_SHUTDOWN);
 
     let handle = std::thread::spawn(move || {
-        run_mic_loop(device, &name, shutdown);
+        // True while the current run uses a size we just stepped down to. If
+        // that run fails quickly, the smaller period is unsustainable here.
+        let mut recovering = false;
+        while !shutdown.load(Ordering::Relaxed) {
+            MIC_STREAM_FAILED.store(false, Ordering::Relaxed);
+            MIC_RECONFIGURE.store(false, Ordering::Relaxed);
+            let run_started = std::time::Instant::now();
+            run_mic_loop(&device, &name, Arc::clone(&shutdown));
+            if shutdown.load(Ordering::Relaxed) {
+                break;
+            }
+            if MIC_STREAM_FAILED.load(Ordering::Relaxed) {
+                if recovering && run_started.elapsed() < MONITOR_STABLE_RUN {
+                    let failed_step = monitor_buffer_step();
+                    MONITOR_RECOVERY_FLOOR.fetch_min(failed_step, Ordering::Relaxed);
+                    info!(
+                        "[mic] monitor buffer {} frames unsustainable; recovery floor set",
+                        MONITOR_BUFFER_LADDER[failed_step]
+                    );
+                }
+                recovering = false;
+                escalate_monitor_buffer();
+            } else if MIC_RECONFIGURE.load(Ordering::Relaxed) {
+                recovering = true;
+            } else {
+                break;
+            }
+            for _ in 0..25 {
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
         MIC_RUNNING.store(false, Ordering::SeqCst);
     });
 
@@ -338,6 +472,62 @@ pub(crate) fn start_mic_capture(
     Ok(device_name)
 }
 
+/// Start speaker monitoring as part of native application startup. Playback
+/// later restarts the same capture worker with a Tauri channel attached, so
+/// pitch analysis and monitoring continue to share one exclusive ALSA input.
+pub(crate) fn start_configured_monitor(config: &AppConfig) {
+    let _guard = MIC_OP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    start_configured_monitor_internal(config);
+    MIC_MONITOR_WATCHDOG.call_once(|| {
+        std::thread::spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            if MIC_RUNNING.load(Ordering::SeqCst) {
+                continue;
+            }
+            let _guard = MIC_OP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            if MIC_RUNNING.load(Ordering::SeqCst)
+                || MIC_CHANNEL
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .is_some()
+            {
+                continue;
+            }
+            let config = AppConfig::load();
+            if config.mic_monitoring == Some(true)
+                && start_mic_capture_internal(config.preferred_mic, true, None).is_ok()
+            {
+                info!("[mic] configured monitor recovered after device appeared");
+            }
+        });
+    });
+}
+
+fn start_configured_monitor_internal(config: &AppConfig) {
+    if config.mic_monitoring != Some(true) {
+        return;
+    }
+
+    if let Err(error) = start_mic_capture_internal(config.preferred_mic.clone(), true, None) {
+        warn!("[mic] startup monitor failed: {error}");
+    }
+}
+
+/// Apply settings immediately when the native monitor owns capture. An
+/// attached frontend capture (including microphone tests) owns its own
+/// options until it releases the channel.
+pub(crate) fn update_configured_monitor(config: &AppConfig) {
+    let _guard = MIC_OP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    if MIC_CHANNEL
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .is_none()
+    {
+        stop_internal();
+        start_configured_monitor_internal(config);
+    }
+}
+
 fn try_build_stream(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -346,14 +536,17 @@ fn try_build_stream(
     audio_shared: Arc<Mutex<VecDeque<f32>>>,
 ) -> Option<cpal::Stream> {
     let ch = config.channels as usize;
+    let monitor_queue_cap = match config.buffer_size {
+        cpal::BufferSize::Fixed(period) => period as usize * 2,
+        cpal::BufferSize::Default => MONITOR_START_BUFFER * 2,
+    };
     let push_samples: SampleSink = {
         let pcm_cb = Arc::clone(&pcm_shared);
         let audio_cb = Arc::clone(&audio_shared);
         Arc::new(move |data: &[f32]| {
             let mut mono_samples = Vec::with_capacity(data.len() / ch.max(1));
-            let active_channel = strongest_input_channel(data, ch);
             for frame in data.chunks(ch) {
-                mono_samples.push(frame.get(active_channel).copied().unwrap_or(0.0));
+                mono_samples.push(mix_input_frame(frame));
             }
 
             if let Ok(mut q) = pcm_cb.try_lock() {
@@ -370,7 +563,9 @@ fn try_build_stream(
                     for sample in &mono_samples {
                         q.push_back(*sample);
                     }
-                    while q.len() > AUDIO_QUEUE_CAP {
+                    // USB input and HDMI output have independent clocks. Keep
+                    // only recent audio so clock drift cannot become vocal lag.
+                    while q.len() > monitor_queue_cap {
                         q.pop_front();
                     }
                 }
@@ -385,7 +580,7 @@ fn try_build_stream(
             device.build_input_stream(
                 config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| push(data),
-                |err| warn!("[mic] stream error: {err}"),
+                report_stream_error,
                 None,
             )
         }
@@ -396,7 +591,7 @@ fn try_build_stream(
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
                     push_mapped_input(data, &push, i16_to_f32);
                 },
-                |err| warn!("[mic] stream error: {err}"),
+                report_stream_error,
                 None,
             )
         }
@@ -407,7 +602,7 @@ fn try_build_stream(
                 move |data: &[i32], _: &cpal::InputCallbackInfo| {
                     push_mapped_input(data, &push, i32_to_f32);
                 },
-                |err| warn!("[mic] stream error: {err}"),
+                report_stream_error,
                 None,
             )
         }
@@ -442,11 +637,23 @@ fn try_build_output_stream(
             return None;
         }
     };
+    let default_cfg = device
+        .supported_output_configs()
+        .ok()
+        .and_then(|mut configs| {
+            configs.find(|candidate| {
+                candidate.channels() == default_cfg.channels()
+                    && candidate.sample_format() == default_cfg.sample_format()
+                    && candidate.min_sample_rate() <= 48_000
+                    && candidate.max_sample_rate() >= 48_000
+            })
+        })
+        .map_or(default_cfg, |config| config.with_sample_rate(48_000));
     let sample_format = default_cfg.sample_format();
     let config = cpal::StreamConfig {
         channels: default_cfg.channels(),
         sample_rate: default_cfg.sample_rate(),
-        buffer_size: cpal::BufferSize::Default,
+        buffer_size: monitor_buffer_size(&default_cfg),
     };
     let ch = config.channels as usize;
     let sample_rate_ratio = f64::from(input_sample_rate) / f64::from(config.sample_rate);
@@ -502,7 +709,7 @@ fn try_build_output_stream(
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     write_output_frames(data, ch, &next, |sample| sample);
                 },
-                |err| warn!("[mic] output stream error: {err}"),
+                report_stream_error,
                 None,
             )
         }
@@ -513,7 +720,7 @@ fn try_build_output_stream(
                 move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
                     write_output_frames(data, ch, &next, f32_to_i16);
                 },
-                |err| warn!("[mic] output stream error: {err}"),
+                report_stream_error,
                 None,
             )
         }
@@ -524,7 +731,7 @@ fn try_build_output_stream(
                 move |data: &mut [u16], _: &cpal::OutputCallbackInfo| {
                     write_output_frames(data, ch, &next, f32_to_u16);
                 },
-                |err| warn!("[mic] output stream error: {err}"),
+                report_stream_error,
                 None,
             )
         }
@@ -535,7 +742,7 @@ fn try_build_output_stream(
                 move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
                     write_output_frames(data, ch, &next, f32_to_i32);
                 },
-                |err| warn!("[mic] output stream error: {err}"),
+                report_stream_error,
                 None,
             )
         }
@@ -546,7 +753,7 @@ fn try_build_output_stream(
                 move |data: &mut [u32], _: &cpal::OutputCallbackInfo| {
                     write_output_frames(data, ch, &next, f32_to_u32);
                 },
-                |err| warn!("[mic] output stream error: {err}"),
+                report_stream_error,
                 None,
             )
         }
@@ -578,7 +785,9 @@ fn drain_chunk(queue: &Mutex<VecDeque<f32>>) -> Option<Vec<f32>> {
     Some(q.drain(..SAMPLE_CHUNK).collect())
 }
 
-fn run_mic_loop(device: cpal::Device, name: &str, shutdown: Arc<AtomicBool>) {
+fn run_mic_loop(device: &cpal::Device, name: &str, shutdown: Arc<AtomicBool>) {
+    reset_monitor_buffer_state_if_device_changed(name);
+
     let default_cfg = match device.default_input_config() {
         Ok(c) => c,
         Err(e) => {
@@ -587,11 +796,26 @@ fn run_mic_loop(device: cpal::Device, name: &str, shutdown: Arc<AtomicBool>) {
         }
     };
 
-    let sample_format = default_cfg.sample_format();
+    // Prefer the common HDMI/video rate when the input supports it. Some USB
+    // interfaces advertise 44.1 kHz as their default even when that clock
+    // source cannot currently be activated (observed on UMC202HD).
+    let input_cfg = device
+        .supported_input_configs()
+        .ok()
+        .and_then(|mut configs| {
+            configs.find(|candidate| {
+                candidate.channels() == default_cfg.channels()
+                    && candidate.sample_format() == default_cfg.sample_format()
+                    && candidate.min_sample_rate() <= 48_000
+                    && candidate.max_sample_rate() >= 48_000
+            })
+        })
+        .map_or(default_cfg, |config| config.with_sample_rate(48_000));
+    let sample_format = input_cfg.sample_format();
     let config = cpal::StreamConfig {
-        channels: default_cfg.channels(),
-        sample_rate: default_cfg.sample_rate(),
-        buffer_size: cpal::BufferSize::Default,
+        channels: input_cfg.channels(),
+        sample_rate: input_cfg.sample_rate(),
+        buffer_size: monitor_buffer_size(&input_cfg),
     };
     let sr = config.sample_rate;
 
@@ -601,9 +825,9 @@ fn run_mic_loop(device: cpal::Device, name: &str, shutdown: Arc<AtomicBool>) {
     );
 
     let pcm_shared = Arc::new(Mutex::new(VecDeque::<f32>::with_capacity(PCM_QUEUE_CAP)));
-    let audio_shared = Arc::new(Mutex::new(VecDeque::<f32>::with_capacity(AUDIO_QUEUE_CAP)));
+    let audio_shared = Arc::new(Mutex::new(VecDeque::<f32>::new()));
     let Some(_stream) = try_build_stream(
-        &device,
+        device,
         &config,
         sample_format,
         Arc::clone(&pcm_shared),
@@ -612,23 +836,36 @@ fn run_mic_loop(device: cpal::Device, name: &str, shutdown: Arc<AtomicBool>) {
         warn!("[mic] failed to open '{name}'");
         return;
     };
-    let monitor_stream = cpal::default_host()
-        .default_output_device()
-        .and_then(|output_device| {
-            try_build_output_stream(&output_device, sr, Arc::clone(&audio_shared))
-        });
-    if monitor_stream.is_none() {
+    let monitor_stream = if MONITOR_ENABLED.load(Ordering::Relaxed) {
+        cpal::default_host()
+            .default_output_device()
+            .and_then(|output_device| {
+                try_build_output_stream(&output_device, sr, Arc::clone(&audio_shared))
+            })
+    } else {
+        None
+    };
+    if MONITOR_ENABLED.load(Ordering::Relaxed) && monitor_stream.is_none() {
         warn!("[mic] no output monitoring stream available");
     }
 
     info!("[mic] active: {name}");
 
     let sleep_dur = std::time::Duration::from_millis(4);
+    let run_started = std::time::Instant::now();
 
     loop {
         std::thread::sleep(sleep_dur);
 
-        if shutdown.load(Ordering::Relaxed) {
+        if shutdown.load(Ordering::Relaxed) || MIC_STREAM_FAILED.load(Ordering::Relaxed) {
+            break;
+        }
+
+        // A long clean run at an escalated size means the device can afford a
+        // smaller period again: hand control back to the worker so it can
+        // rebuild both streams one rung closer to the low-latency target.
+        if run_started.elapsed() >= MONITOR_STABLE_RUN && recover_monitor_buffer() {
+            MIC_RECONFIGURE.store(true, Ordering::Relaxed);
             break;
         }
 
@@ -651,4 +888,22 @@ fn run_mic_loop(device: cpal::Device, name: &str, shutdown: Arc<AtomicBool>) {
 pub(crate) fn stop_mic_capture() {
     let _guard = MIC_OP_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     stop_internal();
+    // Releasing frontend capture returns to the application's saved monitor
+    // preference, including after leaving playback or finishing a mic test.
+    start_configured_monitor_internal(&AppConfig::load());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mix_input_frame;
+
+    #[test]
+    fn both_microphone_inputs_contribute_without_overloading_the_mix() {
+        assert_eq!(mix_input_frame(&[]), 0.0);
+        assert_eq!(mix_input_frame(&[0.75]), 0.75);
+        assert_eq!(mix_input_frame(&[0.8, 0.0]), 0.4);
+        assert_eq!(mix_input_frame(&[0.0, 0.8]), 0.4);
+        assert_eq!(mix_input_frame(&[1.0, 1.0]), 1.0);
+        assert_eq!(mix_input_frame(&[-1.0, -1.0]), -1.0);
+    }
 }

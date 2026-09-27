@@ -1,0 +1,389 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+readonly DISPLAY_NUMBER=":0"
+readonly TVBOX_USER="tvbox"
+readonly TVBOX_HOME="/var/lib/tvbox"
+readonly XAUTHORITY_FILE="/run/tvbox.Xauthority"
+readonly PID_FILE="/run/tvbox-active.pid"
+readonly KIND_FILE="/run/tvbox-active.kind"
+readonly SESSION_PID="$$"
+
+display_pid=""
+watcher_pid=""
+child_pid=""
+display_backend=""
+display_scale=1
+status_message=""
+hotplug_changed=0
+
+connector_state() {
+    if grep -q '^connected$' /sys/class/drm/card0-*/status 2>/dev/null; then
+        printf 'connected\n'
+    else
+        printf 'disconnected\n'
+    fi
+}
+
+stop_child() {
+    if [[ -n "${child_pid}" ]] && kill -0 "${child_pid}" 2>/dev/null; then
+        kill -TERM -- "-${child_pid}" 2>/dev/null || true
+    fi
+}
+
+stop_watcher() {
+    if [[ -n "${watcher_pid}" ]] && kill -0 "${watcher_pid}" 2>/dev/null; then
+        kill "${watcher_pid}" 2>/dev/null || true
+        wait "${watcher_pid}" 2>/dev/null || true
+    fi
+    watcher_pid=""
+}
+
+stop_display() {
+    if [[ -n "${display_pid}" ]] && kill -0 "${display_pid}" 2>/dev/null; then
+        kill -TERM "${display_pid}" 2>/dev/null || true
+        wait "${display_pid}" 2>/dev/null || true
+    fi
+    display_pid=""
+}
+
+cleanup() {
+    stop_child
+    stop_watcher
+    stop_display
+    rm -f "${PID_FILE}" "${KIND_FILE}" "${XAUTHORITY_FILE}"
+}
+
+terminate() {
+    trap - EXIT INT TERM
+    cleanup
+    exit 0
+}
+
+hotplug() {
+    hotplug_changed=1
+    stop_child
+}
+
+trap cleanup EXIT
+trap terminate INT TERM
+trap hotplug USR1
+
+prepare_runtime() {
+    local uid
+    uid="$(id -u "${TVBOX_USER}")"
+    install -d -m 0700 -o "${TVBOX_USER}" -g "${TVBOX_USER}" "/run/user/${uid}"
+    install -d -m 0755 -o "${TVBOX_USER}" -g "${TVBOX_USER}" \
+        "${TVBOX_HOME}/.cache" "${TVBOX_HOME}/.config"
+    : >"${XAUTHORITY_FILE}"
+    chmod 0600 "${XAUTHORITY_FILE}"
+    xauth -f "${XAUTHORITY_FILE}" add "${DISPLAY_NUMBER}" \
+        MIT-MAGIC-COOKIE-1 "$(mcookie)"
+    chown "${TVBOX_USER}:${TVBOX_USER}" "${XAUTHORITY_FILE}"
+}
+
+wait_for_display() {
+    for _attempt in $(seq 1 100); do
+        if DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" xdpyinfo >/dev/null 2>&1; then
+            return 0
+        fi
+        if ! kill -0 "${display_pid}" 2>/dev/null; then
+            return 1
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
+configure_4k_mode() {
+    local output mode_line
+    output="$(DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" \
+        xrandr --query 2>/dev/null | awk '$2 == "connected" { print $1; exit }')"
+    if [[ -z "${output}" ]]; then
+        status_message="HDMI подключён, но Xorg не видит активный выход"
+        return 0
+    fi
+
+    mode_line="$(DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" \
+        xrandr --query 2>/dev/null | awk -v output="${output}" '
+            $1 == output && $2 == "connected" { in_output = 1; next }
+            in_output && $0 !~ /^[[:space:]]/ { exit }
+            in_output && $1 == "3840x2160" { print; exit }
+        ')"
+
+    if [[ "${mode_line}" =~ (^|[[:space:]])(30(\.0+)?|29\.9[0-9])[\*\+]*($|[[:space:]]) ]]; then
+        if DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" \
+            xrandr --output "${output}" --mode 3840x2160 --rate 30; then
+            status_message="HDMI: 3840×2160@30; Moonlight: HEVC, 80 Mbps"
+        else
+            status_message="EDID содержит 4K30, но Xorg не смог включить этот режим"
+        fi
+    else
+        status_message="EDID не предлагает 3840×2160@30; Moonlight будет масштабирован"
+    fi
+}
+
+detect_display_scale() {
+    local width=0 height=0
+
+    if read -r width height < <(
+        DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" \
+            xdotool getdisplaygeometry 2>/dev/null
+    ); then
+        if (( width >= 3000 || height >= 2000 )); then
+            display_scale=2
+        else
+            display_scale=1
+        fi
+    fi
+}
+
+start_display() {
+    local state="$1"
+    prepare_runtime
+    if [[ "${state}" == "connected" ]]; then
+        Xorg "${DISPLAY_NUMBER}" vt1 -keeptty -noreset -nolisten tcp \
+            -auth "${XAUTHORITY_FILE}" >/var/log/tvbox-xorg.log 2>&1 &
+        display_pid="$!"
+        display_backend="drm"
+        if wait_for_display; then
+            DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" xset s off
+            DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" xset s noblank
+            DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" xset -dpms
+            configure_4k_mode
+            detect_display_scale
+            return 0
+        fi
+        stop_display
+        status_message="Не удалось открыть HDMI через Xorg; включён диагностический экран"
+    else
+        status_message="HDMI отключён: launcher работает в headless test mode"
+    fi
+
+    Xvfb "${DISPLAY_NUMBER}" -screen 0 1920x1080x24 -nolisten tcp \
+        -auth "${XAUTHORITY_FILE}" >/var/log/tvbox-xvfb.log 2>&1 &
+    display_pid="$!"
+    display_backend="headless"
+    wait_for_display
+    detect_display_scale
+}
+
+watch_connector() {
+    local initial="$1" current_mode
+    while sleep 2; do
+        if [[ "$(connector_state)" != "${initial}" ]]; then
+            if [[ "${initial}" == "connected" &&
+                  "$(cat "${KIND_FILE}" 2>/dev/null || true)" == "nightingale" &&
+                  -n "${display_pid}" ]] && kill -0 "${display_pid}" 2>/dev/null; then
+                continue
+            fi
+            kill -USR1 "${SESSION_PID}"
+            return
+        fi
+
+        # Some HDMI repeaters briefly renegotiate the link when the TV wakes
+        # and leave Xorg at 1080p even though 4K30 remains in the EDID. Restore
+        # the requested mode without tearing down the running application.
+        if [[ "${initial}" == "connected" ]]; then
+            current_mode="$(
+                DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" \
+                    xrandr --current 2>/dev/null | awk '
+                        $2 == "connected" {
+                            for (field = 3; field <= NF; field++) {
+                                if ($field ~ /^[0-9]+x[0-9]+\+[0-9]+\+[0-9]+/) {
+                                    sub(/\+.*/, "", $field)
+                                    print $field
+                                    exit
+                                }
+                            }
+                        }
+                    '
+            )"
+            if [[ -n "${current_mode}" && "${current_mode}" != "3840x2160" ]]; then
+                logger -t tvbox-session \
+                    "HDMI mode changed to ${current_mode}; restoring 3840x2160@30"
+                configure_4k_mode
+                case "$(cat "${KIND_FILE}" 2>/dev/null || true)" in
+                launcher) fit_window_to_display '^Orange Pi TV$' || true ;;
+                nightingale) fit_window_to_display '^Nightingale$' || true ;;
+                setup) fit_window_to_display '^Moonlight Setup$' || true ;;
+                esac
+            fi
+        fi
+    done
+}
+
+fit_window_to_display() {
+    local title_pattern="$1" window_id="" width height
+
+    for _attempt in $(seq 1 100); do
+        window_id="$(DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" \
+            xdotool search --onlyvisible --name "${title_pattern}" 2>/dev/null | \
+            sed -n '$p' || true)"
+        if [[ -n "${window_id}" ]]; then
+            break
+        fi
+        sleep 0.1
+    done
+
+    if [[ -z "${window_id}" ]]; then
+        return 1
+    fi
+
+    # GTK may apply its fullscreen request just after the window first becomes
+    # visible. Repeat the fit briefly so that this late configure event cannot
+    # shrink a GDK_SCALE=2 window back to one quarter of the 4K framebuffer.
+    for _attempt in $(seq 1 8); do
+        read -r width height < <(
+            DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" \
+                xdotool getdisplaygeometry
+        )
+        DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" \
+            xdotool windowmove --sync "${window_id}" 0 0
+        DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" \
+            xdotool windowsize --sync "${window_id}" "${width}" "${height}"
+        sleep 0.25
+    done
+}
+
+run_as_tvbox() {
+    local kind="$1"
+    shift
+    local uid
+    uid="$(id -u "${TVBOX_USER}")"
+    hotplug_changed=0
+    setsid runuser -u "${TVBOX_USER}" -- env \
+        HOME="${TVBOX_HOME}" \
+        DISPLAY="${DISPLAY_NUMBER}" \
+        XAUTHORITY="${XAUTHORITY_FILE}" \
+        XDG_RUNTIME_DIR="/run/user/${uid}" \
+        XDG_CONFIG_HOME="${TVBOX_HOME}/.config" \
+        XDG_CACHE_HOME="${TVBOX_HOME}/.cache" \
+        NIGHTINGALE_DATA_PATH="${TVBOX_HOME}/.nightingale" \
+        NIGHTINGALE_UVR_BACKEND=auto \
+        NIGHTINGALE_RKNN_CORE=all \
+        NIGHTINGALE_RKNN_STREAM_COMPONENTS=1 \
+        OMP_NUM_THREADS=1 \
+        GDK_SCALE="${display_scale}" \
+        TVBOX_STATUS="${TVBOX_STATUS:-}" \
+        "$@" &
+    child_pid="$!"
+    printf '%s\n' "${child_pid}" >"${PID_FILE}"
+    printf '%s\n' "${kind}" >"${KIND_FILE}"
+    case "${kind}" in
+    launcher) fit_window_to_display '^Orange Pi TV$' || true ;;
+    nightingale) fit_window_to_display '^Nightingale$' || true ;;
+    setup) fit_window_to_display '^Moonlight Setup$' || true ;;
+    esac
+    wait "${child_pid}"
+    local code="$?"
+    child_pid=""
+    rm -f "${PID_FILE}" "${KIND_FILE}"
+    return "${code}"
+}
+
+run_moonlight() {
+    local uid host=""
+    local -a moonlight_command
+    uid="$(id -u "${TVBOX_USER}")"
+    moonlight_command=(/usr/local/bin/moonlight /etc/tvbox/moonlight.conf)
+    if [[ -r "${TVBOX_HOME}/.config/moonlight/selected-host" ]]; then
+        read -r host <"${TVBOX_HOME}/.config/moonlight/selected-host" || true
+        if [[ "${host}" =~ ^[A-Za-z0-9._:-]+$ ]]; then
+            moonlight_command=(
+                /usr/local/bin/moonlight stream
+                -config /etc/tvbox/moonlight.conf
+                "${host}"
+            )
+        fi
+    fi
+    setsid runuser -u "${TVBOX_USER}" -- env \
+        HOME="${TVBOX_HOME}" \
+        XDG_RUNTIME_DIR="/run/user/${uid}" \
+        XDG_CONFIG_HOME="${TVBOX_HOME}/.config" \
+        XDG_CACHE_HOME="${TVBOX_HOME}/.cache" \
+        "${moonlight_command[@]}" &
+    child_pid="$!"
+    printf '%s\n' "${child_pid}" >"${PID_FILE}"
+    printf 'moonlight\n' >"${KIND_FILE}"
+    wait "${child_pid}"
+    local code="$?"
+    child_pid=""
+    rm -f "${PID_FILE}" "${KIND_FILE}"
+    return "${code}"
+}
+
+while true; do
+    state="$(connector_state)"
+    start_display "${state}"
+    watch_connector "${state}" &
+    watcher_pid="$!"
+
+    while true; do
+        set +e
+        TVBOX_STATUS="${status_message}" run_as_tvbox launcher /usr/local/bin/tvbox-launcher
+        choice="$?"
+        set -e
+
+        if (( hotplug_changed )); then
+            status_message="HDMI state changed; display restarted"
+            break
+        fi
+
+        case "${choice}" in
+        10)
+            status_message=""
+            set +e
+            run_as_tvbox nightingale /usr/bin/Nightingale
+            code="$?"
+            set -e
+            if (( hotplug_changed )); then
+                status_message="HDMI state changed; Nightingale closed safely"
+                break
+            elif [[ "${code}" -ne 0 ]]; then
+                status_message="Nightingale завершился с кодом ${code}"
+            fi
+            ;;
+        20)
+            if [[ "${display_backend}" != "drm" ]]; then
+                status_message="Для Moonlight подключите телевизор по HDMI"
+                continue
+            fi
+
+            # Rockchip Moonlight renders straight to a DRM plane, so Xorg must
+            # release DRM master before the stream starts.
+            stop_watcher
+            stop_display
+            status_message=""
+            set +e
+            run_moonlight
+            code="$?"
+            set -e
+            if [[ "${code}" -ne 0 ]]; then
+                status_message="Moonlight недоступен или завершился с кодом ${code}"
+            fi
+            break
+            ;;
+        30)
+            status_message=""
+            set +e
+            run_as_tvbox setup /usr/local/bin/tvbox-moonlight-setup
+            code="$?"
+            set -e
+            if (( hotplug_changed )); then
+                status_message="HDMI state changed; Moonlight setup closed safely"
+                break
+            elif [[ "${code}" -ne 0 ]]; then
+                status_message="Настройка Moonlight завершилась с кодом ${code}"
+            fi
+            ;;
+        *)
+            status_message="Launcher перезапущен после кода ${choice}"
+            sleep 1
+            ;;
+        esac
+    done
+
+    stop_watcher
+    stop_display
+done

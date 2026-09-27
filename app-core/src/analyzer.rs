@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -16,7 +16,10 @@ use crate::config::AppConfig;
 use crate::error::NightingaleError;
 use crate::library_db;
 use crate::library_model::{LibraryMenuFilters, SongTarget};
-use crate::lyrics::{fetch_lrclib_lyrics, write_lyrics_file};
+use crate::lyrics::{
+    TimedLyrics, fetch_lrclib_timed_lyrics, load_lyrics_file, write_lrclib_transcript,
+    write_lyrics_file,
+};
 use crate::song::{Song, SongOrigin, TranscriptSource, compute_file_hash, read_transcript_meta};
 use crate::source::{MediaSource, active_source};
 
@@ -74,12 +77,27 @@ impl AnalysisQueue {
     pub fn clear() {
         let _ = library_db::analysis_queue_clear();
     }
+
+    pub fn recover_interrupted() -> Vec<String> {
+        let mut queue = Self::load();
+        let mut pending = Vec::new();
+        for (hash, status) in &mut queue.entries {
+            if matches!(status, QueuedStatus::Queued | QueuedStatus::Analyzing(_)) {
+                *status = QueuedStatus::Queued;
+                pending.push(hash.clone());
+            }
+        }
+        pending.sort();
+        queue.save();
+        pending
+    }
 }
 use crate::vendor::{analyzer_dir, ffmpeg_path, python_path, silent_command};
 
 // ─── Server process ──────────────────────────────────────────────────
 
 static SERVER_PID: AtomicU32 = AtomicU32::new(0);
+static FORCE_EXISTING_UVR: AtomicBool = AtomicBool::new(false);
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -222,6 +240,9 @@ fn spawn_server() -> Result<ServerProcess, NightingaleError> {
     };
 
     let mut cmd = silent_command(&python);
+    if FORCE_EXISTING_UVR.load(Ordering::SeqCst) {
+        cmd.env("NIGHTINGALE_UVR_BACKEND", "existing");
+    }
     cmd.env("PATH", &path_env)
         .env("TORCH_HOME", models.join("torch"))
         .env("HF_HOME", models.join("huggingface"))
@@ -339,9 +360,6 @@ static ANALYZER: LazyLock<Mutex<AnalyzerState>> = LazyLock::new(|| {
     })
 });
 
-static FORCE_TRANSCRIBE: LazyLock<Mutex<HashSet<String>>> =
-    LazyLock::new(|| Mutex::new(HashSet::new()));
-
 /// Hashes whose queued job should only run stem separation (key detect +
 /// separation) and keep the already-written LRC-provided transcript.
 static STEMS_ONLY: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
@@ -379,8 +397,6 @@ fn discard_cancelled_job(initial_hash: &str, file_hash: &str) -> bool {
 
     remove_from_queue(initial_hash);
     remove_from_queue(file_hash);
-    lock_unpoisoned(&FORCE_TRANSCRIBE).remove(initial_hash);
-    lock_unpoisoned(&FORCE_TRANSCRIBE).remove(file_hash);
     lock_unpoisoned(&STEMS_ONLY).remove(initial_hash);
     lock_unpoisoned(&STEMS_ONLY).remove(file_hash);
     info!("[analyzer] Analysis cancelled for {file_hash}");
@@ -564,7 +580,6 @@ pub fn cancel_analysis(target: SongTarget) -> Result<usize, String> {
 
     for hash in &affected {
         remove_from_queue(hash);
-        lock_unpoisoned(&FORCE_TRANSCRIBE).remove(hash);
         lock_unpoisoned(&STEMS_ONLY).remove(hash);
     }
 
@@ -691,23 +706,8 @@ pub fn realign(target: SongTarget, language: Option<String>) -> Result<usize, St
     )
 }
 
-fn reanalyze_force_transcribe_one(file_hash: &str) -> bool {
-    if is_usdx_song(file_hash) {
-        return false;
-    }
-
-    lock_unpoisoned(&FORCE_TRANSCRIBE).insert(file_hash.to_string());
-
-    reanalyze(file_hash, false);
-    true
-}
-
-pub fn reanalyze_force_transcribe(target: SongTarget) -> Result<usize, String> {
-    run_for_target(
-        target,
-        library_db::iter_file_hashes_filtered_realignable,
-        |hash| Ok(reanalyze_force_transcribe_one(hash)),
-    )
+pub fn reanalyze_force_transcribe(_target: SongTarget) -> Result<usize, String> {
+    Err("Automatic transcription is no longer available; provide timed LRC lyrics.".into())
 }
 
 // Refresh metadata such as artist and cover art without touching analysis-derived fields.
@@ -827,6 +827,47 @@ fn spawn_worker() {
     });
 }
 
+enum LyricsPlan {
+    StemsOnly,
+    PendingTimed,
+    CachedText(PathBuf),
+    Timed(TimedLyrics),
+}
+
+fn resolve_lyrics_plan(
+    song: &Song,
+    cache: &CacheDir,
+    stems_only: bool,
+) -> Result<LyricsPlan, String> {
+    let pending_lrc = !song.is_analyzed
+        && cache.transcript_path(&song.file_hash).is_file()
+        && read_transcript_meta(cache, &song.file_hash).source == TranscriptSource::Lrc;
+    if stems_only {
+        return Ok(LyricsPlan::StemsOnly);
+    }
+    if pending_lrc {
+        return Ok(LyricsPlan::PendingTimed);
+    }
+
+    let cached_path = cache.lyrics_path(&song.file_hash);
+    if cached_path.is_file() {
+        let size = std::fs::metadata(&cached_path)
+            .map_err(|_| "Could not read cached lyrics.".to_string())?
+            .len();
+        if size > 1024 * 1024 {
+            return Err("Cached lyrics are too large. Provide a smaller lyric file.".into());
+        }
+        let lyrics = load_lyrics_file(&song.file_hash)
+            .ok_or_else(|| "Cached lyrics are invalid. Provide timed LRC manually.".to_string())?;
+        if !lyrics.lines.iter().any(|line| !line.trim().is_empty()) {
+            return Err("Cached lyrics have no text. Provide timed LRC manually.".into());
+        }
+        return Ok(LyricsPlan::CachedText(cached_path));
+    }
+
+    fetch_lrclib_timed_lyrics(song).map(LyricsPlan::Timed)
+}
+
 fn process_song(initial_hash: &str, cache: &CacheDir) {
     let Some(song) = library_db::load_song_by_hash(initial_hash).ok().flatten() else {
         if !discard_cancelled_job(initial_hash, initial_hash) {
@@ -834,6 +875,21 @@ fn process_song(initial_hash: &str, cache: &CacheDir) {
         }
         return;
     };
+
+    let stems_only = lock_unpoisoned(&STEMS_ONLY).remove(initial_hash);
+    update_queue_status(initial_hash, QueuedStatus::Analyzing(0));
+    let lyrics_plan = match resolve_lyrics_plan(&song, cache, stems_only) {
+        Ok(plan) => plan,
+        Err(error) => {
+            if !discard_cancelled_job(initial_hash, initial_hash) {
+                update_queue_status(initial_hash, QueuedStatus::Failed(error));
+            }
+            return;
+        }
+    };
+    if discard_cancelled_job(initial_hash, initial_hash) {
+        return;
+    }
 
     let (song, local_path, file_hash_owned) = match prepare_audio_for_analysis(&song, cache) {
         Ok(out) => out,
@@ -854,54 +910,71 @@ fn process_song(initial_hash: &str, cache: &CacheDir) {
         return;
     }
 
-    info!(
-        "[analyzer] Starting analysis: {} (hash={})",
-        local_path.display(),
-        file_hash
-    );
-
+    info!("[analyzer] Starting analysis (hash={file_hash})");
     update_queue_status(file_hash, QueuedStatus::Analyzing(0));
 
-    // Stems-only: keep the LRC-provided transcript and just separate stems.
-    // The intent may have been keyed by the pre-rekey hash for remote songs.
-    let stems_only = {
-        let mut set = lock_unpoisoned(&STEMS_ONLY);
-        set.remove(file_hash) || set.remove(initial_hash)
+    let (skip_transcription, lyrics_path, align_lrc_lines, lyricsfile) = match lyrics_plan {
+        LyricsPlan::StemsOnly => {
+            if file_hash != initial_hash
+                && std::fs::rename(
+                    cache.transcript_path(initial_hash),
+                    cache.transcript_path(file_hash),
+                )
+                .is_err()
+            {
+                update_queue_status(
+                    file_hash,
+                    QueuedStatus::Failed(
+                        "Could not move provided timed lyrics into the analysis cache.".into(),
+                    ),
+                );
+                return;
+            }
+            (true, None, false, None)
+        }
+        LyricsPlan::PendingTimed => (true, None, true, None),
+        LyricsPlan::CachedText(path) => {
+            let path = if file_hash != initial_hash {
+                let rekeyed = cache.lyrics_path(file_hash);
+                if std::fs::rename(&path, &rekeyed).is_err() {
+                    update_queue_status(
+                        file_hash,
+                        QueuedStatus::Failed(
+                            "Could not move provided lyrics into the analysis cache.".into(),
+                        ),
+                    );
+                    return;
+                }
+                rekeyed
+            } else {
+                path
+            };
+            (false, Some(path), false, None)
+        }
+        LyricsPlan::Timed(timed) => {
+            if let Err(error) = write_lrclib_transcript(&song, cache, &timed.parsed) {
+                update_queue_status(file_hash, QueuedStatus::Failed(error));
+                return;
+            }
+            (true, None, true, timed.lyricsfile)
+        }
     };
-    if stems_only && file_hash != initial_hash {
-        // Move the pre-written transcript to the rekeyed hash so the pass can
-        // patch it in place.
-        let _ = std::fs::rename(
-            cache.transcript_path(initial_hash),
-            cache.transcript_path(file_hash),
-        );
-    }
 
     let config = AppConfig::load();
-    let skip_lrclib = stems_only || lock_unpoisoned(&FORCE_TRANSCRIBE).remove(file_hash);
-    let lyrics_path = if skip_lrclib {
-        None
-    } else {
-        fetch_lrclib_lyrics(&song, cache)
-    };
-
     let mut cmd_json = serde_json::json!({
         "type": "analyze",
         "audio_path": local_path.to_string_lossy(),
         "cache_path": cache.path.to_string_lossy(),
         "hash": file_hash,
-        "model": config.whisper_model(),
-        "beam_size": config.beam_size(),
-        "batch_size": config.batch_size(),
+        "duration_secs": song.duration_secs,
+        "model": if align_lrc_lines { "tiny" } else { config.whisper_model() },
         "separator": config.separator(),
-        "engine": config.asr_engine(),
         "align_backend": config.align_backend(),
         "vocal_detection_threshold_pct": config.vocal_detection_threshold_pct(),
+        "skip_transcription": skip_transcription,
+        "align_lrc_lines": align_lrc_lines,
+        "lrclib_lyricsfile": lyricsfile,
     });
-
-    if stems_only {
-        cmd_json["skip_transcription"] = serde_json::json!(true);
-    }
 
     if let Some(ref lp) = lyrics_path {
         cmd_json["lyrics"] = serde_json::json!(lp.to_string_lossy());
@@ -909,7 +982,11 @@ fn process_song(initial_hash: &str, cache: &CacheDir) {
     let language_hint = config
         .language_override(file_hash)
         .map(str::to_string)
-        .or_else(|| lyrics_path.as_ref().and_then(|_| song.language.clone()))
+        .or_else(|| {
+            (lyrics_path.is_some() || align_lrc_lines)
+                .then(|| song.language.clone())
+                .flatten()
+        })
         .filter(|lang| {
             // "unknown"/empty is not a real language: passing it as a forced
             // alignment language crashes whisperx, so let the worker detect it.
@@ -967,8 +1044,6 @@ fn process_song(initial_hash: &str, cache: &CacheDir) {
                     drop(state);
                     remove_from_queue(initial_hash);
                     remove_from_queue(file_hash);
-                    lock_unpoisoned(&FORCE_TRANSCRIBE).remove(initial_hash);
-                    lock_unpoisoned(&FORCE_TRANSCRIBE).remove(file_hash);
                     lock_unpoisoned(&STEMS_ONLY).remove(initial_hash);
                     lock_unpoisoned(&STEMS_ONLY).remove(file_hash);
                     *guard = None;
@@ -996,6 +1071,20 @@ fn process_song(initial_hash: &str, cache: &CacheDir) {
                 return;
             }
             Ok(SongResult::Error(msg)) => {
+                let auto_uvr = std::env::var("NIGHTINGALE_UVR_BACKEND")
+                    .map_or(true, |backend| backend.eq_ignore_ascii_case("auto"));
+                if !retried
+                    && auto_uvr
+                    && !FORCE_EXISTING_UVR.load(Ordering::SeqCst)
+                    && msg.contains(".rknn returned NaN or Inf")
+                {
+                    warn!("[analyzer] RKNN returned non-finite output; retrying with CPU UVR");
+                    FORCE_EXISTING_UVR.store(true, Ordering::SeqCst);
+                    *guard = None;
+                    retried = true;
+                    update_queue_status(file_hash, QueuedStatus::Analyzing(0));
+                    continue;
+                }
                 update_queue_status(file_hash, QueuedStatus::Failed(msg));
                 return;
             }

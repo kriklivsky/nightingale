@@ -32,17 +32,21 @@ export const Progress = () => {
   }
 
   const { count, processed_count, folder } = meta;
+  const source = config?.library_source;
 
   // Pre-first-page window: scan kicked off (folder label set) but the source
   // hasn't told us how big the catalogue is yet, so the determinate bar
-  // would be `max=0`. Show an indeterminate "Connecting…" hint so the user
-  // knows something is happening during the initial round-trip (Jellyfin
-  // `/Items`, Navidrome `getAlbumList2`, Plex section metadata).
+  // would be `max=0`. A local scan can legitimately finish empty in this
+  // state, while remote sources still have an initial catalogue round-trip.
   if (folder && count === 0 && processed_count === 0) {
+    if (source?.kind === 'folder') {
+      return null;
+    }
+
     return (
       <div className="flex items-center gap-1 text-xs text-muted-foreground">
         <LoaderCircleIcon className="size-3 animate-spin" />
-        Connecting to {sourceLabel(config?.library_source)}...
+        Connecting to {sourceLabel(source)}...
       </div>
     );
   }

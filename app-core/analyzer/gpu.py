@@ -153,4 +153,7 @@ def end_of_song_cleanup() -> None:
         parakeet.free_models()
     except Exception:
         pass
+    from uvr_backend import release_rknn_backend
+
+    release_rknn_backend()
     hard_free_gpu("end_of_song")

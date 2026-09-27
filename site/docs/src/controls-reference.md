@@ -10,6 +10,7 @@ In the main menu, sidebar, and settings screens:
 - **Enter / A button**: Select the focused item
 - **Escape / B button**: Go back or close overlays
 - **Tab**: Switch between sidebar and main content area
+- **Sidebar Left / Right**: Return to a section heading or close it; open a section or move into its first item. Right on an item moves to the song list. Arrow navigation hides the idle mouse cursor and keeps the selected sidebar item when playback ends.
 - **Type any text**: Filter/search the song list
 - **Actions button**: Open bulk actions for the current filtered list
 
@@ -20,7 +21,9 @@ While a song is playing:
 - **Space / Start**: Pause or resume playback
 - **Escape / B**: Exit back to the song menu
 - **G**: Toggle guide vocals on/off
+- **Left / Right arrows**: Adjust the guide vocal volume while the song is playing with guide vocals available — right is louder, left is quieter (remembered between sessions; the D-pad works the same way). When guide vocals are unavailable, the arrows keep their normal navigation behavior.
 - **+ / -**: Adjust guide vocal volume
+- **Up / Down arrows**: Adjust the speaker output volume of the backing mix while the song is playing (remembered between sessions; the mic monitor level is a separate setting)
 - **T**: Cycle through background themes (shaders, video, source)
 - **F**: Cycle through Pixabay video flavors (Nature, Underwater, Space, City, Countryside)
 - **M**: Toggle microphone for pitch scoring

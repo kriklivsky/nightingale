@@ -185,7 +185,11 @@ def separate_stems_uvr(audio_path: str, work_dir: str, models_dir: str) -> tuple
         progress(15, "Preparing audio for stem separation...")
         load_path = _ensure_wav(audio_path, work_dir)
         progress(20, "Separating vocals from instrumentals...")
-        output_files = separator.separate(load_path)
+        with patch(
+            "audio_separator.separator.architectures.mdxc_separator.tqdm",
+            _separation_progress,
+        ):
+            output_files = separator.separate(load_path)
 
     print(f"[nightingale:LOG] Separator outputs: {output_files}", flush=True)
 
@@ -197,3 +201,13 @@ def separate_stems_uvr(audio_path: str, work_dir: str, models_dir: str) -> tuple
 
     progress(50, "Stem separation complete")
     return vocals, instrumental
+
+
+def _separation_progress(chunks):
+    total = len(chunks)
+    for completed, chunk in enumerate(chunks, start=1):
+        yield chunk
+        progress(
+            20 + 29 * completed // max(total, 1),
+            f"Separating vocals: {completed}/{total} chunks",
+        )

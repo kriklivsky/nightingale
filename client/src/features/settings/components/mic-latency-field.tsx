@@ -56,32 +56,30 @@ export function MicLatencyField({
     <Field>
       <Label>Mic latency compensation</Label>
       <Hint>Aligns mic pitch with guide vocals for scoring. Current value: {latencyMs} ms</Hint>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <Slider
-          min={0}
-          max={500}
-          step={5}
-          value={[latencyMs]}
-          onValueChange={([ms]) => onLatencyChange(ms / 1000)}
-          className={sliderClassName}
-        />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              onClick={() => void runTest()}
-              disabled={disabled || measuring}
-              className={buttonClassName}
-            >
-              {measuring ? 'Measuring...' : 'Measure latency'}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent align="end">
-            Plays a short beep, listens for it through the selected mic, then saves the delay used
-            for scoring. Use speakers, or hold one headphone close to the mic.
-          </TooltipContent>
-        </Tooltip>
-      </div>
+      <Slider
+        min={0}
+        max={500}
+        step={5}
+        value={[latencyMs]}
+        onValueChange={([ms]) => onLatencyChange(ms / 1000)}
+        className={sliderClassName}
+      />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="outline"
+            onClick={() => void runTest()}
+            disabled={disabled || measuring}
+            className={buttonClassName}
+          >
+            {measuring ? 'Measuring...' : 'Measure latency'}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent align="end">
+          Plays a short beep, listens for it through the selected mic, then saves the delay used for
+          scoring. Use speakers, or hold one headphone close to the mic.
+        </TooltipContent>
+      </Tooltip>
     </Field>
   );
 }

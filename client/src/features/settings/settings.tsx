@@ -1,15 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 
 import { setFullScreen, isFullScreen as tauriIsFullScreen } from '@/bridge/fullScreen';
 import { clampPlaybackScale } from '@/features/playback/lib/display-scale';
 import {
   ALIGN_BACKENDS,
-  ASR_ENGINES,
   DEFAULTS,
   LYRICS_HORIZONTAL_POSITIONS,
   LYRICS_VERTICAL_POSITIONS,
-  MODELS,
   NAV,
   PLAYBACK_MODES,
   PLAYBACK_SCALE_MAX,
@@ -23,12 +21,7 @@ import {
 } from '@/features/settings/components/constants';
 import { MicrophoneSettings } from '@/features/settings/components/microphone-settings';
 import { PlaybackPreview } from '@/features/settings/components/playback-preview';
-import {
-  Hint,
-  NumberButtonGroup,
-  PageHeader,
-  SettingsSelect,
-} from '@/features/settings/components/settings-controls';
+import { Hint, PageHeader, SettingsSelect } from '@/features/settings/components/settings-controls';
 import { useSettingsNavigation } from '@/features/settings/hooks/use-settings-navigation';
 import { Button } from '@/shared/components/ui/button';
 import { ButtonGroup } from '@/shared/components/ui/button-group';
@@ -71,25 +64,17 @@ const pendingValue = <T,>(input: T | null, saved: T): T => input ?? saved;
 const analysisSettings = (config: AppConfig | undefined) => {
   if (!config) {
     return {
-      asrEngine: DEFAULTS.asr_engine,
       separator: DEFAULTS.separator,
-      whisperModel: DEFAULTS.whisper_model,
-      beamSize: DEFAULTS.beam_size,
       alignBackend: DEFAULTS.align_backend,
       autoAnalyze: DEFAULTS.auto_analyze,
-      batchSize: DEFAULTS.batch_size,
       vocalThreshold: DEFAULTS.vocal_detection_threshold_pct,
     };
   }
 
   return {
-    asrEngine: config.asr_engine ?? DEFAULTS.asr_engine,
     separator: config.separator ?? DEFAULTS.separator,
-    whisperModel: config.whisper_model ?? DEFAULTS.whisper_model,
-    beamSize: config.beam_size ?? DEFAULTS.beam_size,
     alignBackend: config.align_backend ?? DEFAULTS.align_backend,
     autoAnalyze: config.auto_analyze === true,
-    batchSize: config.batch_size ?? DEFAULTS.batch_size,
     vocalThreshold: config.vocal_detection_threshold_pct ?? DEFAULTS.vocal_detection_threshold_pct,
   };
 };
@@ -126,16 +111,10 @@ export const SettingsPage = () => {
   const close = (): void => {
     void navigate('/');
   };
-  const asrEngine = analysis.asrEngine;
-  const isParakeet = asrEngine === 'parakeet';
-  const analysisNav = getAnalysisNav(isParakeet);
-
-  const modelOptions = useMemo(() => MODELS.map((model) => ({ value: model, label: model })), []);
+  const analysisNav = getAnalysisNav();
   const lyricsScalePct = Math.round(lyricsScale * 100);
   const pitchGraphScalePct = Math.round(pitchGraphScale * 100);
   const vocalThresholdDisplayPct = Math.round(vocalThresholdPct * 100);
-  const batchSize = analysis.batchSize;
-  const beamSize = analysis.beamSize;
 
   useEffect(() => {
     const updateIsFullScreen = async () => {
@@ -190,7 +169,6 @@ export const SettingsPage = () => {
   const { footerSegment, getFocusClassName, syncFocusFromElement } = useSettingsNavigation({
     containerRef,
     tab,
-    isParakeet,
     micMonitorGain,
     micLatencySec,
     lyricsScale,
@@ -379,52 +357,8 @@ export const SettingsPage = () => {
               </Field>
 
               <Field>
-                <Label htmlFor="asr-engine-1">Transcription model</Label>
-                <Hint>Turns the vocals into lyrics.</Hint>
-                <SettingsSelect
-                  id="asr-engine-1"
-                  label="ASR Engine"
-                  placeholder="Select an engine"
-                  value={asrEngine}
-                  options={ASR_ENGINES}
-                  triggerClassName={getFocusClassName(analysisNav.asrEngine)}
-                  onValueChange={(asr_engine) => mutate({ asr_engine })}
-                />
-              </Field>
-
-              {!isParakeet && (
-                <>
-                  <Field>
-                    <Label htmlFor="model-1">Model size</Label>
-                    <Hint>Smaller models are faster but produce worse results</Hint>
-                    <SettingsSelect
-                      id="model-1"
-                      label="Model size"
-                      placeholder="Select a model size"
-                      value={analysis.whisperModel}
-                      options={modelOptions}
-                      triggerClassName={getFocusClassName(analysisNav.whisperModel)}
-                      onValueChange={(whisper_model) => mutate({ whisper_model })}
-                    />
-                  </Field>
-
-                  <Field>
-                    <Label>Beam Size</Label>
-                    <Hint>Higher values improve accuracy at the cost of speed</Hint>
-                    <NumberButtonGroup
-                      name="beam_size"
-                      value={beamSize}
-                      segment={analysisNav.beamSize}
-                      getFocusClassName={getFocusClassName}
-                      onChange={(beam_size) => mutate({ beam_size })}
-                    />
-                  </Field>
-                </>
-              )}
-
-              <Field>
                 <Label htmlFor="align-backend-1">Alignment model</Label>
-                <Hint>How each word is timed to the audio.</Hint>
+                <Hint>Used only when aligning plain lyrics you provide manually.</Hint>
                 <SettingsSelect
                   id="align-backend-1"
                   label="Forced alignment"
@@ -471,18 +405,6 @@ export const SettingsPage = () => {
                   value={[vocalThresholdDisplayPct]}
                   onValueChange={([pct]) => updateVocalThreshold(pct / 100)}
                   className={getFocusClassName(analysisNav.vocalThreshold)}
-                />
-              </Field>
-
-              <Field>
-                <Label>Batch Size</Label>
-                <Hint>Higher values use more memory but process faster</Hint>
-                <NumberButtonGroup
-                  name="batch_size"
-                  value={batchSize}
-                  segment={analysisNav.batchSize}
-                  getFocusClassName={getFocusClassName}
-                  onChange={(batch_size) => mutate({ batch_size })}
                 />
               </Field>
             </FieldGroup>

@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useMemo,
+  useEffect,
   useRef,
   useState,
   type RefObject,
@@ -18,6 +19,7 @@ export type MenuFocus = {
   active: boolean;
   panel: FocusPanel;
   songIndex: number;
+  songActionIndex: number | null;
   sidebarIndex: number;
   sidebarSubIndex: number;
   actionsFocused: boolean;
@@ -27,6 +29,7 @@ export type MenuFocus = {
 
 export type MenuFocusActions = {
   onConfirmSong: ((index: number) => void) | null;
+  onConfirmSongAction: ((songIndex: number, actionIndex: number) => void) | null;
   onConfirmSidebar: ((index: number) => void) | null;
   onConfirmActions: ((index: number) => boolean) | null;
   onSidebarBack: (() => boolean) | null;
@@ -41,7 +44,6 @@ export type MenuFocusContextValue = {
   focus: MenuFocus;
   setFocus: (updater: (prev: MenuFocus) => MenuFocus) => void;
   activate: () => void;
-  deactivate: () => void;
   actionsRef: RefObject<MenuFocusActions>;
   scrollRef: RefObject<HTMLElement | null>;
   scrollTopRef: RefObject<number>;
@@ -57,6 +59,7 @@ const INITIAL_FOCUS: MenuFocus = {
   active: false,
   panel: 'songList',
   songIndex: 0,
+  songActionIndex: null,
   sidebarIndex: 0,
   sidebarSubIndex: 0,
   actionsFocused: false,
@@ -66,6 +69,7 @@ const INITIAL_FOCUS: MenuFocus = {
 
 const INITIAL_ACTIONS: MenuFocusActions = {
   onConfirmSong: null,
+  onConfirmSongAction: null,
   onConfirmSidebar: null,
   onConfirmActions: null,
   onSidebarBack: null,
@@ -93,16 +97,19 @@ export function MenuFocusProvider({ children }: { children: ReactNode }) {
     setFocusState((prev) => (prev.active ? prev : { ...prev, active: true }));
   }, []);
 
-  const deactivate = useCallback(() => {
-    setFocusState((prev) => (prev.active ? { ...prev, active: false } : prev));
-  }, []);
+  useEffect(() => {
+    document.documentElement.classList.toggle(
+      'remote-navigation',
+      focus.active && focus.source === 'nav',
+    );
+    return () => document.documentElement.classList.remove('remote-navigation');
+  }, [focus.active, focus.source]);
 
   const value = useMemo(
     () => ({
       focus,
       setFocus,
       activate,
-      deactivate,
       actionsRef,
       scrollRef,
       scrollTopRef,
@@ -111,7 +118,7 @@ export function MenuFocusProvider({ children }: { children: ReactNode }) {
       selectedSong,
       setSelectedSong,
     }),
-    [focus, setFocus, activate, deactivate, selectedSong],
+    [focus, setFocus, activate, selectedSong],
   );
 
   return <MenuFocusContext.Provider value={value}>{children}</MenuFocusContext.Provider>;

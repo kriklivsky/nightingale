@@ -30,20 +30,6 @@ export const SEPARATORS: SettingsOption[] = [
   },
 ];
 
-export const ASR_ENGINES: SettingsOption[] = [
-  {
-    value: 'whisper',
-    label: 'Whisper',
-    description: 'Works in any language and lets you pick a model size below.',
-  },
-  {
-    value: 'parakeet',
-    label: 'Parakeet v3 (Experimental)',
-    description:
-      'Much faster and produces its own word timings (skipping alignment), but only covers 25 European languages. Whisper takes over for anything else.',
-  },
-];
-
 export const ALIGN_BACKENDS: SettingsOption[] = [
   {
     value: 'whisperx',
@@ -63,8 +49,6 @@ export const ALIGN_BACKENDS: SettingsOption[] = [
       'A fast AI model covering 11 languages. Timing quality varies song to song, but it can do better on Chinese, Japanese, and Korean. Falls back to WhisperX otherwise.',
   },
 ];
-
-export const MODELS = ['large-v3', 'large-v3-turbo', 'medium', 'small', 'base', 'tiny'];
 
 export const PLAYBACK_MODES: SettingsOption[] = [
   {
@@ -136,7 +120,6 @@ export const PLAYBACK_SCALE_STEP = 0.05;
 export const VOCAL_THRESHOLD_STEP = 0.01;
 export const VOCAL_THRESHOLD_MIN = 0;
 export const VOCAL_THRESHOLD_MAX = 0.6;
-export const NUMBER_PICKER_SIZE = 16;
 
 export const NAV = {
   tabSegment: 0,
@@ -145,7 +128,8 @@ export const NAV = {
     microphone: 2,
     micMonitorGain: 3,
     micLatency: 4,
-    micTest: 5,
+    micLatencyTest: 5,
+    micTest: 6,
   },
   playback: {
     mode: 1,
@@ -156,43 +140,22 @@ export const NAV = {
   },
 } as const;
 
-// The Whisper-only "Model size" + "Beam Size" fields sit right after the
-// transcription model, so every later field shifts by two segments when
-// Parakeet hides them. Fields that aren't rendered map to -1 so focus rings
-// never match them.
-export function getAnalysisNav(isParakeet: boolean) {
-  return isParakeet
-    ? {
-        separator: 1,
-        asrEngine: 2,
-        whisperModel: -1,
-        beamSize: -1,
-        alignBackend: 3,
-        autoAnalyze: 4,
-        vocalThreshold: 5,
-        batchSize: 6,
-      }
-    : {
-        separator: 1,
-        asrEngine: 2,
-        whisperModel: 3,
-        beamSize: 4,
-        alignBackend: 5,
-        autoAnalyze: 6,
-        vocalThreshold: 7,
-        batchSize: 8,
-      };
+export function getAnalysisNav() {
+  return {
+    separator: 1,
+    alignBackend: 2,
+    autoAnalyze: 3,
+    vocalThreshold: 4,
+  };
 }
 
-export function getSettingsStops(tab: SettingsTab, isParakeet: boolean) {
+export function getSettingsStops(tab: SettingsTab) {
   if (tab === 'general') {
-    return [3, 2, 1, 1, 2, 2, 2];
+    return [3, 2, 1, 1, 1, 1, 2, 2];
   }
   if (tab === 'playback') {
     return [3, 1, 1, 1, 1, 1, 2];
   }
 
-  return isParakeet
-    ? [3, 1, 1, 1, 2, 1, NUMBER_PICKER_SIZE, 2]
-    : [3, 1, 1, 1, NUMBER_PICKER_SIZE, 1, 2, 1, NUMBER_PICKER_SIZE, 2];
+  return [3, 1, 1, 2, 1, 2];
 }

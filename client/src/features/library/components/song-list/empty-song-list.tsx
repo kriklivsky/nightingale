@@ -15,12 +15,13 @@ import {
 } from '@/shared/components/ui/empty';
 
 export const EmptySongList = () => {
-  const { selectFolder, isPending, libraryPinned } = useLibrarySourceActions();
+  const { selectFolder, isPending, hasSource } = useLibrarySourceActions();
   const { setMode } = useDialog();
 
-  // Pinned library: nothing to pick in-app. An empty list here means the
-  // configured folder is still scanning or has no supported files.
-  if (libraryPinned) {
+  // Once any source is configured, an empty list means that source is still
+  // scanning or contains no supported files. This applies to the desktop app
+  // as well as deployments that pin a folder through an environment variable.
+  if (hasSource) {
     return (
       <Empty className="px-4 pt-16 md:pt-6">
         <EmptyHeader>

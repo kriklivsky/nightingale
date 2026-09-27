@@ -37,6 +37,7 @@ export type PlaybackTransportState = {
   duration: number;
   guideVolume: number;
   guideAvailable: boolean;
+  outputVolume: number;
   error: string | null;
 };
 
@@ -45,6 +46,7 @@ export type PlaybackTransportActions = {
   getCurrentTime: () => number;
   seek: (time: number) => void;
   setGuideVolume: (volume: number) => void;
+  setOutputVolume: (volume: number) => void;
   getVocalsBuffer: AudioPlayer['getVocalsBuffer'];
   getScoringBuffer: AudioPlayer['getScoringBuffer'];
   getAudioContext: AudioPlayer['getAudioContext'];
@@ -61,18 +63,21 @@ const TransportActionsContext = createContext<PlaybackTransportActions | null>(n
 type PlaybackTransportProviderProps = {
   fileHash: string;
   initialGuideVolume: number;
+  initialOutputVolume: number;
   children: ReactNode;
 };
 
 export function PlaybackTransportProvider({
   fileHash,
   initialGuideVolume,
+  initialOutputVolume,
   children,
 }: PlaybackTransportProviderProps) {
   const navigate = useNavigate();
-  // Snapshot the initial guide volume so changing config later doesn't
+  // Snapshot the initial guide/output volumes so changing config later doesn't
   // re-instantiate the audio engine via useAudioPlayer's effect deps.
   const [initialGuideVolumeSnapshot] = useState(initialGuideVolume);
+  const [initialOutputVolumeSnapshot] = useState(initialOutputVolume);
 
   const [stemsReady, setStemsReady] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -114,7 +119,12 @@ export function PlaybackTransportProvider({
     };
   }, [fileHash, navigate]);
 
-  const audio = useAudioPlayer(fileHash, initialGuideVolumeSnapshot, stemsReady);
+  const audio = useAudioPlayer({
+    fileHash,
+    initialGuideVolume: initialGuideVolumeSnapshot,
+    initialOutputVolume: initialOutputVolumeSnapshot,
+    enabled: stemsReady,
+  });
 
   useEffect(() => {
     if (typeof audio.error === 'string' && audio.error !== '') {
@@ -151,6 +161,7 @@ export function PlaybackTransportProvider({
       duration: audio.duration,
       guideVolume: audio.guideVolume,
       guideAvailable: audio.guideAvailable,
+      outputVolume: audio.outputVolume,
       error: audio.error,
     }),
     [
@@ -160,6 +171,7 @@ export function PlaybackTransportProvider({
       audio.duration,
       audio.guideVolume,
       audio.guideAvailable,
+      audio.outputVolume,
       audio.error,
       paused,
     ],
@@ -171,6 +183,7 @@ export function PlaybackTransportProvider({
       getCurrentTime: audio.getCurrentTime,
       seek: audio.seek,
       setGuideVolume: audio.setGuideVolume,
+      setOutputVolume: audio.setOutputVolume,
       getVocalsBuffer: audio.getVocalsBuffer,
       getScoringBuffer: audio.getScoringBuffer,
       getAudioContext: audio.getAudioContext,
@@ -184,6 +197,7 @@ export function PlaybackTransportProvider({
       audio.getCurrentTime,
       audio.seek,
       audio.setGuideVolume,
+      audio.setOutputVolume,
       audio.getVocalsBuffer,
       audio.getScoringBuffer,
       audio.getAudioContext,

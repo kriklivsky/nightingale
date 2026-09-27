@@ -8,6 +8,7 @@ import { useSongsMeta } from '@/features/library/queries/use-songs';
 import { EditLyricsDialog } from '@/features/lyrics/components';
 import { SelectLanguageDialog } from '@/features/lyrics/components/language';
 import { ClearCacheDialog } from '@/features/menu/components/clear-cache';
+import { DeleteSongDialog } from '@/features/menu/components/delete-song';
 import { DonateDialog } from '@/features/menu/components/donate';
 import { ExitDialog } from '@/features/menu/components/exit';
 import { InfoDialog } from '@/features/menu/components/info';
@@ -87,6 +88,7 @@ export const MenuLayout = () => {
       <SelectLanguageDialog />
       <EditLyricsDialog />
       <ClearCacheDialog />
+      <DeleteSongDialog />
       <SourceDialogs mode={mode} />
       <Setup />
       <SidebarInset>

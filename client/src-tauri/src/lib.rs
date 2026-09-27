@@ -15,12 +15,15 @@ use analyzer::{
     cancel_analysis, delete_song_cache, enqueue, realign, reanalyze_force_transcribe,
     reanalyze_full, reanalyze_transcript, refresh_metadata, shift_key, shift_tempo,
 };
-use app_core::{AppConfig, PlaybackQueue, PlaybackSessionStore, SongsStore};
+use app_core::{AppConfig, LibrarySource, PlaybackQueue, PlaybackSessionStore, SongsStore};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use cache::{calculate_cache_stats, clear_all, clear_models_command, clear_videos_command};
 use config::{load_config, save_config};
 use lyrics::{apply_timed_lyrics, load_lyrics, provide_lrc, save_lyrics, search_lrclib_lyrics};
-use microphones::{list_microphones, set_monitor_gain, start_mic_capture, stop_mic_capture};
+use microphones::{
+    list_microphones, set_monitor_gain, start_configured_monitor, start_mic_capture,
+    stop_mic_capture,
+};
 use playback::{
     ensure_mp3_stems, ensure_playable_source_video, fetch_pixabay_videos, get_audio_paths,
     load_transcript,
@@ -32,10 +35,10 @@ use playback_queue::{
 use playback_session::{load_playback_session, save_playback_session};
 use profile::{add_score, create_profile, delete_profile, load_profiles, switch_profile};
 use scanner::{
-    clear_library_source, jellyfin_login, jellyfin_ping, load_analysis_queue,
-    load_library_menu_items, load_songs, load_songs_by_hashes, load_songs_meta, navidrome_login,
-    navidrome_ping, plex_begin_pin, plex_manual_login, plex_ping, plex_poll_pin,
-    set_library_source, trigger_scan,
+    clear_library_source, delete_local_song, jellyfin_login, jellyfin_ping, load_analysis_queue,
+    load_favorite_hashes, load_library_menu_items, load_songs, load_songs_by_hashes,
+    load_songs_meta, navidrome_login, navidrome_ping, plex_begin_pin, plex_manual_login, plex_ping,
+    plex_poll_pin, set_library_source, set_song_favorite, trigger_scan,
 };
 use tauri::{Manager, RunEvent, WebviewWindowBuilder};
 use vendor::{is_ready, trigger_setup};
@@ -135,6 +138,9 @@ pub fn run() {
             load_songs,
             load_songs_by_hashes,
             load_songs_meta,
+            load_favorite_hashes,
+            set_song_favorite,
+            delete_local_song,
             load_analysis_queue,
             load_library_menu_items,
             // Analyzer
@@ -178,6 +184,13 @@ pub fn run() {
 
             let config = AppConfig::load();
             set_monitor_gain(config.mic_monitor_gain());
+            start_configured_monitor(&config);
+            if matches!(
+                config.library_source.as_ref(),
+                Some(LibrarySource::Folder { .. })
+            ) {
+                app_core::start_scan();
+            }
             app.handle()
                 .asset_protocol_scope()
                 .allow_directory(config.effective_data_path(), true)
@@ -203,10 +216,14 @@ pub fn run() {
                 serde_json::to_string(&media_endpoint).map_err(|e| e.to_string())?;
             let endpoint_b64 = B64.encode(endpoint_json.as_bytes());
 
+            let tvbox_session = std::env::var_os("TVBOX_STATUS").is_some();
             let init_script = format!(
                 "window.__NIGHTINGALE_APP_CONFIG__ = JSON.parse(atob('{b64}')); \
                  window.__NIGHTINGALE_SONGS_META__ = JSON.parse(atob('{meta_b64}')); \
-                 window.__NIGHTINGALE_MEDIA_ENDPOINT__ = JSON.parse(atob('{endpoint_b64}'));",
+                 window.__NIGHTINGALE_MEDIA_ENDPOINT__ = JSON.parse(atob('{endpoint_b64}')); \
+                 document.addEventListener('DOMContentLoaded', () => {{ \
+                   if ({tvbox_session}) document.documentElement.classList.add('tvbox-session'); \
+                 }});",
             );
 
             let window_config = app
@@ -221,6 +238,12 @@ pub fn run() {
                 .initialization_script(init_script)
                 .build()
                 .map_err(|e| e.to_string())?;
+
+            if tvbox_session {
+                if let Err(error) = window.set_cursor_visible(false) {
+                    tracing::warn!("Failed to hide TV cursor: {error}");
+                }
+            }
 
             if config.fullscreen == Some(true) {
                 #[cfg(target_os = "macos")]

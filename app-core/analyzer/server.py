@@ -43,13 +43,13 @@ def process_song(cmd, device):
     output_dir = os.path.abspath(cmd["cache_path"])
     file_hash = cmd["hash"]
     model_name = cmd.get("model", "large-v3")
-    beam_size = cmd.get("beam_size", 8)
-    batch_size = cmd.get("batch_size", 8)
     separator = cmd.get("separator", "karaoke")
-    engine = cmd.get("engine", "whisper")
     lyrics_path = cmd.get("lyrics")
     language_override = cmd.get("language")
     skip_transcription = bool(cmd.get("skip_transcription", False))
+    align_lrc_lines = bool(cmd.get("align_lrc_lines", False))
+    lrclib_lyricsfile = cmd.get("lrclib_lyricsfile")
+    duration_secs = cmd.get("duration_secs")
     skip_separation = bool(cmd.get("skip_separation", False))
 
     set_align_backend(cmd.get("align_backend", "whisperx"))
@@ -61,16 +61,15 @@ def process_song(cmd, device):
         run_pipeline(
             audio_path, output_dir, file_hash, device,
             model_name=model_name,
-            beam_size=beam_size,
-            batch_size=batch_size,
             separator=separator,
-            engine=engine,
             lyrics_path=lyrics_path,
             language_override=language_override,
-            whisper_model=None,
             pre_align_cleanup=end_of_song_cleanup,
             free_gpu_fn=hard_free_gpu,
             skip_transcription=skip_transcription,
+            align_lrc_lines=align_lrc_lines,
+            lrclib_lyricsfile=lrclib_lyricsfile,
+            duration_secs=duration_secs,
             skip_separation=skip_separation,
         )
     finally:

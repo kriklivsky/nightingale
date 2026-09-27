@@ -5,6 +5,7 @@ import { useLatestRef } from '@/shared/hooks/use-latest-ref';
 const STICK_DEADZONE = 0.5;
 const STICK_INITIAL_DELAY = 0.4;
 const STICK_REPEAT_RATE = 0.08;
+const GAMEPAD_POLL_MS = 16;
 
 type StickAxis = 'up' | 'down' | 'left' | 'right';
 
@@ -182,20 +183,51 @@ export function useGamepad(onSnapshot: (snap: GamepadSnapshot) => void) {
   }, []);
 
   useEffect(() => {
-    let rafId: number;
+    let intervalId: number | null = null;
 
-    const loop = (time: number) => {
-      const snap = poll(time);
+    const tick = () => {
+      const snap = poll(performance.now());
       const hasAction = Object.values(snap).some(Boolean);
 
       if (hasAction) {
         callbackRef.current(snap);
       }
-
-      rafId = requestAnimationFrame(loop);
     };
 
-    rafId = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafId);
+    const start = () => {
+      if (intervalId === null) {
+        lastTime.current = 0;
+        intervalId = window.setInterval(tick, GAMEPAD_POLL_MS);
+      }
+    };
+
+    const stop = () => {
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+        intervalId = null;
+      }
+      lastTime.current = 0;
+      prevButtons.current.clear();
+      stickRepeat.current = { ...INITIAL_REPEAT };
+      dpadRepeat.current = { ...INITIAL_REPEAT };
+    };
+
+    const sync = () => {
+      if (Array.from(navigator.getGamepads()).some(Boolean)) {
+        start();
+      } else {
+        stop();
+      }
+    };
+
+    window.addEventListener('gamepadconnected', start);
+    window.addEventListener('gamepaddisconnected', sync);
+    sync();
+
+    return () => {
+      window.removeEventListener('gamepadconnected', start);
+      window.removeEventListener('gamepaddisconnected', sync);
+      stop();
+    };
   }, [callbackRef, poll]);
 }

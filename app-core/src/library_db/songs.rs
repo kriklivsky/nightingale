@@ -169,6 +169,55 @@ pub(crate) fn delete_songs_not_in_paths(paths: &[String]) -> rusqlite::Result<()
     })
 }
 
+pub(crate) fn load_song_by_hash_and_path(
+    file_hash: &str,
+    path: &std::path::Path,
+) -> rusqlite::Result<Option<Song>> {
+    use rusqlite::OptionalExtension;
+    with_conn(|connection| {
+        connection
+            .query_row(
+                "SELECT payload FROM songs WHERE file_hash = ?1 AND path = ?2",
+                params![file_hash, path.to_string_lossy()],
+                load_song_from_payload_column,
+            )
+            .optional()
+    })
+}
+
+pub(crate) fn delete_song_by_hash_and_path(
+    file_hash: &str,
+    path: &std::path::Path,
+) -> rusqlite::Result<bool> {
+    with_conn_mut(|connection| {
+        let transaction = connection.transaction()?;
+        let deleted = transaction.execute(
+            "DELETE FROM songs WHERE file_hash = ?1 AND path = ?2",
+            params![file_hash, path.to_string_lossy()],
+        )?;
+        if deleted == 0 {
+            return Ok(false);
+        }
+        let remaining: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM songs WHERE file_hash = ?1",
+            [file_hash],
+            |row| row.get(0),
+        )?;
+        if remaining == 0 {
+            transaction.execute(
+                "DELETE FROM favorite_songs WHERE file_hash = ?1",
+                [file_hash],
+            )?;
+            transaction.execute(
+                "DELETE FROM analysis_queue WHERE file_hash = ?1",
+                [file_hash],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(true)
+    })
+}
+
 pub(crate) fn load_song_by_hash(file_hash: &str) -> rusqlite::Result<Option<Song>> {
     use rusqlite::OptionalExtension;
     with_conn(|c| {
@@ -253,6 +302,17 @@ pub(crate) fn rekey_song(old_hash: &str, new_hash: &str, new_song: &Song) -> rus
             "UPDATE analysis_queue SET file_hash = ?2 WHERE file_hash = ?1",
             params![old_hash, new_hash],
         )?;
+        if old_hash != new_hash {
+            tx.execute(
+                "INSERT OR IGNORE INTO favorite_songs (file_hash)
+                 SELECT ?2 FROM favorite_songs WHERE file_hash = ?1",
+                params![old_hash, new_hash],
+            )?;
+            tx.execute(
+                "DELETE FROM favorite_songs WHERE file_hash = ?1",
+                params![old_hash],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     })

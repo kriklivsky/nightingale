@@ -9,8 +9,9 @@ from gpu import hard_free_gpu, log_vram
 from whisper_compat import progress
 from key_detect import detect_key
 from stems import separate_stems, separate_stems_uvr
-from transcribe import transcribe_vocals
+from uvr_backend import release_rknn_backend
 from align import align_lyrics
+from lyricsfile import parse_word_synced
 
 
 def ffmpeg_bin():
@@ -108,46 +109,18 @@ def separate_and_cache(audio_path, output_dir, file_hash, separator, device, key
     return final_vocals
 
 
-def transcribe_or_align(
-    vocals_path, audio_path, device, *,
-    model_name, beam_size=5, batch_size=16,
-    engine="whisper",
-    lyrics_path=None, language_override=None,
-    whisper_model=None, pre_align_cleanup=None,
-):
-    """Choose between lyrics alignment and full transcription."""
-    if lyrics_path and os.path.isfile(lyrics_path):
-        print(f"[nightingale:LOG] Using pre-fetched lyrics: {lyrics_path}", flush=True)
-        return align_lyrics(
-            lyrics_path, vocals_path, device,
-            model_name=model_name,
-            language_override=language_override,
-            whisper_model=whisper_model,
-            pre_align_cleanup=pre_align_cleanup,
-        )
-
-    return transcribe_vocals(
-        vocals_path, audio_path, device,
-        model_name=model_name,
-        beam_size=beam_size,
-        batch_size=batch_size,
-        engine=engine,
-        language_override=language_override,
-        whisper_model=whisper_model,
-        pre_align_cleanup=pre_align_cleanup,
-    )
-
-
 def run_pipeline(
     audio_path, output_dir, file_hash, device, *,
-    model_name="large-v3", beam_size=5, batch_size=16,
-    separator="karaoke", engine="whisper",
+    model_name="large-v3", separator="karaoke",
     lyrics_path=None, language_override=None,
-    whisper_model=None, pre_align_cleanup=None, free_gpu_fn=None,
+    pre_align_cleanup=None, free_gpu_fn=None,
     skip_transcription=False,
     skip_separation=False,
+    align_lrc_lines=False,
+    lrclib_lyricsfile=None,
+    duration_secs=None,
 ):
-    """Full analysis pipeline: stem separation -> transcription -> save.
+    """Validate timed lyrics, then detect key and optionally align words/separate stems.
 
     When ``skip_transcription`` is set, an existing (LRC-provided) transcript is
     kept as-is: only key detection and stem separation run, and the detected key
@@ -155,13 +128,50 @@ def run_pipeline(
     separation is skipped too (the song plays over its original mix); only the
     key is detected and stamped onto the provided transcript.
     """
+    timed_lines = None
     os.makedirs(output_dir, exist_ok=True)
 
     transcript_path = os.path.join(output_dir, f"{file_hash}_transcript.json")
-    transcript_exists = os.path.isfile(transcript_path)
-    if transcript_exists and not skip_transcription:
-        progress(100, "Already analyzed, skipping")
-        return
+    lrc_lines = None
+    word_synced = False
+    if skip_transcription:
+        if not os.path.isfile(transcript_path):
+            raise ValueError("Timed lyrics are missing; analysis stopped.")
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            transcript = json.load(f)
+        segments = transcript.get("segments") if isinstance(transcript, dict) else None
+        if not isinstance(segments, list) or not any(
+            isinstance(segment, dict) and isinstance(segment.get("text"), str)
+            and segment["text"].strip() for segment in segments
+        ):
+            raise ValueError("Timed lyrics have no text; analysis stopped.")
+        if align_lrc_lines:
+            if not isinstance(duration_secs, (int, float)) or duration_secs <= 0:
+                raise ValueError("Song duration is required for timed word alignment.")
+            lrc_lines = [segment["text"] for segment in segments if segment["text"].strip()]
+            if lrclib_lyricsfile:
+                word_segments, lyric_language = parse_word_synced(lrclib_lyricsfile, duration_secs)
+                if word_segments:
+                    transcript["segments"] = word_segments
+                    transcript["language"] = lyric_language or transcript.get("language")
+                    transcript["source"] = "lrc"
+                    word_synced = True
+                    progress(1, "Using LRCLIB word timings")
+                elif lyric_language and not language_override:
+                    language_override = lyric_language
+            timed_lines = [segment for segment in segments if segment["text"].strip()]
+    else:
+        if not lyrics_path or not os.path.isfile(lyrics_path):
+            raise ValueError("Lyrics are missing; provide timed LRC before analysis.")
+        with open(lyrics_path, "r", encoding="utf-8") as f:
+            lyrics = json.load(f)
+        if not isinstance(lyrics, dict) or not any(
+            isinstance(line, str) and line.strip() for line in lyrics.get("lines", [])
+        ):
+            raise ValueError("Lyrics are empty; analysis stopped.")
+        if os.path.isfile(transcript_path):
+            progress(100, "Already analyzed, skipping")
+            return
 
     progress(2, f"Using device: {device}")
 
@@ -180,37 +190,27 @@ def run_pipeline(
             )
             log_vram("phase:after_separation")
 
-        if skip_transcription:
-            # Keep the provided LRC transcript; only stamp key/tempo onto it.
-            transcript = {}
-            if transcript_exists:
-                try:
-                    with open(transcript_path, "r", encoding="utf-8") as f:
-                        transcript = json.load(f)
-                except (OSError, ValueError) as e:
-                    print(f"[nightingale:LOG] Failed to read provided transcript: {e}", flush=True)
+        if skip_transcription and (not align_lrc_lines or word_synced):
             transcript["key"] = detected_key
             transcript["tempo"] = normalize_tempo(tempo)
             progress(95, "Writing transcript...")
             with open(transcript_path, "w", encoding="utf-8") as f:
                 json.dump(transcript, f, ensure_ascii=False, indent=2)
             return
+        release_rknn_backend()
+        hard_free_gpu("before_alignment")
 
-        if callable(whisper_model):
-            whisper_model = whisper_model()
-
-        transcript = transcribe_or_align(
-            vocals_path, audio_path, device,
+        transcript = align_lyrics(
+            None if lrc_lines is not None else lyrics_path, vocals_path, device,
             model_name=model_name,
-            beam_size=beam_size,
-            batch_size=batch_size,
-            engine=engine,
-            lyrics_path=lyrics_path,
             language_override=language_override,
-            whisper_model=whisper_model,
             pre_align_cleanup=pre_align_cleanup,
+            timed_lines=timed_lines,
+            lyrics_lines=lrc_lines,
         )
-        log_vram("phase:after_transcribe_or_align")
+        if not transcript.get("segments"):
+            raise ValueError("Word alignment produced no timed lyrics; analysis stopped.")
+        log_vram("phase:after_align")
 
         transcript["key"] = detected_key
         transcript["tempo"] = normalize_tempo(tempo)

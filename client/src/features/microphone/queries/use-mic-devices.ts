@@ -30,7 +30,10 @@ async function listMicDevices(adapter: MicrophoneAdapter): Promise<MicDevice[]> 
   }));
 }
 
-export function useMicDevicesQuery(adapter: MicrophoneAdapter = microphoneAdapter) {
+export function useMicDevicesQuery(
+  adapter: MicrophoneAdapter = microphoneAdapter,
+  refetchInterval: number | false = false,
+) {
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -53,6 +56,7 @@ export function useMicDevicesQuery(adapter: MicrophoneAdapter = microphoneAdapte
     queryFn: () => listMicDevices(adapter),
     staleTime: MIC_DEVICE_CACHE_MS,
     cacheTime: MIC_DEVICE_CACHE_MS,
+    refetchInterval,
     retry: false,
     // Unlike initialData, placeholderData does not mark an empty list as a
     // successful, fresh response and therefore does not suppress enumeration.

@@ -50,6 +50,34 @@ function AddToQueueButton({ song, tempo, keyOffset, ready, preparing }: AddToQue
   );
 }
 
+function AnalysisFailure({ queueStatus }: { queueStatus?: QueuedStatus }) {
+  if (typeof queueStatus !== 'object' || !('Failed' in queueStatus)) {
+    return null;
+  }
+
+  let message = 'Analysis failed. Retry or provide timed LRC.';
+  if (queueStatus.Failed.startsWith('No synchronized lyrics found')) {
+    message = 'No synchronized lyrics found on LRCLIB. Provide timed LRC to continue.';
+  } else if (queueStatus.Failed.startsWith('Song title, artist, and duration')) {
+    message =
+      'LRCLIB needs a title, artist, and duration. Correct the metadata or provide timed LRC.';
+  } else if (
+    queueStatus.Failed.startsWith('LRCLIB is unavailable') ||
+    queueStatus.Failed.startsWith('LRCLIB rate limit')
+  ) {
+    message = 'LRCLIB is temporarily unavailable. Retry analysis later.';
+  }
+
+  return (
+    <p
+      role="alert"
+      className="mx-4 mt-4 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
+    >
+      {message}
+    </p>
+  );
+}
+
 export const SongDetailsSidebar = ({ song, queueStatus, onClose }: SongDetailsSidebarProps) => {
   const queryClient = useQueryClient();
   const bestScores = useBestScoresBySongForActiveProfile();
@@ -118,6 +146,7 @@ export const SongDetailsSidebar = ({ song, queueStatus, onClose }: SongDetailsSi
       />
 
       <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
+        <AnalysisFailure queueStatus={queueStatus} />
         <KeyTempoSection
           song={song}
           supportsShifts={supportsShifts}

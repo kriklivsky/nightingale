@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Nightingale Song Analyzer
-Separates vocals/instrumentals with Demucs and transcribes lyrics with WhisperX.
+Separates vocals/instrumentals and aligns supplied plain lyrics.
 
 Usage:
     python analyze.py <audio_path> <output_dir> [--hash <file_hash>]
@@ -40,12 +40,8 @@ def main():
     parser.add_argument("output_dir", help="Directory to write output files")
     parser.add_argument("--hash", dest="file_hash", help="Pre-computed file hash")
     parser.add_argument("--model", default="large-v3", help="Whisper model name")
-    parser.add_argument("--beam-size", type=int, default=5, help="Beam size for decoding")
-    parser.add_argument("--batch-size", type=int, default=16, help="Batch size for transcription")
     parser.add_argument("--separator", default="karaoke", choices=["karaoke", "demucs"],
                         help="Stem separation method: karaoke (UVR, cleaner) or demucs (faster)")
-    parser.add_argument("--engine", default="whisper", choices=["whisper", "parakeet"],
-                        help="Transcription engine: whisper (default) or parakeet (NeMo on CUDA, ONNX elsewhere)")
     parser.add_argument("--align-backend", dest="align_backend", default="whisperx",
                         choices=["whisperx", "ctc", "qwen"],
                         help="Forced-alignment backend: whisperx (default, Python Viterbi), "
@@ -54,7 +50,7 @@ def main():
     parser.add_argument("--vocal-threshold", dest="vocal_threshold", type=float, default=None,
                         help="RMS threshold (fraction of peak, 0-1) for start/end vocal "
                              "detection. Lower keeps more edge audio; default 0.15")
-    parser.add_argument("--lyrics", help="Path to pre-fetched lyrics JSON (align-only mode)")
+    parser.add_argument("--lyrics", required=True, help="Path to non-empty plain lyrics JSON")
     parser.add_argument("--language", default=None, help="Override automatic language detection")
     args = parser.parse_args()
 
@@ -75,10 +71,7 @@ def main():
     run_pipeline(
         audio_path, output_dir, file_hash, device,
         model_name=args.model,
-        beam_size=args.beam_size,
-        batch_size=args.batch_size,
         separator=args.separator,
-        engine=args.engine,
         lyrics_path=args.lyrics,
         language_override=args.language,
     )

@@ -1,9 +1,10 @@
 """Lightweight key detection for pitch-class output (e.g. C, F#m)."""
 
 import math
+import os
+import subprocess
 
 import numpy as np
-import whisperx
 
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 KRUMHANSL_MAJOR = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
@@ -42,7 +43,18 @@ def _pc_profile(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
 
 def detect_key(audio_path: str) -> str:
     try:
-        audio = whisperx.load_audio(audio_path)
+        decoded = subprocess.run(
+            [
+                os.environ.get("FFMPEG_PATH", "ffmpeg"),
+                "-nostdin", "-threads", "0", "-i", audio_path,
+                "-f", "s16le", "-ac", "1", "-acodec", "pcm_s16le",
+                "-ar", "16000", "-",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        ).stdout
+        audio = np.frombuffer(decoded, np.int16).astype(np.float32) / 32768.0
         if audio is None or len(audio) == 0:
             return "C"
 

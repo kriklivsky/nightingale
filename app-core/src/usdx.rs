@@ -374,6 +374,26 @@ pub(crate) fn read_siblings(path: &Path) -> Option<UsdxSiblings> {
     })
 }
 
+pub(crate) fn referenced_files(path: &Path) -> Result<Vec<PathBuf>, NightingaleError> {
+    let file = parse_usdx_path(path)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| NightingaleError::Other("UltraStar song has no parent folder".into()))?;
+    let mut paths = vec![path.to_path_buf(), parent.join(file.audio_filename.trim())];
+    for filename in [
+        file.vocals_filename,
+        file.instrumental_filename,
+        file.video_filename,
+        file.cover_filename,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        paths.push(parent.join(filename.trim()));
+    }
+    Ok(paths)
+}
+
 // ─── Detection sniff (for scanner) ───────────────────────────────────
 
 /// Cheap content sniff: is this `.txt` actually a USDX song descriptor?

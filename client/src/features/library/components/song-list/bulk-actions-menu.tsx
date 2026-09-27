@@ -2,7 +2,6 @@ import {
   AlignLeftIcon,
   AudioLinesIcon,
   ImageIcon,
-  MicIcon,
   RefreshCwIcon,
   Trash2Icon,
   XCircleIcon,
@@ -49,7 +48,6 @@ export const BulkActionsMenu = () => {
     realignAll,
     reanalyzeAllFull,
     reanalyzeAllTranscript,
-    reanalyzeAllForceTranscribe,
     refreshMetadataAll,
     deleteSongCacheAll,
   } = useAnalysis();
@@ -116,11 +114,7 @@ export const BulkActionsMenu = () => {
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => void reanalyzeAllTranscript()}>
               <RefreshCwIcon />
-              Refetch lyrics & align
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => void reanalyzeAllForceTranscribe()}>
-              <MicIcon />
-              Force transcribe
+              Refetch timed lyrics
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => void reanalyzeAllFull()}>
               <AudioLinesIcon />

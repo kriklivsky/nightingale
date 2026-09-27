@@ -7,5 +7,12 @@ export type SongItemProps = {
   index: number;
   isFocused: boolean;
   isSelected: boolean;
+  isFavorite: boolean;
+  focusedAction: number | null;
+  canPlay: boolean;
+  canDelete: boolean;
   onSelect: () => void;
+  onToggleFavorite: () => void;
+  onPlay: () => void;
+  onDelete: () => void;
 };

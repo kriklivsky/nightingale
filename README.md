@@ -17,7 +17,7 @@
 
 ---
 
-Nightingale scans your music folder, Plex Media Server, Jellyfin server, Navidrome server, or self-hosted web library; separates lead vocals from instrumentals using the [UVR Karaoke model](https://github.com/Anjok07/ultimatevocalremovergui) (or [Demucs](https://github.com/facebookresearch/demucs)); transcribes lyrics with word-level timestamps via [WhisperX](https://github.com/m-bain/whisperX); and plays it all back with synchronized highlighting, pitch scoring, key/tempo controls, profiles, and dynamic backgrounds.
+Nightingale scans your music folder, Plex Media Server, Jellyfin server, Navidrome server, or self-hosted web library; separates lead vocals from instrumentals using the [UVR Karaoke model](https://github.com/Anjok07/ultimatevocalremovergui) (or [Demucs](https://github.com/facebookresearch/demucs)); fetches synchronized lyrics and timestamps from [LRCLIB](https://lrclib.net); and plays it all back with synchronized highlighting, pitch scoring, key/tempo controls, profiles, and dynamic backgrounds.
 
 Ships as a single binary. No manual installation of Python, ffmpeg, or ML models required — everything is downloaded and bootstrapped automatically on first launch.
 
@@ -45,13 +45,13 @@ Ships as a single binary. No manual installation of Python, ffmpeg, or ML models
 
 🎤 **Stem separation** — isolates lead vocals from instrumentals using the UVR Karaoke model (default) or Demucs, with adjustable guide vocal volume. The karaoke model preserves backing vocals in the instrumental for a more natural sound.
 
-📝 **Word-level lyrics** — automatic transcription with alignment, or fetched from [LRCLIB](https://lrclib.net) when available.
+📝 **Synchronized lyrics** — automatic LRCLIB lookup prefers Lyricsfile word timing; line-only LRC is force-aligned to words. You can also provide Enhanced LRC.
 
 ✏️ **Lyrics editor with LRCLIB browser** — edit lyrics, browse LRCLIB matches, or paste your own **LRC / Enhanced LRC** from a song's Actions button. Timed LRC is used as-is (optionally skipping stem separation to sing over the original mix); plain lyrics run alignment.
 
 🈯 **CJK lyric support** — Japanese, Chinese, Cantonese, and Korean songs get per-character forced alignment and romanized readings (Hepburn / pinyin / Jyutping / Revised Romanization) shown above each token.
 
-🗣️ **Pluggable ASR engines** — choose Whisper (default, broad language coverage) or **Parakeet v3 (experimental)** for ~25 European languages, with NeMo on CUDA and ONNX Runtime everywhere else.
+🗣️ **No automatic speech transcription** — songs without synchronized lyrics stop before stem separation and show a clear error; provide timed LRC to continue.
 
 ⚡ **Pluggable forced alignment** — keep WhisperX's aligner (default) or switch on an experimental backend: **GPU forced alignment** (torchaudio `forced_align`) for faster word timestamps on CUDA and Apple Silicon, or the **Qwen aligner** (Qwen3-ForcedAligner-0.6B) which timestamps 11 languages incl. CJK in a single pass on CUDA/MPS/CPU. Both fall back to WhisperX automatically.
 
@@ -135,11 +135,11 @@ Audio: `.mp3`, `.flac`, `.ogg`, `.opus`, `.wav`, `.m4a`, `.aac`, `.wma`. Video: 
 
 ```mermaid
 flowchart TD
-    A["Audio or video file"] --> B["UVR Karaoke / Demucs"]
+    A["Audio or video file"] --> B["LRCLIB synchronized lyrics"]
     A2["USDX bundle (.txt / .usdx)"] --> E["Tauri App (Rust + React)"]
-    B -->|"vocals + instrumental"| C["LRCLIB"]
-    C -->|"synced lyrics if available"| D["WhisperX or Parakeet v3 (exp.)"]
-    D -->|"word-level alignment, CJK reading"| E
+    B -->|"timed LRC found"| C["UVR Karaoke / Demucs"]
+    C -->|"stems + timed lyrics"| E
+    B -->|"no timed LRC"| G["Stop: provide timed LRC"]
     E --> F["Plays instrumental + synced lyrics with pitch scoring, key/tempo, mic monitoring, audio-reactive backgrounds"]
 ```
 

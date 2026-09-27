@@ -66,7 +66,7 @@ Before most songs can be played as karaoke, they need to be analyzed:
 
 1. Select a song from the library to open its details sidebar.
 2. Start analysis from the available action.
-3. Nightingale separates stems, finds or transcribes lyrics, and aligns their timing.
+3. Nightingale looks up synchronized lyrics on LRCLIB. If found, it detects key and separates stems; otherwise, provide timed LRC or correct the song metadata.
 4. Results are cached — subsequent plays are instant.
 
 Timed LRC / Enhanced LRC and UltraStar songs can skip some or all of this pipeline. See [Lyrics & Transcription](./lyrics.md#editing--providing-lyrics) and [UltraStar Deluxe](./usdx.md).

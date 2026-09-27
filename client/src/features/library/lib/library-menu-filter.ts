@@ -13,6 +13,11 @@ export const EMPTY_LIBRARY_FILTER: LibraryMenuFilters = {
   search: null,
 };
 
+export const FAVORITES_LIBRARY_FILTER: LibraryMenuFilters = {
+  ...EMPTY_LIBRARY_FILTER,
+  query: 'favorites',
+};
+
 const HOT_FILTERS: Record<string, LibraryMenuFilters> = {
   all: { ...EMPTY_LIBRARY_FILTER },
   queued: { ...EMPTY_LIBRARY_FILTER, query: 'queued' },

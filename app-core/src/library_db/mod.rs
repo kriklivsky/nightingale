@@ -23,6 +23,7 @@ use crate::cache::nightingale_dir;
 
 mod analysis_queue;
 mod connection;
+mod favorites;
 mod migrations;
 mod playlists;
 mod queries;
@@ -34,6 +35,7 @@ pub(crate) use analysis_queue::{
     analysis_queue_clear, analysis_queue_delete, analysis_queue_load_rows,
     analysis_queue_save_rows, analysis_queue_upsert_row,
 };
+pub(crate) use favorites::{load_favorite_hashes, set_song_favorite};
 pub(crate) use migrations::rewrite_legacy_jellyfin_paths;
 pub(crate) use playlists::{PlaylistDefinition, PlaylistSongKeyKind, replace_all_playlists};
 pub(crate) use queries::{
@@ -44,9 +46,10 @@ pub(crate) use queries::{
 };
 pub(crate) use rebase::{rebase_song_album_art_cache_paths, rebase_song_album_art_paths};
 pub(crate) use songs::{
-    append_songs_for_scan, delete_songs_not_in_paths, load_all_songs, load_song_by_hash,
-    load_song_path_strings, load_songs_by_hashes, read_library_meta, rekey_song,
-    replace_all_songs_sorted, update_library_meta, update_song_fields,
+    append_songs_for_scan, delete_song_by_hash_and_path, delete_songs_not_in_paths, load_all_songs,
+    load_song_by_hash, load_song_by_hash_and_path, load_song_path_strings, load_songs_by_hashes,
+    read_library_meta, rekey_song, replace_all_songs_sorted, update_library_meta,
+    update_song_fields,
 };
 
 /// Incremented at the start of each `start_scan` so in-flight scan threads stop writing

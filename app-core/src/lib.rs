@@ -3,6 +3,7 @@ mod cache;
 mod config;
 mod error;
 mod library_db;
+mod library_delete;
 mod library_menu;
 mod library_model;
 mod lrc;
@@ -31,6 +32,19 @@ pub use cache::{
 };
 pub use config::{AppConfig, LibrarySource};
 pub use library_db::{init_library, library_db_path};
+pub use library_delete::delete_local_song;
+
+pub fn load_favorite_hashes() -> Result<Vec<String>, String> {
+    library_db::load_favorite_hashes().map_err(|error| error.to_string())
+}
+
+pub fn set_song_favorite(file_hash: &str, favorite: bool) -> Result<(), String> {
+    match library_db::set_song_favorite(file_hash, favorite) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("Song is no longer in the library".to_string()),
+        Err(error) => Err(error.to_string()),
+    }
+}
 pub use library_menu::{LibraryMenuItem, LibraryMenuItems, load_library_menu_items};
 pub use library_model::{
     LibraryMenuFilters, LoadSongsParams, SongSort, SongSortColumn, SongTarget, SongsMeta,
@@ -80,7 +94,7 @@ pub use vendor::{
 pub fn startup() -> Result<(), String> {
     init_library().map_err(|e| e.to_string())?;
 
-    AnalysisQueue::clear();
+    let interrupted = AnalysisQueue::recover_interrupted();
 
     let cache = CacheDir::new();
 
@@ -90,6 +104,12 @@ pub fn startup() -> Result<(), String> {
 
     if let Err(e) = refresh_analyzer_scripts_if_ready() {
         tracing::warn!("Failed to refresh analyzer scripts: {e}");
+    }
+
+    if !interrupted.is_empty() {
+        enqueue(SongTarget::Hashes {
+            hashes: interrupted,
+        })?;
     }
 
     if AppConfig::load().auto_analyze() {
