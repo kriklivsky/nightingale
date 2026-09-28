@@ -29,6 +29,8 @@ below.
 
 ### Fixes
 
+- Keep analyzer progress readable by suppressing only known harmless RKNN static-shape/layout diagnostics and weight-loading spinners; each song start now logs its artist, title, and number of songs still queued.
+
 - On the Orange Pi TV box, restore the native 4K HDMI picture when the TV selects its soundbar/Orange Pi CEC route. Use the confirmed working 30 Hz mode and a soft refresh-rate retrain because the soundbar reports "No signal" at 60 Hz after wake; retry CEC address allocation until TV remote navigation returns. Power-on and remote button presses do not trigger source switching or HDMI retraining.
 
 - Align timed LRCLIB lyrics one line at a time, release RKNN memory before word alignment, resume interrupted analysis queues after restart, and retry unfinished LRC songs with word alignment instead of silently accepting line-only timings.
@@ -45,6 +47,8 @@ below.
 - The "Measure latency" button in Settings now sits on its own row below the latency slider, so a TV remote can reach it with the arrow keys instead of it being trapped in the slider's row.
 
 ### Performance
+
+- Run independent RK3588 UVR transformer slices across three NPU cores in streamed mode on the Orange Pi TV box, reducing measured per-chunk inference time while preserving the serial path elsewhere.
 
 - Key detection now decodes audio with ffmpeg directly, avoiding an unnecessary WhisperX import on the automatic LRCLIB path.
 - Lowered the microphone monitor round-trip latency by targeting a 512-frame ALSA period (~10.7 ms) instead of the previous fixed 2048-frame buffer. If USB xruns or POLLERR storms return, the buffer now escalates automatically (512 → 1024 → 2048 → 4096 frames) and steps back down after stable runs, so the monitor degrades to a stable size instead of dropping audio.

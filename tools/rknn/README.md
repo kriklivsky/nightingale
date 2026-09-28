@@ -35,6 +35,9 @@ layer). Frequency attention is called with 89 independent time frames at a time
 default all 19 RKNN contexts remain initialized and are reused across audio chunks.
 On an 8 GB TV box, `NIGHTINGALE_RKNN_STREAM_COMPONENTS=1` loads one component at
 a time and releases it before loading the next to avoid Linux OOM during songs.
+With streaming enabled, `NIGHTINGALE_RKNN_PARALLEL_CORES=1` runs independent
+transformer slices on three separate RK3588 NPU cores. Band-split and mask heads
+remain sequential. This uses more peak memory than single-core streaming.
 
 The band-split export raises its 60 L2-normalization floors from `1e-12` to `1e-4`.
 The original floor underflows to zero in FP16, corrupting silent STFT frames and

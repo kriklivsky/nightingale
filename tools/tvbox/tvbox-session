@@ -263,6 +263,7 @@ run_as_tvbox() {
         NIGHTINGALE_UVR_BACKEND=auto \
         NIGHTINGALE_RKNN_CORE=all \
         NIGHTINGALE_RKNN_STREAM_COMPONENTS=1 \
+        NIGHTINGALE_RKNN_PARALLEL_CORES=1 \
         OMP_NUM_THREADS=1 \
         GDK_SCALE="${display_scale}" \
         TVBOX_STATUS="${TVBOX_STATUS:-}" \

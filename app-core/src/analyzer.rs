@@ -136,6 +136,24 @@ struct ReadyHandshake {
     device: Option<String>,
 }
 
+fn log_analyzer_output(label: &str, line: &str) {
+    for segment in line.split('\r') {
+        let trimmed = segment.trim();
+        if trimmed.is_empty()
+            || trimmed.contains("query RKNN_QUERY_INPUT_DYNAMIC_RANGE error, rknn model is static shape type")
+            || trimmed.contains("Query dynamic range failed. Ret code: RKNN_ERR_MODEL_INVALID. (If it is a static shape RKNN model")
+            || trimmed == "W The input[0] need NHWC data format, but NCHW set, the data format and data buffer will be changed to NHWC."
+            || trimmed.contains("Loading weights:")
+            || trimmed.contains("RKNN Runtime Information, librknnrt version:")
+            || trimmed.contains("RKNN Driver Information, version:")
+            || trimmed.contains("RKNN Model Information, version:")
+        {
+            continue;
+        }
+        info!("[analyzer {label}] {trimmed}");
+    }
+}
+
 fn drain_lines_to_log<R: BufRead + Send + 'static>(mut reader: R, label: &'static str) {
     std::thread::spawn(move || {
         let mut line = String::new();
@@ -144,10 +162,7 @@ fn drain_lines_to_log<R: BufRead + Send + 'static>(mut reader: R, label: &'stati
             match reader.read_line(&mut line) {
                 Ok(0) | Err(_) => return,
                 Ok(_) => {
-                    let trimmed = line.trim_end();
-                    if !trimmed.is_empty() {
-                        info!("[analyzer {label}] {trimmed}");
-                    }
+                    log_analyzer_output(label, &line);
                 }
             }
         }
@@ -174,9 +189,7 @@ fn read_ready_handshake<R: BufRead>(reader: &mut R) -> Result<ReadyHandshake, Ni
                     NightingaleError::Other(format!("Malformed ready handshake: {e}"))
                 });
             }
-            _ => {
-                info!("[analyzer stdout] {trimmed}");
-            }
+            _ => log_analyzer_output("stdout", trimmed),
         }
     }
 }
@@ -804,12 +817,12 @@ fn spawn_worker() {
         let cache = CacheDir::new();
 
         loop {
-            let file_hash = {
+            let (file_hash, remaining) = {
                 let mut state = lock_unpoisoned(&ANALYZER);
                 match state.queue.pop_front() {
                     Some(hash) => {
                         state.active_hash = Some(hash.clone());
-                        hash
+                        (hash, state.queue.len())
                     }
                     None => {
                         state.worker_running = false;
@@ -819,7 +832,7 @@ fn spawn_worker() {
                 }
             };
 
-            process_song(&file_hash, &cache);
+            process_song(&file_hash, remaining, &cache);
 
             let mut state = lock_unpoisoned(&ANALYZER);
             state.active_hash = None;
@@ -868,13 +881,18 @@ fn resolve_lyrics_plan(
     fetch_lrclib_timed_lyrics(song).map(LyricsPlan::Timed)
 }
 
-fn process_song(initial_hash: &str, cache: &CacheDir) {
+fn process_song(initial_hash: &str, remaining: usize, cache: &CacheDir) {
     let Some(song) = library_db::load_song_by_hash(initial_hash).ok().flatten() else {
         if !discard_cancelled_job(initial_hash, initial_hash) {
             warn!("[analyzer] Song with hash {initial_hash} not found in store, skipping");
         }
         return;
     };
+
+    info!(
+        "[analyzer] Starting analysis (artist={:?}, title={:?}, hash={initial_hash}, remaining_in_queue={remaining})",
+        song.artist, song.title
+    );
 
     let stems_only = lock_unpoisoned(&STEMS_ONLY).remove(initial_hash);
     update_queue_status(initial_hash, QueuedStatus::Analyzing(0));
@@ -910,7 +928,6 @@ fn process_song(initial_hash: &str, cache: &CacheDir) {
         return;
     }
 
-    info!("[analyzer] Starting analysis (hash={file_hash})");
     update_queue_status(file_hash, QueuedStatus::Analyzing(0));
 
     let (skip_transcription, lyrics_path, align_lrc_lines, lyricsfile) = match lyrics_plan {

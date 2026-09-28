@@ -15,7 +15,8 @@ import os
 import platform
 import time
 from abc import ABC, abstractmethod
-from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -267,6 +268,11 @@ class RknnUvrBackend(UvrInferenceBackend):
         self._stream_components = (
             os.environ.get("NIGHTINGALE_RKNN_STREAM_COMPONENTS", "").strip() == "1"
         )
+        self._parallel_cores = (
+            os.environ.get("NIGHTINGALE_RKNN_PARALLEL_CORES", "").strip() == "1"
+        )
+        if self._parallel_cores and not self._stream_components:
+            raise UvrBackendError("parallel RKNN cores require streamed components")
         self._closed = False
         self.last_profile: dict[str, float] | None = None
         self._initialise_runtimes()
@@ -283,7 +289,7 @@ class RknnUvrBackend(UvrInferenceBackend):
         }
         self.stft_window = torch.hann_window(self.stft_kwargs["win_length"])
 
-    def _load_runtime(self, component: dict[str, Any]) -> Any:
+    def _load_runtime(self, component: dict[str, Any], core_mask: int | None = None) -> Any:
         from rknnlite.api import RKNNLite
 
         model_path = self.model_path.parent / component["file"]
@@ -291,7 +297,7 @@ class RknnUvrBackend(UvrInferenceBackend):
         try:
             if runtime.load_rknn(str(model_path)) != 0:
                 raise UvrBackendError(f"failed to load RKNN model {model_path}")
-            if runtime.init_runtime(core_mask=self._core_mask) != 0:
+            if runtime.init_runtime(core_mask=self._core_mask if core_mask is None else core_mask) != 0:
                 raise UvrBackendError(f"failed to initialise RKNN model {model_path}")
         except Exception:
             runtime.release()
@@ -343,6 +349,8 @@ class RknnUvrBackend(UvrInferenceBackend):
         else:
             print(f"[nightingale:LOG] RKNN contexts: {len(self._runtimes)}", flush=True)
         print(f"[nightingale:LOG] RKNN NPU cores: {core_name}", flush=True)
+        if self._parallel_cores:
+            print("[nightingale:LOG] RKNN transformer slices: 3 parallel NPU cores", flush=True)
 
     @contextmanager
     def _runtime(self, index: int) -> Iterator[tuple[dict[str, Any], Any]]:
@@ -388,6 +396,53 @@ class RknnUvrBackend(UvrInferenceBackend):
         if not np.isfinite(output).all():
             raise UvrBackendError(f"{component['file']} returned NaN or Inf")
         return output
+
+    def _run_transformer_axis(
+        self, index: int, view: np.ndarray, pool: ThreadPoolExecutor | None
+    ) -> np.ndarray:
+        component = self.metadata["components"][index]
+        step = int(component["host_batch_size"])
+        slices = [view[start : start + step] for start in range(0, view.shape[0], step)]
+        if pool is None:
+            with self._runtime(index) as (_, runtime):
+                outputs = [
+                    self._run_component(component, runtime, tensor) for tensor in slices
+                ]
+            return np.concatenate(outputs, axis=0)
+
+        from rknnlite.api import RKNNLite
+
+        masks = (RKNNLite.NPU_CORE_0, RKNNLite.NPU_CORE_1, RKNNLite.NPU_CORE_2)
+        runtimes = []
+        try:
+            for mask in masks:
+                runtimes.append(self._load_runtime(component, core_mask=mask))
+
+            def run_lane(lane: int) -> list[tuple[int, np.ndarray]]:
+                runtime = runtimes[lane]
+                return [
+                    (slice_index, self._run_component(component, runtime, slices[slice_index]))
+                    for slice_index in range(lane, len(slices), len(runtimes))
+                ]
+
+            futures = [pool.submit(run_lane, lane) for lane in range(len(runtimes))]
+            outputs: list[np.ndarray | None] = [None] * len(slices)
+            first_error: Exception | None = None
+            for future in futures:
+                try:
+                    for slice_index, output in future.result():
+                        outputs[slice_index] = output
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = exc
+            if first_error is not None:
+                raise first_error
+            if any(output is None for output in outputs):
+                raise UvrBackendError(f"{component['file']} returned incomplete slices")
+            return np.concatenate(outputs, axis=0)
+        finally:
+            for runtime in reversed(runtimes):
+                runtime.release()
 
     def _preprocess(self, raw_audio: torch.Tensor) -> tuple[np.ndarray, torch.Tensor]:
         if raw_audio.ndim != 3 or raw_audio.shape[1] != self.audio_channels:
@@ -482,37 +537,23 @@ class RknnUvrBackend(UvrInferenceBackend):
         batch, time_frames, frequency_bands, dimension = encoded.shape
         if batch != 1:
             raise UvrBackendError(f"RKNN UVR only supports batch 1, got {batch}")
-        for layer in range(6):
-            time_view = encoded.transpose(0, 2, 1, 3).reshape(
-                frequency_bands, time_frames, dimension
-            )
-            with self._runtime(1 + layer * 2) as (time_component, time_runtime):
-                time_step = int(time_component["host_batch_size"])
-                time_outputs = [
-                    self._run_component(
-                        time_component, time_runtime,
-                        time_view[start : start + time_step],
-                    )
-                    for start in range(0, frequency_bands, time_step)
-                ]
-            encoded = np.concatenate(time_outputs, axis=0).reshape(
-                1, frequency_bands, time_frames, dimension
-            ).transpose(0, 2, 1, 3)
+        executor = ThreadPoolExecutor(max_workers=3) if self._parallel_cores else nullcontext(None)
+        with executor as pool:
+            for layer in range(6):
+                time_view = encoded.transpose(0, 2, 1, 3).reshape(
+                    frequency_bands, time_frames, dimension
+                )
+                time_outputs = self._run_transformer_axis(1 + layer * 2, time_view, pool)
+                encoded = time_outputs.reshape(
+                    1, frequency_bands, time_frames, dimension
+                ).transpose(0, 2, 1, 3)
 
-            frequency_view = encoded.reshape(time_frames, frequency_bands, dimension)
-            with self._runtime(2 + layer * 2) as (frequency_component, frequency_runtime):
-                frequency_step = int(frequency_component["host_batch_size"])
-                frequency_outputs = [
-                    self._run_component(
-                        frequency_component, frequency_runtime,
-                        frequency_view[start : start + frequency_step],
-                    )
-                    for start in range(0, time_frames, frequency_step)
-                ]
-            encoded = np.concatenate(frequency_outputs, axis=0).reshape(
-                1, time_frames, frequency_bands, dimension
-            )
-            del time_outputs, frequency_outputs, time_view, frequency_view
+                frequency_view = encoded.reshape(time_frames, frequency_bands, dimension)
+                frequency_outputs = self._run_transformer_axis(
+                    2 + layer * 2, frequency_view, pool
+                )
+                encoded = frequency_outputs.reshape(1, time_frames, frequency_bands, dimension)
+                del time_outputs, frequency_outputs, time_view, frequency_view
 
         mask_outputs = []
         expected_band_start = 0
