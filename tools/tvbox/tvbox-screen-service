@@ -1,0 +1,21 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+readonly SCREEN_CONFIG="${HOME}/.config/tvbox-screen"
+readonly SCREEN_RUNTIME="${XDG_RUNTIME_DIR:?}/tvbox-screen"
+
+if [[ ! -r "${SCREEN_CONFIG}/server.crt" || ! -r "${SCREEN_CONFIG}/server.key" ]]; then
+    logger -t tvbox-screen "HTTPS certificate is missing; run tvbox-screen-setup"
+    exit 1
+fi
+screen_address="$(ip -4 route get 1.1.1.1 | awk '{for (i = 1; i <= NF; i++) if ($i == "src") {print $(i + 1); exit}}')"
+if [[ ! "${screen_address}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    logger -t tvbox-screen "LAN address is unavailable"
+    exit 1
+fi
+install -d -m 0700 "${SCREEN_RUNTIME}"
+exec /usr/bin/python3 /usr/local/libexec/tvbox-screen/screen_server.py \
+    --bind "${screen_address}" --public-url "https://${screen_address}:8091" \
+    --certificate "${SCREEN_CONFIG}/server.crt" --private-key "${SCREEN_CONFIG}/server.key" \
+    --assets /usr/local/share/tvbox-screen --runtime "${SCREEN_RUNTIME}/receiver.json" \
+    --parent-pid "${TVBOX_SCREEN_PARENT_PID:?}"

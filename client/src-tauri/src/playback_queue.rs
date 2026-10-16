@@ -48,3 +48,15 @@ pub(crate) fn clear_playback_queue(
     emit_queue(&app, &entries)?;
     Ok(entries)
 }
+
+#[tauri::command]
+pub(crate) fn move_playback_queue_entry(
+    app: AppHandle,
+    queue: State<'_, PlaybackQueue>,
+    id: String,
+    target_index: usize,
+) -> Result<Vec<PlaybackQueueEntry>, String> {
+    let entries = queue.move_entry(&id, target_index)?;
+    emit_queue(&app, &entries)?;
+    Ok(entries)
+}

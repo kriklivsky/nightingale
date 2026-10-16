@@ -1,49 +1,53 @@
 import { memo } from 'react';
+import { toast } from 'sonner';
 
 import { usePlaybackMicActions } from '@/features/playback/providers/playback-mic-context';
 import { usePlaybackThemeState } from '@/features/playback/providers/playback-theme-context';
 import { usePlaybackTransportState } from '@/features/playback/providers/playback-transport-context';
 
+import { CustomBackground } from './custom-background';
 import { PixabayVideo } from './pixabay-video';
 import { ShaderVisualizer } from './shader-visualizer';
-import { loadingFragment } from './shaders';
 import { SourceVideo } from './source-video';
-import { SHADER_COUNT, themeMode } from './theme';
 
-function ShaderBranch({ themeIndex, isPlaying }: { themeIndex: number; isPlaying: boolean }) {
+function ShaderBranch({ shaderIndex, isPlaying }: { shaderIndex: number; isPlaying: boolean }) {
   const { reactiveRef } = usePlaybackMicActions();
   return (
-    <ShaderVisualizer
-      shaderIndex={themeIndex % SHADER_COUNT}
+    <ShaderVisualizer shaderIndex={shaderIndex} isPlaying={isPlaying} reactiveRef={reactiveRef} />
+  );
+}
+
+function CustomBranch({ isPlaying }: { isPlaying: boolean }) {
+  const { theme } = usePlaybackThemeState();
+  const { reactiveRef } = usePlaybackMicActions();
+  if (theme.kind !== 'custom') {
+    return null;
+  }
+  return (
+    <CustomBackground
+      key={theme.background.id}
+      background={theme.background}
       isPlaying={isPlaying}
       reactiveRef={reactiveRef}
+      onError={(message) => toast.error(`Background error: ${message}`)}
     />
   );
 }
 
 function BackgroundImpl() {
   const { isReady, isPlaying } = usePlaybackTransportState();
-  const { themeIndex, videoFlavor, sourceVideoPath } = usePlaybackThemeState();
-
-  if (!isReady) {
-    return (
-      <div className="fixed inset-0">
-        <ShaderVisualizer shaderIndex={0} isPlaying={true} customFragment={loadingFragment} />
-      </div>
-    );
-  }
-
-  const mode = themeMode(themeIndex);
-  const showSourceVideo = mode === 'source';
-  const playing = isPlaying;
+  const { theme, videoFlavor, sourceVideoPath } = usePlaybackThemeState();
 
   return (
     <div className="fixed inset-0">
       {typeof sourceVideoPath === 'string' && sourceVideoPath !== '' && (
-        <SourceVideo isActive={showSourceVideo} />
+        <SourceVideo isActive={isReady && theme.kind === 'source'} />
       )}
-      {mode === 'shader' && <ShaderBranch themeIndex={themeIndex} isPlaying={playing} />}
-      {mode === 'pixabay' && <PixabayVideo flavor={videoFlavor} isPlaying={playing} />}
+      {theme.kind === 'shader' && (
+        <ShaderBranch shaderIndex={theme.shaderIndex} isPlaying={isPlaying} />
+      )}
+      {theme.kind === 'pixabay' && <PixabayVideo flavor={videoFlavor} isPlaying={isPlaying} />}
+      {theme.kind === 'custom' && <CustomBranch isPlaying={isPlaying} />}
     </div>
   );
 }

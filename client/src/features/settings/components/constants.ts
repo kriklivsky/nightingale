@@ -75,7 +75,16 @@ export const LYRICS_HORIZONTAL_POSITIONS: SettingsOption[] = [
   { value: 'right', label: 'Right' },
 ];
 
+export const LYRICS_ROMANIZATION_MODES: SettingsOption[] = [
+  { value: 'enabled', label: 'Enabled' },
+  { value: 'disabled', label: 'Disabled' },
+];
+
 export const DEFAULTS = {
+  combine_multi_channel: true,
+  multiplayer_combine_multi_channel: true,
+  output_volume: 1,
+  lyrics_romanization_mode: 'enabled',
   separator: 'karaoke',
   asr_engine: 'whisper',
   align_backend: 'whisperx',
@@ -94,6 +103,10 @@ export const DEFAULTS = {
 } satisfies Pick<
   AppConfig,
   | 'separator'
+  | 'combine_multi_channel'
+  | 'multiplayer_combine_multi_channel'
+  | 'output_volume'
+  | 'lyrics_romanization_mode'
   | 'asr_engine'
   | 'align_backend'
   | 'vocal_detection_threshold_pct'
@@ -132,11 +145,14 @@ export const NAV = {
     micTest: 6,
   },
   playback: {
-    mode: 1,
-    lyricsVerticalPosition: 2,
-    lyricsHorizontalPosition: 3,
-    lyricsScale: 4,
-    pitchGraphScale: 5,
+    background: 1,
+    mode: 2,
+    masterVolume: 3,
+    lyricsVerticalPosition: 4,
+    lyricsHorizontalPosition: 5,
+    lyricsScale: 6,
+    pitchGraphScale: 7,
+    lyricsRomanizationMode: 8,
   },
 } as const;
 
@@ -149,12 +165,12 @@ export function getAnalysisNav() {
   };
 }
 
-export function getSettingsStops(tab: SettingsTab) {
+export function getSettingsStops(tab: SettingsTab, hasMultiChannelInput: boolean) {
   if (tab === 'general') {
-    return [3, 2, 1, 1, 1, 1, 2, 2];
+    return [3, 2, hasMultiChannelInput ? 2 : 1, 1, 1, 1, 2, 2];
   }
   if (tab === 'playback') {
-    return [3, 1, 1, 1, 1, 1, 2];
+    return [3, 2, 1, 1, 1, 1, 1, 1, 2, 2];
   }
 
   return [3, 1, 1, 2, 1, 2];

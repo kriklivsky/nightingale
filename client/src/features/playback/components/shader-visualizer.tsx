@@ -10,6 +10,7 @@ type ShaderVisualizerProps = {
   isPlaying: boolean;
   customFragment?: string;
   reactiveRef?: MicReactiveRef;
+  className?: string;
 };
 
 const ShaderQuad = ({
@@ -34,8 +35,11 @@ const ShaderQuad = ({
   );
 };
 
-export const ShaderVisualizer = (props: ShaderVisualizerProps) => (
-  <div className="fixed inset-0">
+export const ShaderVisualizer = ({
+  className = 'fixed inset-0',
+  ...props
+}: ShaderVisualizerProps) => (
+  <div className={className}>
     <Canvas flat dpr={1}>
       <ShaderQuad {...props} />
     </Canvas>

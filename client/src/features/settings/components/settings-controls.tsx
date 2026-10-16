@@ -37,7 +37,7 @@ export function SettingsSelect({
 }: SettingsSelectProps) {
   return (
     <Select disabled={disabled} onValueChange={onValueChange} value={value}>
-      <SelectTrigger id={id} className={cn('w-full', triggerClassName)}>
+      <SelectTrigger id={id} className={cn('min-h-11 w-full text-base', triggerClassName)}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent position="popper" className="w-[var(--radix-select-trigger-width)]">

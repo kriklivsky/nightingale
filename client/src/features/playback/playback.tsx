@@ -33,6 +33,7 @@ function PlaybackSessionView({
       config={config ?? null}
       queuePlayback={session.queuePlayback}
       sessionPlayback={sessionPlayback}
+      players={session.players}
     />
   );
 }
@@ -49,9 +50,12 @@ export const Playback = () => {
     return <Navigate to="/" replace />;
   }
 
-  const { song, queuePlayback = false, playbackId } = parsedState.data;
+  const { song, queuePlayback = false, playbackId, players } = parsedState.data;
   return (
-    <PlaybackSessionView session={{ song, queuePlayback, playbackId }} sessionPlayback={false} />
+    <PlaybackSessionView
+      session={{ song, queuePlayback, playbackId, players }}
+      sessionPlayback={false}
+    />
   );
 };
 

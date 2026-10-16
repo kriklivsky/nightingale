@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
 
 import { getPreloadedSongsMeta, loadAnalysisQueue, loadSongs, loadSongsMeta } from '@/bridge/songs';
 import { useLibraryFilter } from '@/features/menu/hooks/use-library-filter';
@@ -8,32 +8,41 @@ import { useConfig } from '@/shared/config/use-config';
 import { ANALYSIS_QUEUE, SONGS, SONGS_META, MENU } from '@/shared/query-keys';
 import type { AnalysisQueue } from '@/types/AnalysisQueue';
 import type { LoadSongsParams } from '@/types/LoadSongsParams';
+import type { QueuedStatus } from '@/types/QueuedStatus';
 import type { SongsMeta } from '@/types/SongsMeta';
 
 const PAGE_SIZE = 25;
 const DEFAULT_REFETCH_INTERVAL = 2500;
 
+function queueStatusKind(status: QueuedStatus): string {
+  if (typeof status === 'string') {
+    return status;
+  }
+  return 'Analyzing' in status ? 'Analyzing' : 'Failed';
+}
+
 export const useSongsMeta = () => {
   const queryClient = useQueryClient();
-  const [prevMatched, setPrevMatched] = useState(true);
   const preloaded = getPreloadedSongsMeta();
+  const previousMetaRef = useRef<SongsMeta | undefined>(preloaded);
 
   return useQuery({
     queryKey: SONGS_META,
     queryFn: loadSongsMeta,
     refetchInterval: DEFAULT_REFETCH_INTERVAL,
     ...(preloaded !== undefined ? { initialData: preloaded } : {}),
-    onSuccess: ({ count, processed_count }: SongsMeta) => {
-      if (count !== processed_count) {
-        setPrevMatched(false);
+    onSuccess: (meta: SongsMeta) => {
+      const previous = previousMetaRef.current;
+      previousMetaRef.current = meta;
+      if (
+        previous !== undefined &&
+        (previous.count !== meta.count ||
+          previous.processed_count !== meta.processed_count ||
+          previous.analyzed_count !== meta.analyzed_count ||
+          previous.folder !== meta.folder)
+      ) {
         void queryClient.invalidateQueries({ queryKey: SONGS });
         void queryClient.invalidateQueries({ queryKey: MENU });
-      } else {
-        if (!prevMatched) {
-          setPrevMatched(true);
-          void queryClient.invalidateQueries({ queryKey: SONGS });
-          void queryClient.invalidateQueries({ queryKey: MENU });
-        }
       }
     },
   });
@@ -42,11 +51,22 @@ export const useSongsMeta = () => {
 export const useSongs = () => {
   const { data: config } = useConfig();
   const { search } = useSearch();
-  const { artist, album, playlist, query, status, transcript_source } = useLibraryFilter();
+  const { artist, album, playlist, folder, query, status, transcript_source } = useLibraryFilter();
   const sort = config?.song_list_sort ?? [];
 
   return useInfiniteQuery({
-    queryKey: [...SONGS, search, artist, album, playlist, query, status, transcript_source, sort],
+    queryKey: [
+      ...SONGS,
+      search,
+      artist,
+      album,
+      playlist,
+      folder,
+      query,
+      status,
+      transcript_source,
+      sort,
+    ],
     queryFn: ({ pageParam = 0 }: { pageParam?: number }) => {
       const params: LoadSongsParams = {
         search: search || null,
@@ -54,6 +74,7 @@ export const useSongs = () => {
           artist: artist ?? null,
           album: album ?? null,
           playlist: playlist ?? null,
+          folder,
           query: query ?? null,
           status: status ?? null,
           transcript_source: transcript_source ?? null,
@@ -83,7 +104,7 @@ export const useAnalysisQueue = () => {
     onSuccess: (data: AnalysisQueue) => {
       const entries = Object.entries(data.entries)
         .toSorted(([a], [b]) => a.localeCompare(b))
-        .map(([hash, status]) => `${hash}:${JSON.stringify(status)}`)
+        .map(([hash, status]) => JSON.stringify([hash, queueStatusKind(status)]))
         .join('|');
       const previous = prevEntriesRef.current;
 

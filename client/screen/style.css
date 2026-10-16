@@ -1,0 +1,27 @@
+@import 'tailwindcss' source('.');
+
+@theme {
+  --color-background: #10121c;
+  --color-foreground: #f1f3fc;
+  --color-card: #1b1f30;
+  --color-primary: #8b9bff;
+  --color-primary-foreground: #10121c;
+  --color-muted-foreground: #b3b9cc;
+  --color-border: #424a64;
+  --color-input: #5c6582;
+  --color-ring: #bbc6ff;
+  --color-destructive: #ff9b9b;
+}
+
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+  background: var(--color-background);
+  color: var(--color-foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none;
+  }
+}

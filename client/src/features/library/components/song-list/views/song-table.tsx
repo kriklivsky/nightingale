@@ -1,12 +1,12 @@
 import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon } from 'lucide-react';
 
+import { useSongWindow } from '@/features/library/hooks/use-song-window';
 import { useBestScoresBySongForActiveProfile } from '@/features/profiles/hooks/use-best-scores-by-song';
 import { cn } from '@/shared/utils/cn';
 import type { Song } from '@/types/Song';
 import type { SongSort } from '@/types/SongSort';
 import type { SongSortColumn } from '@/types/SongSortColumn';
 
-import { songKey } from '../shared/song-key';
 import { SONG_COLUMNS, type SongColumn } from '../song-columns';
 import type { SongItemProps } from '../types';
 import { SongTableRow } from './song-table-row';
@@ -80,10 +80,14 @@ export const SongTable = ({
   getItemProps,
 }: SongTableProps) => {
   const bestScores = useBestScoresBySongForActiveProfile();
+  const window = useSongWindow(songs, 'table');
 
   return (
-    <table className="w-full table-fixed border-separate border-spacing-0 text-xs">
-      <thead className="song-table-header">
+    <table
+      aria-rowcount={songs.length + 1}
+      className="w-full table-fixed border-separate border-spacing-0 text-sm"
+    >
+      <thead className="song-table-header" data-song-window-header>
         <tr className="text-left text-muted-foreground">
           {SONG_COLUMNS.map((column) => (
             <SongTableHeader
@@ -98,13 +102,30 @@ export const SongTable = ({
         </tr>
       </thead>
       <tbody>
-        {songs.map((song, index) => (
+        <tr aria-hidden="true">
+          <td
+            aria-hidden="true"
+            colSpan={SONG_COLUMNS.length + 1}
+            className="p-0"
+            style={{ height: window.before }}
+          />
+        </tr>
+        {window.rows.map((row) => (
           <SongTableRow
-            key={songKey(song)}
-            {...getItemProps(song, index)}
-            bestScore={bestScores.get(song.file_hash)}
+            key={row.key}
+            {...getItemProps(songs[row.index], row.index)}
+            bestScore={bestScores.get(songs[row.index].file_hash)}
+            measure={window.measure}
           />
         ))}
+        <tr aria-hidden="true">
+          <td
+            aria-hidden="true"
+            colSpan={SONG_COLUMNS.length + 1}
+            className="p-0"
+            style={{ height: window.after }}
+          />
+        </tr>
       </tbody>
     </table>
   );

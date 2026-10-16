@@ -1,12 +1,21 @@
 import { useCallback, type RefObject } from 'react';
 
+import type { MenuFocusActions } from '@/features/menu/providers/menu-focus-context';
+
 import { SONG_SELECTOR } from './dom';
 
 const BORDER_PADDING = 3;
 
-export function useScrollToSong(scrollRef: RefObject<HTMLElement | null>) {
+export function useScrollToSong(
+  scrollRef: RefObject<HTMLElement | null>,
+  actionsRef: RefObject<MenuFocusActions>,
+) {
   return useCallback(
     (index: number) => {
+      if (actionsRef.current.scrollToSong !== null) {
+        actionsRef.current.scrollToSong(index);
+        return;
+      }
       const container = scrollRef.current;
       if (!container) {
         return;
@@ -33,6 +42,6 @@ export function useScrollToSong(scrollRef: RefObject<HTMLElement | null>) {
         break;
       }
     },
-    [scrollRef],
+    [scrollRef, actionsRef],
   );
 }

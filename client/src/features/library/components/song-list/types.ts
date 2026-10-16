@@ -11,8 +11,8 @@ export type SongItemProps = {
   focusedAction: number | null;
   canPlay: boolean;
   canDelete: boolean;
-  onSelect: () => void;
-  onToggleFavorite: () => void;
-  onPlay: () => void;
-  onDelete: () => void;
+  onSelect: (song: Song) => void;
+  onToggleFavorite: (song: Song) => void;
+  onPlay: (song: Song) => void;
+  onDelete: (song: Song) => void;
 };

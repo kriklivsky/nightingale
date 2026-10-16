@@ -53,6 +53,7 @@ pub(super) fn open_connection(path: &Path) -> rusqlite::Result<Connection> {
     }
     let conn = Connection::open(path)?;
     configure(&conn)?;
+    super::search::register(&conn)?;
     run_migrations(&conn)?;
     Ok(conn)
 }

@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -17,10 +17,12 @@ use crate::error::NightingaleError;
 use crate::library_db;
 use crate::library_model::{LibraryMenuFilters, SongTarget};
 use crate::lyrics::{
-    TimedLyrics, fetch_lrclib_timed_lyrics, load_lyrics_file, write_lrclib_transcript,
-    write_lyrics_file,
+    TimedLyrics, fetch_lrclib_timed_lyrics, load_lyrics_file, lrclib_retry_delay,
+    write_lrclib_transcript, write_lyrics_file,
 };
-use crate::song::{Song, SongOrigin, TranscriptSource, compute_file_hash, read_transcript_meta};
+use crate::song::{
+    Song, SongOrigin, TranscriptMetaInfo, TranscriptSource, compute_file_hash, read_transcript_meta,
+};
 use crate::source::{MediaSource, active_source};
 
 // ─── Analysis queue (persisted to disk) ──────────────────────────────
@@ -40,26 +42,24 @@ pub struct AnalysisQueue {
 }
 
 impl AnalysisQueue {
-    pub fn load() -> Self {
-        let entries = library_db::analysis_queue_load_rows()
-            .map(|rows| {
-                rows.into_iter()
-                    .map(|(h, st, pct, msg)| {
-                        let status = match st.as_str() {
-                            "queued" => QueuedStatus::Queued,
-                            "analyzing" => QueuedStatus::Analyzing(pct.unwrap_or(0) as usize),
-                            "failed" => QueuedStatus::Failed(msg.unwrap_or_default()),
-                            _ => QueuedStatus::Queued,
-                        };
-                        (h, status)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        Self { entries }
+    pub fn load() -> rusqlite::Result<Self> {
+        let entries = library_db::analysis_queue_load_rows().map(|rows| {
+            rows.into_iter()
+                .map(|(h, st, pct, msg)| {
+                    let status = match st.as_str() {
+                        "queued" => QueuedStatus::Queued,
+                        "analyzing" => QueuedStatus::Analyzing(pct.unwrap_or(0) as usize),
+                        "failed" => QueuedStatus::Failed(msg.unwrap_or_default()),
+                        _ => QueuedStatus::Queued,
+                    };
+                    (h, status)
+                })
+                .collect()
+        })?;
+        Ok(Self { entries })
     }
 
-    pub fn save(&self) {
+    pub fn save(&self) -> rusqlite::Result<()> {
         let rows: Vec<_> = self
             .entries
             .iter()
@@ -71,15 +71,15 @@ impl AnalysisQueue {
                 QueuedStatus::Failed(s) => (k.clone(), "failed".to_string(), None, Some(s.clone())),
             })
             .collect();
-        let _ = library_db::analysis_queue_save_rows(&rows);
+        library_db::analysis_queue_save_rows(&rows)
     }
 
     pub fn clear() {
         let _ = library_db::analysis_queue_clear();
     }
 
-    pub fn recover_interrupted() -> Vec<String> {
-        let mut queue = Self::load();
+    pub fn recover_interrupted() -> rusqlite::Result<Vec<String>> {
+        let mut queue = Self::load()?;
         let mut pending = Vec::new();
         for (hash, status) in &mut queue.entries {
             if matches!(status, QueuedStatus::Queued | QueuedStatus::Analyzing(_)) {
@@ -88,8 +88,8 @@ impl AnalysisQueue {
             }
         }
         pending.sort();
-        queue.save();
-        pending
+        queue.save()?;
+        Ok(pending)
     }
 }
 use crate::vendor::{analyzer_dir, ffmpeg_path, python_path, silent_command};
@@ -100,11 +100,14 @@ static SERVER_PID: AtomicU32 = AtomicU32::new(0);
 static FORCE_EXISTING_UVR: AtomicBool = AtomicBool::new(false);
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(90);
+const MAX_EVENT_BYTES: usize = 64 * 1024;
 
 struct ServerProcess {
     child: Child,
     reader: BufReader<TcpStream>,
     writer: BufWriter<TcpStream>,
+    stall_timeout: Duration,
 }
 
 impl Drop for ServerProcess {
@@ -170,16 +173,26 @@ fn drain_lines_to_log<R: BufRead + Send + 'static>(mut reader: R, label: &'stati
 }
 
 fn read_ready_handshake<R: BufRead>(reader: &mut R) -> Result<ReadyHandshake, NightingaleError> {
-    let mut line = String::new();
+    let mut line = Vec::new();
     loop {
         line.clear();
-        let bytes = reader.read_line(&mut line)?;
+        let bytes =
+            Read::take(&mut *reader, MAX_EVENT_BYTES as u64 + 1).read_until(b'\n', &mut line)?;
         if bytes == 0 {
             return Err(NightingaleError::Other(
                 "Analyzer server exited before handshake".into(),
             ));
         }
-        let trimmed = line.trim();
+        if bytes > MAX_EVENT_BYTES || !line.ends_with(b"\n") {
+            return Err(NightingaleError::Other(
+                "Analyzer startup message exceeded the protocol size limit".into(),
+            ));
+        }
+        let trimmed = std::str::from_utf8(&line)
+            .map_err(|error| {
+                NightingaleError::Other(format!("Invalid analyzer startup message: {error}"))
+            })?
+            .trim();
         if trimmed.is_empty() {
             continue;
         }
@@ -232,13 +245,27 @@ fn connect_and_authenticate(
         )));
     }
 
-    reader.get_ref().set_read_timeout(None)?;
-    reader.get_ref().set_write_timeout(None)?;
+    reader
+        .get_ref()
+        .set_read_timeout(Some(Duration::from_secs(1)))?;
 
     Ok((reader, writer))
 }
 
 fn spawn_server() -> Result<ServerProcess, NightingaleError> {
+    let stall_seconds = match std::env::var("NIGHTINGALE_ANALYZER_STALL_TIMEOUT_SECS") {
+        Ok(value) => value
+            .parse::<u64>()
+            .ok()
+            .filter(|value| (300..=86_400).contains(value))
+            .ok_or_else(|| {
+                NightingaleError::Other(
+                    "NIGHTINGALE_ANALYZER_STALL_TIMEOUT_SECS must be 300..86400".into(),
+                )
+            })?,
+        Err(std::env::VarError::NotPresent) => 1800,
+        Err(error) => return Err(NightingaleError::Other(error.to_string())),
+    };
     let python = python_path();
     let script = analyzer_dir().join("server.py");
     let models = models_dir();
@@ -279,6 +306,9 @@ fn spawn_server() -> Result<ServerProcess, NightingaleError> {
     let pid = child.id();
     SERVER_PID.store(pid, Ordering::SeqCst);
     info!("[analyzer] Server process spawned (pid={pid})");
+    if let Some(stderr) = child.stderr.take() {
+        drain_lines_to_log(BufReader::new(stderr), "stderr");
+    }
 
     let stdout = match child.stdout.take() {
         Some(s) => s,
@@ -291,10 +321,18 @@ fn spawn_server() -> Result<ServerProcess, NightingaleError> {
             ));
         }
     };
-    let mut stdout_reader = BufReader::new(stdout);
-
-    let handshake = match read_ready_handshake(&mut stdout_reader) {
-        Ok(h) => h,
+    let (handshake_tx, handshake_rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let handshake = read_ready_handshake(&mut reader);
+        let _ = handshake_tx.send((reader, handshake));
+    });
+    let ready = handshake_rx
+        .recv_timeout(HANDSHAKE_TIMEOUT)
+        .map_err(|_| NightingaleError::Other("Analyzer startup timed out. Retry analysis.".into()))
+        .and_then(|(reader, handshake)| handshake.map(|handshake| (reader, handshake)));
+    let (stdout_reader, handshake) = match ready {
+        Ok(ready) => ready,
         Err(e) => {
             let _ = child.kill();
             let _ = child.wait();
@@ -333,14 +371,12 @@ fn spawn_server() -> Result<ServerProcess, NightingaleError> {
     *lock_unpoisoned(&SERVER_INTERRUPT) = Some(interrupt);
 
     drain_lines_to_log(stdout_reader, "stdout");
-    if let Some(stderr) = child.stderr.take() {
-        drain_lines_to_log(BufReader::new(stderr), "stderr");
-    }
 
     Ok(ServerProcess {
         child,
         reader,
         writer,
+        stall_timeout: Duration::from_secs(stall_seconds),
     })
 }
 
@@ -386,25 +422,40 @@ pub(crate) fn mark_stems_only(file_hash: &str) {
 // ─── Helpers ─────────────────────────────────────────────────────────
 
 fn update_queue_status(file_hash: &str, status: QueuedStatus) {
+    let state = lock_unpoisoned(&ANALYZER);
+    persist_queue_status(file_hash, status, &state);
+}
+
+fn persist_queue_status(file_hash: &str, status: QueuedStatus, state: &AnalyzerState) {
+    if state.cancelled.contains(file_hash)
+        || state
+            .active_hash
+            .as_ref()
+            .is_some_and(|active| state.cancelled.contains(active))
+    {
+        return;
+    }
     let (st, pct, msg) = match &status {
         QueuedStatus::Queued => ("queued", None, None::<String>),
         QueuedStatus::Analyzing(p) => ("analyzing", Some(*p as i64), None::<String>),
         QueuedStatus::Failed(s) => ("failed", None, Some(s.clone())),
     };
-    let _ = library_db::analysis_queue_upsert_row(file_hash, st, pct, msg.as_deref());
+    if let Err(error) = library_db::analysis_queue_upsert_row(file_hash, st, pct, msg.as_deref()) {
+        warn!(%error, "[analyzer] Could not persist analysis progress");
+    }
 }
 
 fn remove_from_queue(file_hash: &str) {
     let _ = library_db::analysis_queue_delete(file_hash);
 }
 
-fn take_cancelled(initial_hash: &str, file_hash: &str) -> bool {
-    let mut state = lock_unpoisoned(&ANALYZER);
-    state.cancelled.remove(initial_hash) | state.cancelled.remove(file_hash)
+fn job_cancelled(initial_hash: &str, file_hash: &str) -> bool {
+    let state = lock_unpoisoned(&ANALYZER);
+    state.cancelled.contains(initial_hash) || state.cancelled.contains(file_hash)
 }
 
 fn discard_cancelled_job(initial_hash: &str, file_hash: &str) -> bool {
-    if !take_cancelled(initial_hash, file_hash) {
+    if !job_cancelled(initial_hash, file_hash) {
         return false;
     }
 
@@ -423,9 +474,9 @@ pub(crate) fn update_song_analyzed(
     transcript_source: Option<TranscriptSource>,
     key: Option<String>,
     tempo: Option<f64>,
-) {
+) -> bool {
     let Some(mut song) = library_db::load_song_by_hash(file_hash).ok().flatten() else {
-        return;
+        return false;
     };
     song.is_analyzed = is_analyzed;
     song.language = language;
@@ -445,10 +496,47 @@ pub(crate) fn update_song_analyzed(
         song.key_offset = 0;
         song.no_stems = false;
     }
-    let _ = library_db::update_song_fields(file_hash, &song);
+    match library_db::update_song_fields(file_hash, &song) {
+        Ok(()) => true,
+        Err(error) => {
+            warn!("[analyzer] Could not persist analysis state: {error}");
+            false
+        }
+    }
 }
 
 // ─── Public API ──────────────────────────────────────────────────────
+
+pub(crate) fn reconcile_cached_song(
+    file_hash: &str,
+    meta: TranscriptMetaInfo,
+) -> Result<bool, String> {
+    let state = lock_unpoisoned(&ANALYZER);
+    if state.active_hash.as_deref() == Some(file_hash)
+        || state.queue.iter().any(|hash| hash == file_hash)
+    {
+        return Ok(false);
+    }
+    let queue = AnalysisQueue::load().map_err(|error| error.to_string())?;
+    if matches!(
+        queue.entries.get(file_hash),
+        Some(QueuedStatus::Queued | QueuedStatus::Analyzing(_))
+    ) {
+        return Ok(false);
+    }
+    if !update_song_analyzed(
+        file_hash,
+        true,
+        meta.language,
+        Some(meta.source),
+        meta.key,
+        Some(meta.tempo),
+    ) {
+        return Err("Could not persist cached analysis state".into());
+    }
+    library_db::analysis_queue_delete(file_hash).map_err(|error| error.to_string())?;
+    Ok(true)
+}
 
 pub(crate) fn is_usdx_song(file_hash: &str) -> bool {
     library_db::load_song_by_hash(file_hash)
@@ -499,25 +587,34 @@ where
     }
 }
 
-fn enqueue_hashes(mut hashes: Vec<String>, skip_persisted: bool) -> usize {
-    hashes.retain(|hash| !is_usdx_song(hash));
-    let persisted = skip_persisted.then(AnalysisQueue::load);
+fn enqueue_hashes(mut hashes: Vec<String>, skip_persisted: bool) -> Result<usize, String> {
+    let mut seen = HashSet::new();
+    hashes.retain(|hash| seen.insert(hash.clone()) && !is_usdx_song(hash));
     let mut state = lock_unpoisoned(&ANALYZER);
+    let persisted = if skip_persisted {
+        library_db::analysis_queue_load_rows()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|(hash, _, _, _)| hash)
+            .collect::<HashSet<_>>()
+    } else {
+        HashSet::new()
+    };
+    let queued: HashSet<_> = state.queue.iter().collect();
     let mut newly_queued = Vec::new();
 
     for file_hash in hashes {
-        if persisted
-            .as_ref()
-            .is_some_and(|queue| queue.entries.contains_key(&file_hash))
-        {
+        if persisted.contains(&file_hash) || state.cancelled.contains(&file_hash) {
             continue;
         }
-        if state.active_hash.as_deref() != Some(&file_hash)
-            && !state.queue.iter().any(|hash| hash == &file_hash)
-        {
-            state.queue.push_back(file_hash.clone());
+        if state.active_hash.as_deref() != Some(&file_hash) && !queued.contains(&file_hash) {
             newly_queued.push(file_hash);
         }
+    }
+    if !newly_queued.is_empty() {
+        library_db::analysis_queue_enqueue_rows(&newly_queued)
+            .map_err(|error| error.to_string())?;
+        state.queue.extend(newly_queued.iter().cloned());
     }
 
     let should_start = !state.worker_running && !state.queue.is_empty();
@@ -526,19 +623,15 @@ fn enqueue_hashes(mut hashes: Vec<String>, skip_persisted: bool) -> usize {
     }
     drop(state);
 
-    for hash in &newly_queued {
-        let _ = library_db::analysis_queue_upsert_row(hash, "queued", None, None);
-    }
-
     if should_start {
         spawn_worker();
     }
 
-    newly_queued.len()
+    Ok(newly_queued.len())
 }
 
-pub(crate) fn enqueue_one(file_hash: &str) {
-    enqueue_hashes(vec![file_hash.to_string()], false);
+pub(crate) fn enqueue_one(file_hash: &str) -> Result<(), String> {
+    enqueue_hashes(vec![file_hash.to_string()], false).map(|_| ())
 }
 
 pub fn enqueue(target: SongTarget) -> Result<usize, String> {
@@ -547,20 +640,20 @@ pub fn enqueue(target: SongTarget) -> Result<usize, String> {
         SongTarget::Filter { filters } => (
             library_db::iter_file_hashes_filtered_not_analyzed(&filters)
                 .map_err(|e| e.to_string())?,
-            true,
+            filters.status.as_deref() != Some("failed"),
         ),
     };
-    Ok(enqueue_hashes(hashes, skip_persisted))
+    enqueue_hashes(hashes, skip_persisted)
 }
 
 pub fn cancel_analysis(target: SongTarget) -> Result<usize, String> {
     let hashes = resolve_target(target, library_db::iter_file_hashes_filtered_analysis_busy)?;
-    let persisted = AnalysisQueue::load();
+    let mut state = lock_unpoisoned(&ANALYZER);
+    let persisted = AnalysisQueue::load().map_err(|error| error.to_string())?;
     let has_active_row = persisted
         .entries
         .values()
         .any(|status| matches!(status, QueuedStatus::Analyzing(_)));
-    let mut state = lock_unpoisoned(&ANALYZER);
     let mut affected = Vec::new();
     let mut interrupt = false;
 
@@ -576,23 +669,24 @@ pub fn cancel_analysis(target: SongTarget) -> Result<usize, String> {
             continue;
         }
 
-        state.queue.retain(|queued_hash| queued_hash != &hash);
         let persisted_analyzing = matches!(
             persisted.entries.get(&hash),
             Some(QueuedStatus::Analyzing(_))
         );
-        if active || persisted_analyzing {
-            state.cancelled.insert(hash.clone());
-        }
         if persisted_analyzing || (active && has_active_row) {
             interrupt = true;
         }
-        affected.push(hash);
+        affected.push((hash, active || persisted_analyzing));
     }
-    drop(state);
 
-    for hash in &affected {
-        remove_from_queue(hash);
+    let hashes: Vec<_> = affected.iter().map(|(hash, _)| hash.as_str()).collect();
+    library_db::analysis_queue_delete_rows(&hashes).map_err(|error| error.to_string())?;
+    let removed: HashSet<_> = hashes.into_iter().collect();
+    state.queue.retain(|hash| !removed.contains(hash.as_str()));
+    for (hash, active) in &affected {
+        if *active {
+            state.cancelled.insert(hash.clone());
+        }
         lock_unpoisoned(&STEMS_ONLY).remove(hash);
     }
 
@@ -639,9 +733,9 @@ pub fn delete_cache(target: SongTarget) -> Result<usize, String> {
     )
 }
 
-fn reanalyze_transcript_one(file_hash: &str, language: Option<String>) -> bool {
+fn reanalyze_transcript_one(file_hash: &str, language: Option<String>) -> Result<bool, String> {
     if is_usdx_song(file_hash) {
-        return false;
+        return Ok(false);
     }
 
     if let Some(lang) = language
@@ -651,38 +745,38 @@ fn reanalyze_transcript_one(file_hash: &str, language: Option<String>) -> bool {
         config.set_language_override(file_hash.to_string(), lang);
         config.save();
     }
-    reanalyze(file_hash, false);
-    true
+    reanalyze(file_hash, false)?;
+    Ok(true)
 }
 
 pub fn reanalyze_transcript(target: SongTarget, language: Option<String>) -> Result<usize, String> {
     run_for_target(
         target,
         library_db::iter_file_hashes_filtered_realignable,
-        |hash| Ok(reanalyze_transcript_one(hash, language.clone())),
+        |hash| reanalyze_transcript_one(hash, language.clone()),
     )
 }
 
-fn reanalyze_full_one(file_hash: &str) -> bool {
+fn reanalyze_full_one(file_hash: &str) -> Result<bool, String> {
     if is_usdx_song(file_hash) {
-        return false;
+        return Ok(false);
     }
 
-    reanalyze(file_hash, true);
-    true
+    reanalyze(file_hash, true)?;
+    Ok(true)
 }
 
 pub fn reanalyze_full(target: SongTarget) -> Result<usize, String> {
     run_for_target(
         target,
         library_db::iter_file_hashes_filtered_full_reanalyzable,
-        |hash| Ok(reanalyze_full_one(hash)),
+        reanalyze_full_one,
     )
 }
 
-fn realign_one(file_hash: &str, language: Option<String>) -> bool {
+fn realign_one(file_hash: &str, language: Option<String>) -> Result<bool, String> {
     if is_usdx_song(file_hash) {
-        return false;
+        return Ok(false);
     }
 
     if let Some(lang) = language.as_ref().filter(|lang| !lang.is_empty()) {
@@ -707,15 +801,15 @@ fn realign_one(file_hash: &str, language: Option<String>) -> bool {
         None,
         None,
     );
-    enqueue_one(file_hash);
-    true
+    enqueue_one(file_hash)?;
+    Ok(true)
 }
 
 pub fn realign(target: SongTarget, language: Option<String>) -> Result<usize, String> {
     run_for_target(
         target,
         library_db::iter_file_hashes_filtered_realignable,
-        |hash| Ok(realign_one(hash, language.clone())),
+        |hash| realign_one(hash, language.clone()),
     )
 }
 
@@ -755,7 +849,7 @@ pub fn refresh_metadata(target: SongTarget) -> Result<usize, String> {
     )
 }
 
-fn reanalyze(file_hash: &str, full: bool) {
+fn reanalyze(file_hash: &str, full: bool) -> Result<(), String> {
     let cache = CacheDir::new();
     if full {
         cache.delete_song_cache(file_hash);
@@ -765,7 +859,7 @@ fn reanalyze(file_hash: &str, full: bool) {
         let _ = std::fs::remove_file(cache.lyrics_path(file_hash));
     }
     update_song_analyzed(file_hash, false, None, None, None, None);
-    enqueue_one(file_hash);
+    enqueue_one(file_hash)
 }
 
 fn materialize_lyrics_from_transcript(cache: &CacheDir, file_hash: &str) {
@@ -836,6 +930,7 @@ fn spawn_worker() {
 
             let mut state = lock_unpoisoned(&ANALYZER);
             state.active_hash = None;
+            state.cancelled.clear();
         }
     });
 }
@@ -878,13 +973,52 @@ fn resolve_lyrics_plan(
         return Ok(LyricsPlan::CachedText(cached_path));
     }
 
-    fetch_lrclib_timed_lyrics(song).map(LyricsPlan::Timed)
+    fetch_lrclib_timed_lyrics(song, &|| wait_for_lrclib(&song.file_hash)).map(LyricsPlan::Timed)
+}
+
+fn wait_for_lrclib(file_hash: &str) -> Result<(), String> {
+    if let Some(delay) = lrclib_retry_delay() {
+        info!(
+            seconds = delay.as_secs().saturating_add(1),
+            "[analyzer] Waiting for LRCLIB rate-limit cooldown; remaining songs stay queued"
+        );
+    }
+    loop {
+        if lock_unpoisoned(&ANALYZER).cancelled.contains(file_hash) {
+            return Err("Analysis cancelled".into());
+        }
+        let Some(delay) = lrclib_retry_delay() else {
+            return Ok(());
+        };
+        std::thread::sleep(delay.min(Duration::from_millis(100)));
+    }
 }
 
 fn process_song(initial_hash: &str, remaining: usize, cache: &CacheDir) {
-    let Some(song) = library_db::load_song_by_hash(initial_hash).ok().flatten() else {
+    let song = match library_db::load_song_by_hash(initial_hash) {
+        Ok(song) => song,
+        Err(error) => {
+            if !discard_cancelled_job(initial_hash, initial_hash) {
+                warn!(%error, "[analyzer] Could not load queued song");
+                update_queue_status(
+                    initial_hash,
+                    QueuedStatus::Failed(
+                        "Could not load song from the library. Retry analysis.".into(),
+                    ),
+                );
+            }
+            return;
+        }
+    };
+    let Some(song) = song else {
         if !discard_cancelled_job(initial_hash, initial_hash) {
             warn!("[analyzer] Song with hash {initial_hash} not found in store, skipping");
+            update_queue_status(
+                initial_hash,
+                QueuedStatus::Failed(
+                    "Song is no longer in the library. Rescan before retrying.".into(),
+                ),
+            );
         }
         return;
     };
@@ -1054,9 +1188,14 @@ fn process_song(initial_hash: &str, remaining: usize, cache: &CacheDir) {
         };
         match send_and_monitor(server, &json_str, Some(file_hash), Some(initial_hash)) {
             Ok(SongResult::Done) => {
-                let mut state = lock_unpoisoned(&ANALYZER);
+                if cache.transcript_exists(file_hash)
+                    && let Err(error) = crate::playback::ensure_playable_source_video(file_hash)
+                {
+                    warn!("[analyzer] Playable source-video conversion failed: {error}");
+                }
+                let state = lock_unpoisoned(&ANALYZER);
                 let cancelled =
-                    state.cancelled.remove(initial_hash) | state.cancelled.remove(file_hash);
+                    state.cancelled.contains(initial_hash) || state.cancelled.contains(file_hash);
                 if cancelled {
                     drop(state);
                     remove_from_queue(initial_hash);
@@ -1065,7 +1204,7 @@ fn process_song(initial_hash: &str, remaining: usize, cache: &CacheDir) {
                     lock_unpoisoned(&STEMS_ONLY).remove(file_hash);
                     *guard = None;
                 } else {
-                    finalize_song(file_hash, cache);
+                    finalize_song(file_hash, cache, &state);
                 }
                 return;
             }
@@ -1130,11 +1269,8 @@ fn process_song(initial_hash: &str, remaining: usize, cache: &CacheDir) {
     }
 }
 
-fn finalize_song(file_hash: &str, cache: &CacheDir) {
+fn finalize_song(file_hash: &str, cache: &CacheDir, state: &AnalyzerState) {
     if cache.transcript_exists(file_hash) {
-        if let Err(err) = crate::playback::ensure_playable_source_video(file_hash) {
-            warn!("[analyzer] Playable source-video conversion failed for {file_hash}: {err}");
-        }
         let meta = read_transcript_meta(cache, file_hash);
         remove_from_queue(file_hash);
         update_song_analyzed(
@@ -1147,9 +1283,10 @@ fn finalize_song(file_hash: &str, cache: &CacheDir) {
         );
         info!("[analyzer] Analysis complete for {file_hash}");
     } else {
-        update_queue_status(
+        persist_queue_status(
             file_hash,
             QueuedStatus::Failed("Transcript file not found after analysis".into()),
+            state,
         );
     }
 }
@@ -1344,6 +1481,7 @@ enum SongResult {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ServerEvent {
+    Heartbeat,
     Progress {
         pct: u32,
         #[serde(default)]
@@ -1370,7 +1508,10 @@ fn send_and_monitor(
     server.writer.write_all(b"\n")?;
     server.writer.flush()?;
 
-    let mut line_buf = String::new();
+    let mut line_buf = Vec::new();
+    let mut last_response = Instant::now();
+    let mut last_progress = Instant::now();
+    let mut last_wait_log = Instant::now();
     loop {
         if progress_hash.is_some_and(|hash| {
             let state = lock_unpoisoned(&ANALYZER);
@@ -1380,11 +1521,31 @@ fn send_and_monitor(
             return Ok(SongResult::Cancelled);
         }
 
-        line_buf.clear();
-        let bytes = server.reader.read_line(&mut line_buf)?;
+        if last_progress.elapsed() > server.stall_timeout {
+            return Err("Analyzer stage stopped making progress. Restarting the worker.".into());
+        }
+        let available = MAX_EVENT_BYTES.saturating_sub(line_buf.len());
+        let bytes = match Read::take(&mut server.reader, available as u64)
+            .read_until(b'\n', &mut line_buf)
+        {
+            Ok(bytes) => bytes,
+            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                if last_response.elapsed() > RESPONSE_TIMEOUT {
+                    return Err("Analyzer stopped responding. Restarting the worker.".into());
+                }
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
 
         if bytes == 0 {
             return Err("Server closed connection unexpectedly".into());
+        }
+        if line_buf.len() >= MAX_EVENT_BYTES {
+            return Err("Analyzer event exceeded the protocol size limit".into());
+        }
+        if !line_buf.ends_with(b"\n") {
+            return Err("Analyzer connection ended during an event".into());
         }
 
         if progress_hash.is_some_and(|hash| {
@@ -1395,21 +1556,39 @@ fn send_and_monitor(
             return Ok(SongResult::Cancelled);
         }
 
-        let line = line_buf.trim();
+        let line = std::str::from_utf8(&line_buf)
+            .map_err(|_| NightingaleError::Other("Analyzer sent invalid UTF-8".into()))?
+            .trim();
         if line.is_empty() {
+            line_buf.clear();
             continue;
         }
 
         let event: ServerEvent = match serde_json::from_str(line) {
             Ok(ev) => ev,
             Err(e) => {
-                warn!("[analyzer] Skipping unparseable event: {e}; line={line:?}");
-                continue;
+                return Err(NightingaleError::Other(format!(
+                    "Invalid analyzer event: {e}"
+                )));
             }
         };
+        line_buf.clear();
+        last_response = Instant::now();
 
         match event {
+            ServerEvent::Heartbeat => {
+                if last_progress.elapsed() >= Duration::from_secs(60)
+                    && last_wait_log.elapsed() >= Duration::from_secs(60)
+                {
+                    info!(
+                        idle_seconds = last_progress.elapsed().as_secs(),
+                        "[analyzer] Worker alive; current stage is still running"
+                    );
+                    last_wait_log = Instant::now();
+                }
+            }
             ServerEvent::Progress { pct, msg } => {
+                last_progress = Instant::now();
                 if !msg.is_empty() {
                     info!("[analyzer] progress {pct}% {msg}");
                 }
@@ -1431,7 +1610,7 @@ fn send_and_monitor(
                 return Ok(SongResult::Error(msg));
             }
             ServerEvent::Unknown => {
-                warn!("[analyzer] Ignoring unknown event: {line}");
+                warn!("[analyzer] Ignoring unknown event type");
             }
         }
     }

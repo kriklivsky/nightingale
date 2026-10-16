@@ -20,7 +20,7 @@ function resetPersistedScroll(
   replaceRefValue(scrollTopRef, 0);
 }
 
-export function usePersistentScroll(slot: PersistentScrollSlot) {
+export function usePersistentScroll(slot: PersistentScrollSlot, restoreOnMount = true) {
   const ctx = useMenuFocus();
   const scrollRef = slot === 'sidebar' ? ctx.sidebarScrollRef : ctx.scrollRef;
   const scrollTopRef = slot === 'sidebar' ? ctx.sidebarScrollTopRef : ctx.scrollTopRef;
@@ -50,6 +50,9 @@ export function usePersistentScroll(slot: PersistentScrollSlot) {
   // Done in a layout effect rather than inside the ref callback because the
   // callback can fire before children's final layout in some commit orderings.
   useLayoutEffect(() => {
+    if (!restoreOnMount) {
+      return undefined;
+    }
     const el = scrollRef.current;
     const target = scrollTopRef.current;
     if (!el || target <= 0) {
@@ -64,7 +67,7 @@ export function usePersistentScroll(slot: PersistentScrollSlot) {
       }
     });
     return () => cancelAnimationFrame(raf);
-  }, [scrollRef, scrollTopRef]);
+  }, [restoreOnMount, scrollRef, scrollTopRef]);
 
   const resetScroll = useCallback(
     () => resetPersistedScroll(scrollRef, scrollTopRef),

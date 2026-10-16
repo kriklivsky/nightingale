@@ -35,6 +35,7 @@ export type PlaybackTransportState = {
   isFinished: boolean;
   paused: boolean;
   duration: number;
+  singableDuration: number;
   guideVolume: number;
   guideAvailable: boolean;
   outputVolume: number;
@@ -159,6 +160,7 @@ export function PlaybackTransportProvider({
       isFinished: audio.isFinished,
       paused,
       duration: audio.duration,
+      singableDuration: audio.singableDuration,
       guideVolume: audio.guideVolume,
       guideAvailable: audio.guideAvailable,
       outputVolume: audio.outputVolume,
@@ -169,6 +171,7 @@ export function PlaybackTransportProvider({
       audio.isPlaying,
       audio.isFinished,
       audio.duration,
+      audio.singableDuration,
       audio.guideVolume,
       audio.guideAvailable,
       audio.outputVolume,

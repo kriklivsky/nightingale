@@ -22,6 +22,7 @@ const UVR_BACKEND_PY: &str = include_str!("../analyzer/uvr_backend.py");
 const FILES: &[(&str, &str)] = &[
     ("analyze.py", ANALYZE_PY),
     ("server.py", SERVER_PY),
+    ("scheduling.py", include_str!("../analyzer/scheduling.py")),
     ("pipeline.py", PIPELINE_PY),
     ("lyricsfile.py", LYRICSFILE_PY),
     ("key_detect.py", KEY_DETECT_PY),
@@ -38,6 +39,11 @@ const FILES: &[(&str, &str)] = &[
     ("gpu.py", GPU_PY),
     ("cjk.py", CJK_PY),
     ("uvr_backend.py", UVR_BACKEND_PY),
+    (
+        "youtube_video.py",
+        include_str!("../analyzer/youtube_video.py"),
+    ),
+    ("video_sync.py", include_str!("../analyzer/video_sync.py")),
 ];
 
 pub(crate) fn write_scripts(dir: &Path) -> std::io::Result<()> {

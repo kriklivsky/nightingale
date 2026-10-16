@@ -15,6 +15,7 @@ use crate::library_model::{
 
 use super::connection::with_conn;
 use super::migrations::{is_song_migration_in_progress, song_migration_done, song_migration_total};
+use super::search::{search_words_from_query, songs_where_like_words};
 use super::songs::load_song_from_payload_column;
 
 pub(crate) fn load_meta_sql() -> rusqlite::Result<SongsMeta> {
@@ -78,50 +79,6 @@ pub(crate) fn load_meta_sql() -> rusqlite::Result<SongsMeta> {
             analyzed_count: analyzed_count as usize,
         })
     })
-}
-
-fn escape_like_pattern(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '%' | '_' | '\\' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            c => out.push(c),
-        }
-    }
-    out
-}
-
-fn search_words_from_query(q: &str) -> Option<Vec<String>> {
-    let t = q.trim();
-    if t.is_empty() {
-        return None;
-    }
-    let words: Vec<String> = t
-        .split_whitespace()
-        .map(escape_like_pattern)
-        .filter(|w| !w.is_empty())
-        .collect();
-    if words.is_empty() { None } else { Some(words) }
-}
-
-fn songs_where_like_words(words: &[String]) -> (String, Vec<String>) {
-    let mut flat = Vec::new();
-    let mut parts = Vec::new();
-    for w in words {
-        parts.push(
-            "(s.title LIKE ('%' || ? || '%') ESCAPE '\\' OR \
-             s.artist LIKE ('%' || ? || '%') ESCAPE '\\' OR \
-             s.album LIKE ('%' || ? || '%') ESCAPE '\\' OR \
-             s.path LIKE ('%' || ? || '%') ESCAPE '\\')",
-        );
-        for _ in 0..4 {
-            flat.push(w.clone());
-        }
-    }
-    (parts.join(" AND "), flat)
 }
 
 fn append_structural_filters(
@@ -209,6 +166,10 @@ fn append_structural_filters(
         let (where_sql, mut search_binds) = songs_where_like_words(&words);
         where_parts.push(format!("({where_sql})"));
         bind_strings.append(&mut search_binds);
+    }
+    if let Some(folder) = filters.folder.as_deref().filter(|value| !value.is_empty()) {
+        where_parts.push("substr(s.path, 1, length(?)) = ?".to_string());
+        bind_strings.extend([folder.to_string(), folder.to_string()]);
     }
 }
 
@@ -442,6 +403,17 @@ pub(crate) fn iter_file_hashes_filtered_not_analyzed(
     iter_file_hashes_filtered(filters, &["s.is_analyzed = 0"])
 }
 
+pub(crate) fn iter_file_hashes_reconcilable() -> rusqlite::Result<Vec<String>> {
+    iter_file_hashes_filtered(
+        &LibraryMenuFilters::default(),
+        &[
+            "s.is_analyzed = 0",
+            "json_extract(s.payload, '$.usdx') IS NULL",
+            "NOT EXISTS (SELECT 1 FROM analysis_queue aq WHERE aq.file_hash = s.file_hash AND aq.status IN ('queued', 'analyzing'))",
+        ],
+    )
+}
+
 pub(crate) fn iter_file_hashes_filtered_analysis_busy(
     filters: &LibraryMenuFilters,
 ) -> rusqlite::Result<Vec<String>> {
@@ -532,6 +504,7 @@ pub(crate) fn query_library_menu_items() -> rusqlite::Result<LibraryMenuItems> {
 
         let hot = vec![
             LibraryMenuItem {
+                depth: None,
                 value: "all".into(),
                 label: "All".into(),
                 analysed_count: analysed_total as u64,
@@ -540,6 +513,7 @@ pub(crate) fn query_library_menu_items() -> rusqlite::Result<LibraryMenuItems> {
                 count: total as u64,
             },
             LibraryMenuItem {
+                depth: None,
                 value: "queued".into(),
                 label: "Queued".into(),
                 analysed_count: 0,
@@ -548,6 +522,7 @@ pub(crate) fn query_library_menu_items() -> rusqlite::Result<LibraryMenuItems> {
                 count: (queued_total + analysing_total) as u64,
             },
             LibraryMenuItem {
+                depth: None,
                 value: "analysed".into(),
                 label: "Analysed".into(),
                 analysed_count: analysed_total as u64,
@@ -556,6 +531,7 @@ pub(crate) fn query_library_menu_items() -> rusqlite::Result<LibraryMenuItems> {
                 count: analysed_total as u64,
             },
             LibraryMenuItem {
+                depth: None,
                 value: "videos".into(),
                 label: "Videos".into(),
                 analysed_count: video_analysed as u64,
@@ -564,6 +540,7 @@ pub(crate) fn query_library_menu_items() -> rusqlite::Result<LibraryMenuItems> {
                 count: video_total as u64,
             },
             LibraryMenuItem {
+                depth: None,
                 value: "usdx".into(),
                 label: "USDX".into(),
                 analysed_count: usdx_analysed as u64,
@@ -607,6 +584,7 @@ pub(crate) fn query_library_menu_items() -> rusqlite::Result<LibraryMenuItems> {
 
         let no_metadata = vec![
             LibraryMenuItem {
+                depth: None,
                 value: "unknown_artist".into(),
                 label: "Unknown Artist".into(),
                 analysed_count: unknown_artist_an as u64,
@@ -615,6 +593,7 @@ pub(crate) fn query_library_menu_items() -> rusqlite::Result<LibraryMenuItems> {
                 count: unknown_artist_cnt as u64,
             },
             LibraryMenuItem {
+                depth: None,
                 value: "unknown_album".into(),
                 label: "Unknown Album".into(),
                 analysed_count: unknown_album_an as u64,
@@ -641,6 +620,7 @@ pub(crate) fn query_library_menu_items() -> rusqlite::Result<LibraryMenuItems> {
                 let queued: i64 = r.get(3)?;
                 let analysing: i64 = r.get(4)?;
                 Ok(LibraryMenuItem {
+                    depth: None,
                     value: artist.clone(),
                     label: artist,
                     analysed_count: analysed as u64,
@@ -669,6 +649,7 @@ pub(crate) fn query_library_menu_items() -> rusqlite::Result<LibraryMenuItems> {
                 let queued: i64 = r.get(4)?;
                 let analysing: i64 = r.get(5)?;
                 Ok(LibraryMenuItem {
+                    depth: None,
                     value: format!("{artist}\x1f{album}"),
                     label: format!("{album} — {artist}"),
                     analysed_count: analysed as u64,
@@ -694,6 +675,7 @@ pub(crate) fn query_library_menu_items() -> rusqlite::Result<LibraryMenuItems> {
         let playlists: Vec<LibraryMenuItem> = stmt
             .query_map([], |r| {
                 Ok(LibraryMenuItem {
+                    depth: None,
                     value: r.get(0)?,
                     label: r.get(1)?,
                     count: r.get::<_, i64>(2)? as u64,
@@ -710,6 +692,7 @@ pub(crate) fn query_library_menu_items() -> rusqlite::Result<LibraryMenuItems> {
             artists,
             albums,
             playlists,
+            folders: super::folders::load(c)?,
         })
     })
 }

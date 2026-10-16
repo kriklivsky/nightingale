@@ -10,6 +10,7 @@ readonly KIND_FILE="/run/tvbox-active.kind"
 readonly SESSION_PID="$$"
 
 display_pid=""
+compositor_pid=""
 watcher_pid=""
 child_pid=""
 display_backend=""
@@ -40,11 +41,35 @@ stop_watcher() {
 }
 
 stop_display() {
+    stop_compositor
     if [[ -n "${display_pid}" ]] && kill -0 "${display_pid}" 2>/dev/null; then
         kill -TERM "${display_pid}" 2>/dev/null || true
         wait "${display_pid}" 2>/dev/null || true
     fi
     display_pid=""
+}
+
+stop_compositor() {
+    if [[ -n "${compositor_pid}" ]] && kill -0 "${compositor_pid}" 2>/dev/null; then
+        kill -TERM "${compositor_pid}" 2>/dev/null || true
+        wait "${compositor_pid}" 2>/dev/null || true
+    fi
+    compositor_pid=""
+}
+
+start_compositor() {
+    if ! command -v picom >/dev/null 2>&1; then
+        logger -t tvbox-session "picom is unavailable; X11 playback has no compositor VSync"
+        return 0
+    fi
+
+    runuser -u "${TVBOX_USER}" -- env \
+        HOME="${TVBOX_HOME}" \
+        DISPLAY="${DISPLAY_NUMBER}" \
+        XAUTHORITY="${XAUTHORITY_FILE}" \
+        XDG_RUNTIME_DIR="/run/user/$(id -u "${TVBOX_USER}")" \
+        picom --config /dev/null --backend xrender --vsync --log-level warn &
+    compositor_pid="$!"
 }
 
 cleanup() {
@@ -111,15 +136,15 @@ configure_4k_mode() {
             in_output && $1 == "3840x2160" { print; exit }
         ')"
 
-    if [[ "${mode_line}" =~ (^|[[:space:]])(30(\.0+)?|29\.9[0-9])[\*\+]*($|[[:space:]]) ]]; then
+    if [[ "${mode_line}" =~ (^|[[:space:]])60(\.0+)?[\*\+]*($|[[:space:]]) ]]; then
         if DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" \
-            xrandr --output "${output}" --mode 3840x2160 --rate 30; then
-            status_message="HDMI: 3840×2160@30; Moonlight: HEVC, 80 Mbps"
+            xrandr --output "${output}" --mode 3840x2160 --rate 60; then
+            status_message="HDMI: 3840×2160@60; Moonlight: HEVC, 80 Mbps"
         else
-            status_message="EDID содержит 4K30, но Xorg не смог включить этот режим"
+            status_message="EDID содержит 4K60, но Xorg не смог включить этот режим"
         fi
     else
-        status_message="EDID не предлагает 3840×2160@30; Moonlight будет масштабирован"
+        status_message="EDID не предлагает 3840×2160@60; Moonlight будет масштабирован"
     fi
 }
 
@@ -152,6 +177,7 @@ start_display() {
             DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" xset -dpms
             configure_4k_mode
             detect_display_scale
+            start_compositor
             return 0
         fi
         stop_display
@@ -169,7 +195,7 @@ start_display() {
 }
 
 watch_connector() {
-    local initial="$1" current_mode
+    local initial="$1" current_mode display_state changed_samples=0
     while sleep 2; do
         if [[ "$(connector_state)" != "${initial}" ]]; then
             if [[ "${initial}" == "connected" &&
@@ -177,17 +203,25 @@ watch_connector() {
                   -n "${display_pid}" ]] && kill -0 "${display_pid}" 2>/dev/null; then
                 continue
             fi
+            (( changed_samples += 1 ))
+            if (( changed_samples < 3 )); then
+                continue
+            fi
             kill -USR1 "${SESSION_PID}"
             return
         fi
+        changed_samples=0
 
         # Some HDMI repeaters briefly renegotiate the link when the TV wakes
-        # and leave Xorg at 1080p even though 4K30 remains in the EDID. Restore
-        # the requested mode without tearing down the running application.
+        # and leave Xorg at a different mode. Restore the requested mode
+        # without tearing down the running application.
         if [[ "${initial}" == "connected" ]]; then
-            current_mode="$(
+            display_state="$(
                 DISPLAY="${DISPLAY_NUMBER}" XAUTHORITY="${XAUTHORITY_FILE}" \
-                    xrandr --current 2>/dev/null | awk '
+                    xrandr --current 2>/dev/null || true
+            )"
+            current_mode="$(
+                printf '%s\n' "${display_state}" | awk '
                         $2 == "connected" {
                             for (field = 3; field <= NF; field++) {
                                 if ($field ~ /^[0-9]+x[0-9]+\+[0-9]+\+[0-9]+/) {
@@ -199,9 +233,10 @@ watch_connector() {
                         }
                     '
             )"
-            if [[ -n "${current_mode}" && "${current_mode}" != "3840x2160" ]]; then
+            if [[ -n "${current_mode}" ]] &&
+                ! grep -Eq '^[[:space:]]*3840x2160[[:space:]].*60\.00\*' <<<"${display_state}"; then
                 logger -t tvbox-session \
-                    "HDMI mode changed to ${current_mode}; restoring 3840x2160@30"
+                    "HDMI mode changed to ${current_mode}; restoring 3840x2160@60"
                 configure_4k_mode
                 case "$(cat "${KIND_FILE}" 2>/dev/null || true)" in
                 launcher) fit_window_to_display '^Orange Pi TV$' || true ;;

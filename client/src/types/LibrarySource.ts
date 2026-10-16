@@ -5,9 +5,9 @@
  * `config.json` and consumed by both the scanner and the analyzer.
  */
 export type LibrarySource =
-  | { kind: "folder"; path: string }
+  | { kind: 'folder'; path: string }
   | {
-      kind: "jellyfin";
+      kind: 'jellyfin';
       base_url: string;
       user_id: string;
       username: string;
@@ -31,7 +31,7 @@ export type LibrarySource =
       library_ids: Array<string>;
     }
   | {
-      kind: "navidrome";
+      kind: 'navidrome';
       base_url: string;
       username: string;
       /**
@@ -43,7 +43,7 @@ export type LibrarySource =
       password: string;
     }
   | {
-      kind: "plex";
+      kind: 'plex';
       base_url: string;
       server_name: string;
       machine_id: string;

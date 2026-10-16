@@ -1,8 +1,10 @@
+mod backgrounds;
 mod bootstrap;
 mod commands;
 mod events;
 mod jukebox;
 mod media;
+mod song_video;
 mod state;
 mod static_files;
 mod ws;
@@ -20,7 +22,7 @@ use crate::state::AppState;
 #[command(name = "server", about = "Nightingale self-hosted web server.")]
 struct Args {
     /// Address to bind the HTTP/WS listener to.
-    #[arg(long, env = "NIGHTINGALE_BIND", default_value = "0.0.0.0:8080")]
+    #[arg(long, env = "NIGHTINGALE_BIND", default_value = "127.0.0.1:8080")]
     bind: SocketAddr,
 
     /// Override the data folder. Equivalent to `NIGHTINGALE_DATA_PATH=...`.
@@ -62,6 +64,10 @@ async fn main() -> Result<(), String> {
         )
         .init();
 
+    if !args.bind.ip().is_loopback() {
+        tracing::warn!("The server API has no general authentication. Restrict network access or use an authenticated reverse proxy.");
+    }
+
     if let Err(e) = app_core::startup() {
         tracing::error!("startup failed: {e}");
         std::process::exit(1);
@@ -75,6 +81,12 @@ async fn main() -> Result<(), String> {
 
     let app = Router::new()
         .route("/api/bootstrap", get(bootstrap::handle))
+        .route(
+            "/api/backgrounds/upload",
+            post(backgrounds::handle_upload).layer(axum::extract::DefaultBodyLimit::max(
+                app_core::MAX_BACKGROUND_UPLOAD_BYTES as usize + 64 * 1024,
+            )),
+        )
         .route("/api/cmd/:name", post(commands::handle_cmd))
         .route("/api/asset", get(media::handle_asset))
         .route("/media/:hash/:kind", get(media::handle_hashed))

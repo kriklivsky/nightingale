@@ -30,10 +30,13 @@ class WebChannel {
   onmessage: ((message: unknown) => void) | null = null;
 }
 
-const apiCall = async (name: string, args: InvokeArgs): Promise<unknown> => {
+const apiCall = async (name: string, args: InvokeArgs, token?: string): Promise<unknown> => {
   const res = await fetch(`/api/cmd/${name}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token === undefined || token === '' ? {} : { Authorization: `Bearer ${token}` }),
+    },
     body: JSON.stringify(args ?? {}),
   });
 
@@ -187,6 +190,14 @@ const webListen = async (event: string, cb: EventCallback<unknown>): Promise<Unl
 export function invoke<T>(name: string, args?: InvokeArgs): Promise<T>;
 export function invoke(name: string, args?: InvokeArgs): Promise<unknown> {
   return isTauri ? tauriInvoke(name, args) : apiCall(name, args);
+}
+
+export function invokeAuthenticated(
+  name: string,
+  args: InvokeArgs,
+  token: string,
+): Promise<unknown> {
+  return isTauri ? tauriInvoke(name, args) : apiCall(name, args, token);
 }
 
 export function listen<T>(event: string, cb: EventCallback<T>): Promise<UnlistenFn>;

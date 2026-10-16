@@ -6,7 +6,7 @@ use app_core::{
 };
 use axum::{
     extract::{Path as AxumPath, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -41,9 +41,22 @@ pub(crate) type CmdResult = Result<Value, ApiError>;
 pub(crate) async fn handle_cmd(
     State(state): State<AppState>,
     AxumPath(name): AxumPath<String>,
-    body: Option<Json<Value>>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
-    let payload = body.map(|Json(v)| v).unwrap_or(Value::Null);
+    if matches!(
+        name.as_str(),
+        "get_song_video"
+            | "search_song_videos"
+            | "download_song_video"
+            | "set_song_video_offset"
+            | "remove_song_video"
+    ) {
+        if name != "get_song_video" {
+            crate::song_video::authorize(&headers)?;
+        }
+        return crate::song_video::dispatch(&name, payload).await.map(Json);
+    }
     let value = dispatch(state, &name, payload).await?;
     Ok(Json(value))
 }
@@ -57,23 +70,69 @@ async fn dispatch(state: AppState, name: &str, payload: Value) -> CmdResult {
 
         // ── Config ───────────────────────────────────────────────────────
         "load_config" => Ok(serde_json::to_value(AppConfig::load()).map_err(serde_err)?),
+        "add_custom_background_url" => {
+            #[derive(Deserialize)]
+            struct Args {
+                name: String,
+                url: String,
+            }
+            let args: Args = deserialize(payload)?;
+            let config =
+                read_library(move || app_core::add_custom_background_url(args.name, args.url))
+                    .await?
+                    .map_err(ApiError::bad_request)?;
+            serde_json::to_value(config).map_err(serde_err)
+        }
+        "remove_custom_background" => {
+            #[derive(Deserialize)]
+            struct Args {
+                id: String,
+            }
+            let args: Args = deserialize(payload)?;
+            let config = read_library(move || app_core::remove_custom_background(&args.id))
+                .await?
+                .map_err(ApiError::bad_request)?;
+            serde_json::to_value(config).map_err(serde_err)
+        }
+        "resolve_custom_background_path" | "load_custom_background_shader" => {
+            #[derive(Deserialize)]
+            struct Args {
+                id: String,
+            }
+            let args: Args = deserialize(payload)?;
+            let shader = name == "load_custom_background_shader";
+            let value = read_library(move || {
+                if shader {
+                    app_core::load_custom_background_shader(&args.id)
+                } else {
+                    app_core::resolve_custom_background_path(&args.id)
+                }
+            })
+            .await?
+            .map_err(ApiError::bad_request)?;
+            Ok(Value::String(value))
+        }
         "save_config" => save_config_cmd(payload),
 
         // ── Cache ────────────────────────────────────────────────────────
         "calculate_cache_stats" => {
-            Ok(serde_json::to_value(CacheStats::calculate()).map_err(serde_err)?)
+            let stats = read_library(CacheStats::calculate).await?;
+            Ok(serde_json::to_value(stats).map_err(serde_err)?)
         }
         "clear_videos_command" => {
-            app_core::clear_videos();
+            read_library(app_core::clear_videos).await?;
             Ok(Value::Null)
         }
         "clear_models_command" => {
-            app_core::clear_models();
+            read_library(app_core::clear_models).await?;
             Ok(Value::Null)
         }
         "clear_all" => {
-            app_core::clear_models();
-            app_core::clear_videos();
+            read_library(|| {
+                app_core::clear_models();
+                app_core::clear_videos();
+            })
+            .await?;
             Ok(Value::Null)
         }
 
@@ -103,10 +162,24 @@ async fn dispatch(state: AppState, name: &str, payload: Value) -> CmdResult {
             struct Args {
                 song_hash: String,
                 score: u32,
+                profile: Option<String>,
             }
             let args: Args = deserialize(payload)?;
             let mut store = ProfileStore::load();
-            store.add_score(&args.song_hash, args.score);
+            store.add_score(&args.song_hash, args.score, args.profile.as_deref());
+            Ok(Value::Null)
+        }
+        "add_scores" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Args {
+                song_hash: String,
+                scores: Vec<(String, u32)>,
+            }
+            let args: Args = deserialize(payload)?;
+            read_library(move || ProfileStore::load().add_scores(&args.song_hash, &args.scores))
+                .await?
+                .map_err(ApiError::bad_request)?;
             Ok(Value::Null)
         }
 
@@ -144,6 +217,21 @@ async fn dispatch(state: AppState, name: &str, payload: Value) -> CmdResult {
             events.emit("playback-queue-changed", &entries);
             Ok(serde_json::to_value(entries).map_err(serde_err)?)
         }
+        "move_playback_queue_entry" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Args {
+                id: String,
+                target_index: usize,
+            }
+            let args: Args = deserialize(payload)?;
+            let entries = state
+                .playback_queue
+                .move_entry(&args.id, args.target_index)
+                .map_err(ApiError::bad_request)?;
+            events.emit("playback-queue-changed", &entries);
+            serde_json::to_value(entries).map_err(serde_err)
+        }
         "clear_playback_queue" => {
             let entries = state.playback_queue.clear().map_err(ApiError::internal)?;
             events.emit("playback-queue-changed", &entries);
@@ -173,6 +261,12 @@ async fn dispatch(state: AppState, name: &str, payload: Value) -> CmdResult {
         "trigger_scan" => {
             app_core::start_scan();
             Ok(Value::Null)
+        }
+        "reconcile_cache" => {
+            let summary = read_library(app_core::reconcile_cache)
+                .await?
+                .map_err(ApiError::internal)?;
+            serde_json::to_value(summary).map_err(serde_err)
         }
         "set_library_source" => {
             #[derive(Deserialize)]
@@ -288,7 +382,13 @@ async fn dispatch(state: AppState, name: &str, payload: Value) -> CmdResult {
                 params: LoadSongsParams,
             }
             let args: Args = deserialize(payload)?;
-            Ok(serde_json::to_value(SongsStore::load(&args.params)).map_err(serde_err)?)
+            let songs = read_library(move || SongsStore::load(&args.params))
+                .await?
+                .map_err(|error| {
+                    tracing::warn!(%error, "Library search failed");
+                    ApiError::internal("Could not load songs. Try again.")
+                })?;
+            serde_json::to_value(songs).map_err(serde_err)
         }
         "load_songs_by_hashes" => {
             #[derive(Deserialize)]
@@ -297,14 +397,17 @@ async fn dispatch(state: AppState, name: &str, payload: Value) -> CmdResult {
                 file_hashes: Vec<String>,
             }
             let args: Args = deserialize(payload)?;
-            Ok(
-                serde_json::to_value(SongsStore::load_by_hashes(&args.file_hashes))
-                    .map_err(serde_err)?,
-            )
+            let songs = read_library(move || SongsStore::load_by_hashes(&args.file_hashes)).await?;
+            serde_json::to_value(songs).map_err(serde_err)
         }
-        "load_songs_meta" => Ok(serde_json::to_value(SongsStore::load_meta()).map_err(serde_err)?),
+        "load_songs_meta" => {
+            let meta = read_library(SongsStore::load_meta).await?;
+            serde_json::to_value(meta).map_err(serde_err)
+        }
         "load_favorite_hashes" => {
-            let hashes = app_core::load_favorite_hashes().map_err(ApiError::internal)?;
+            let hashes = read_library(app_core::load_favorite_hashes)
+                .await?
+                .map_err(ApiError::internal)?;
             Ok(serde_json::to_value(hashes).map_err(serde_err)?)
         }
         "set_song_favorite" => {
@@ -324,10 +427,15 @@ async fn dispatch(state: AppState, name: &str, payload: Value) -> CmdResult {
             Ok(Value::Null)
         }
         "load_analysis_queue" => {
-            Ok(serde_json::to_value(AnalysisQueue::load()).map_err(serde_err)?)
+            let queue = read_library(AnalysisQueue::load).await?.map_err(|error| {
+                tracing::warn!(%error, "Could not load analysis queue");
+                ApiError::internal("Could not load analysis queue. Try again.")
+            })?;
+            serde_json::to_value(queue).map_err(serde_err)
         }
         "load_library_menu_items" => {
-            let items: LibraryMenuItems = app_core::load_library_menu_items()
+            let items: LibraryMenuItems = read_library(app_core::load_library_menu_items)
+                .await?
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             Ok(serde_json::to_value(items).map_err(serde_err)?)
         }
@@ -336,38 +444,57 @@ async fn dispatch(state: AppState, name: &str, payload: Value) -> CmdResult {
         "enqueue" => {
             let args: SongTargetArgs = deserialize(payload)?;
             Ok(Value::from(
-                app_core::enqueue(args.target).map_err(ApiError::internal)?,
+                tokio::task::spawn_blocking(move || app_core::enqueue(args.target))
+                    .await
+                    .map_err(blocking_task_err)?
+                    .map_err(ApiError::internal)?,
             ))
         }
         "cancel_analysis" => {
             let args: SongTargetArgs = deserialize(payload)?;
             Ok(Value::from(
-                app_core::cancel_analysis(args.target).map_err(ApiError::internal)?,
+                tokio::task::spawn_blocking(move || app_core::cancel_analysis(args.target))
+                    .await
+                    .map_err(blocking_task_err)?
+                    .map_err(ApiError::internal)?,
             ))
         }
         "delete_song_cache" => {
             let args: SongTargetArgs = deserialize(payload)?;
             Ok(Value::from(
-                app_core::delete_cache(args.target).map_err(ApiError::internal)?,
+                tokio::task::spawn_blocking(move || app_core::delete_cache(args.target))
+                    .await
+                    .map_err(blocking_task_err)?
+                    .map_err(ApiError::internal)?,
             ))
         }
         "reanalyze_transcript" => {
             let args: SongTargetLanguageArgs = deserialize(payload)?;
             Ok(Value::from(
-                app_core::reanalyze_transcript(args.target, args.language)
-                    .map_err(ApiError::internal)?,
+                tokio::task::spawn_blocking(move || {
+                    app_core::reanalyze_transcript(args.target, args.language)
+                })
+                .await
+                .map_err(blocking_task_err)?
+                .map_err(ApiError::internal)?,
             ))
         }
         "reanalyze_full" => {
             let args: SongTargetArgs = deserialize(payload)?;
             Ok(Value::from(
-                app_core::reanalyze_full(args.target).map_err(ApiError::internal)?,
+                tokio::task::spawn_blocking(move || app_core::reanalyze_full(args.target))
+                    .await
+                    .map_err(blocking_task_err)?
+                    .map_err(ApiError::internal)?,
             ))
         }
         "realign" => {
             let args: SongTargetLanguageArgs = deserialize(payload)?;
             Ok(Value::from(
-                app_core::realign(args.target, args.language).map_err(ApiError::internal)?,
+                tokio::task::spawn_blocking(move || app_core::realign(args.target, args.language))
+                    .await
+                    .map_err(blocking_task_err)?
+                    .map_err(ApiError::internal)?,
             ))
         }
         "reanalyze_force_transcribe" => {
@@ -392,6 +519,24 @@ async fn dispatch(state: AppState, name: &str, payload: Value) -> CmdResult {
         "load_lyrics" => {
             let args: FileHashArgs = deserialize(payload)?;
             Ok(serde_json::to_value(load_lyrics_file(&args.file_hash)).map_err(serde_err)?)
+        }
+        "load_sidecar_lrc" => {
+            let args: FileHashArgs = deserialize(payload)?;
+            let lyrics = read_library(move || app_core::load_sidecar_lrc(&args.file_hash)).await?;
+            serde_json::to_value(lyrics).map_err(serde_err)
+        }
+        "align_lrc_lyrics" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Args {
+                file_hash: String,
+                lrc_text: String,
+            }
+            let args: Args = deserialize(payload)?;
+            read_library(move || app_core::align_lrc_lyrics(&args.file_hash, &args.lrc_text))
+                .await?
+                .map_err(ApiError::bad_request)?;
+            Ok(Value::Null)
         }
         "search_lrclib_lyrics" => {
             let args: FileHashArgs = deserialize(payload)?;
@@ -450,9 +595,13 @@ async fn dispatch(state: AppState, name: &str, payload: Value) -> CmdResult {
         "ensure_mp3_stems" => ensure_mp3_stems_cmd(events, payload),
         "ensure_playable_source_video" => {
             let args: FileHashArgs = deserialize(payload)?;
-            let path = app_core::ensure_playable_source_video(&args.file_hash)
-                .ok()
-                .flatten();
+            let path = tokio::task::spawn_blocking(move || {
+                app_core::ensure_playable_source_video(&args.file_hash)
+                    .ok()
+                    .flatten()
+            })
+            .await
+            .map_err(blocking_task_err)?;
             Ok(serde_json::to_value(path).map_err(serde_err)?)
         }
         "fetch_pixabay_videos" => fetch_pixabay_videos_cmd(events, payload),
@@ -470,6 +619,16 @@ async fn dispatch(state: AppState, name: &str, payload: Value) -> CmdResult {
             format!("unknown command {name}"),
         )),
     }
+}
+
+async fn read_library<T, F>(operation: F) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(blocking_task_err)
 }
 
 fn serde_err(e: serde_json::Error) -> ApiError {
@@ -514,8 +673,11 @@ struct SaveConfigArgs {
 }
 
 fn save_config_cmd(payload: Value) -> CmdResult {
-    let SaveConfigArgs { config } = deserialize(payload)?;
-    let was_auto_analyze = AppConfig::load().auto_analyze();
+    let SaveConfigArgs { mut config } = deserialize(payload)?;
+    let current = AppConfig::load();
+    let was_auto_analyze = current.auto_analyze();
+    config.desktop_window = current.desktop_window;
+    config.playback_window = current.playback_window;
     config.save();
     if config.auto_analyze() && !was_auto_analyze {
         let _ = app_core::enqueue(SongTarget::Filter {

@@ -81,7 +81,7 @@ export function PlaybackPreview({
       </div>
 
       <div
-        className={`absolute left-1/2 z-20 w-[20.83%] -translate-x-1/2 rounded-[0.2cqh] border border-white/15 bg-black/45 p-[0.35cqh] ${
+        className={`absolute left-1/2 z-20 w-[18.75%] -translate-x-1/2 rounded-[0.7cqh] border border-white/20 bg-black/70 p-[0.75cqh] ${
           hudPosition === 'bottom' ? 'bottom-[1.1%]' : 'top-[1.1%]'
         }`}
         style={{
@@ -89,20 +89,21 @@ export function PlaybackPreview({
           transformOrigin: hudPosition === 'bottom' ? 'center bottom' : 'center top',
         }}
       >
-        <svg viewBox="0 0 400 44" className="block w-full" aria-hidden="true">
-          <path
-            d="M4 26 C45 12 70 14 105 24 S170 35 205 20 S270 8 310 22 S360 33 396 16"
-            fill="none"
-            stroke="rgb(128 179 255 / 0.65)"
-            strokeWidth="3"
-          />
-          <path
-            d="M4 31 C42 28 70 19 105 25 S165 39 207 24 S269 12 310 20 S360 28 396 14"
-            fill="none"
-            stroke="rgb(80 230 110 / 0.9)"
-            strokeWidth="4"
-          />
-        </svg>
+        <p className="text-center text-white/70" style={{ fontSize: '1.1cqh' }}>
+          Pitch · details after the song
+        </p>
+        <div className="relative mt-[1.1cqh] h-[0.75cqh] rounded-full bg-white/15">
+          <span className="absolute inset-y-0 left-5/12 w-1/6 bg-white/35" />
+          <span className="absolute -inset-y-[0.2cqh] left-1/2 w-[0.2cqh] bg-white" />
+        </div>
+        <div
+          className="mt-[0.75cqh] flex justify-between text-white/70"
+          style={{ fontSize: '1.1cqh' }}
+        >
+          <span>Low</span>
+          <span>Target</span>
+          <span>High</span>
+        </div>
       </div>
 
       <div

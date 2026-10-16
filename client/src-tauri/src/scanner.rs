@@ -13,6 +13,13 @@ pub(crate) fn trigger_scan() {
 }
 
 #[tauri::command]
+pub(crate) async fn reconcile_cache() -> Result<app_core::CacheReconcileSummary, String> {
+    tauri::async_runtime::spawn_blocking(app_core::reconcile_cache)
+        .await
+        .map_err(|error| format!("Cache reconciliation task failed: {error}"))?
+}
+
+#[tauri::command]
 pub(crate) fn set_library_source(source: LibrarySource) -> AppConfig {
     let mut config = AppConfig::load();
     config.library_source = Some(source);
@@ -88,23 +95,28 @@ pub(crate) fn plex_ping() -> PlexHealth {
 }
 
 #[tauri::command]
-pub(crate) fn load_songs(params: LoadSongsParams) -> SongsStore {
-    SongsStore::load(&params)
+pub(crate) async fn load_songs(params: LoadSongsParams) -> Result<SongsStore, String> {
+    read_library(move || SongsStore::load(&params))
+        .await?
+        .map_err(|error| {
+            tracing::warn!(%error, "Library search failed");
+            "Could not load songs. Try again.".to_string()
+        })
 }
 
 #[tauri::command]
-pub(crate) fn load_songs_by_hashes(file_hashes: Vec<String>) -> Vec<Song> {
-    SongsStore::load_by_hashes(&file_hashes)
+pub(crate) async fn load_songs_by_hashes(file_hashes: Vec<String>) -> Result<Vec<Song>, String> {
+    read_library(move || SongsStore::load_by_hashes(&file_hashes)).await
 }
 
 #[tauri::command]
-pub(crate) fn load_songs_meta() -> SongsMeta {
-    SongsStore::load_meta()
+pub(crate) async fn load_songs_meta() -> Result<SongsMeta, String> {
+    read_library(SongsStore::load_meta).await
 }
 
 #[tauri::command]
-pub(crate) fn load_favorite_hashes() -> Result<Vec<String>, String> {
-    app_core::load_favorite_hashes()
+pub(crate) async fn load_favorite_hashes() -> Result<Vec<String>, String> {
+    read_library(app_core::load_favorite_hashes).await?
 }
 
 #[tauri::command]
@@ -127,11 +139,26 @@ pub(crate) fn delete_local_song(
 }
 
 #[tauri::command]
-pub(crate) fn load_analysis_queue() -> AnalysisQueue {
-    AnalysisQueue::load()
+pub(crate) async fn load_analysis_queue() -> Result<AnalysisQueue, String> {
+    read_library(AnalysisQueue::load).await?.map_err(|error| {
+        tracing::warn!(%error, "Could not load analysis queue");
+        "Could not load analysis queue. Try again.".to_string()
+    })
 }
 
 #[tauri::command]
-pub(crate) fn load_library_menu_items() -> Result<LibraryMenuItems, String> {
-    app_core::load_library_menu_items().map_err(|e| e.to_string())
+pub(crate) async fn load_library_menu_items() -> Result<LibraryMenuItems, String> {
+    read_library(app_core::load_library_menu_items)
+        .await?
+        .map_err(|error| error.to_string())
+}
+
+async fn read_library<T, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|_| "Library request interrupted. Try again.".to_string())
 }

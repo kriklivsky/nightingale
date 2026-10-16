@@ -1,13 +1,15 @@
 """Lyrics alignment: align pre-fetched lyrics text to vocals audio using WhisperX."""
 
+import itertools
 import json
+import math
 import re
 
 import cjk
-from audio import detect_vocal_region
+from audio import detect_vocal_region, silent_gaps
 from gpu import gpu_model
 from language import detect_language_multiwindow
-from whisper_compat import progress, align_device_for, compute_type_for, align_with_fallback, get_align_backend
+from whisper_compat import progress, align_device_for, compute_type_for, align_with_fallback, get_align_backend, load_whisper_model
 
 
 def align_lyrics(
@@ -34,6 +36,7 @@ def align_lyrics(
     import whisperx
 
     progress(55, "Loading lyrics...")
+    lyrics_data = {}
     if lyrics_lines is None:
         if lyrics_path is None:
             raise ValueError("Lyrics are missing; analysis stopped.")
@@ -43,12 +46,35 @@ def align_lyrics(
     else:
         lines = lyrics_lines
     print(f"[nightingale:LOG] Lyrics loaded: {len(lines)} lines", flush=True)
+    windows = _line_windows(
+        timed_lines if timed_lines is not None else lyrics_data.get("windows"),
+        len(lines),
+    )
 
+    # {base|note} markup puts a note above a word; strip it here so the
+    # aligners and displayed text only see the base, and keep the spans.
     clean_lines: list[str] = []
-    for line in lines:
+    line_spans: list[list[tuple[int, int, str]]] = []
+    line_windows: list[tuple[float, float]] | None = [] if windows is not None else None
+    for index, line in enumerate(lines):
         text = line.strip() if isinstance(line, str) else str(line).strip()
+        text, spans = cjk.parse_reading_markup(text)
         if text:
             clean_lines.append(text)
+            line_spans.append(spans)
+            if line_windows is not None and windows is not None:
+                line_windows.append(windows[index])
+    if line_windows is not None:
+        print(
+            f"[nightingale:LOG] Line timings provided: aligning words within "
+            f"{len(line_windows)} line windows",
+            flush=True,
+        )
+    if any(line_spans):
+        print(
+            f"[nightingale:LOG] Lyric notes: {sum(len(s) for s in line_spans)}",
+            flush=True,
+        )
 
     audio = whisperx.load_audio(vocals_path)
     duration_secs = len(audio) / 16000
@@ -67,8 +93,8 @@ def align_lyrics(
     else:
         progress(58, "Detecting language...")
         with gpu_model(f"whisper:{model_name}:lang_detect") as held:
-            model = whisperx.load_model(
-                model_name, a_device, compute_type=c_type, task="transcribe",
+            model = load_whisper_model(
+                model_name, a_device, c_type, task="transcribe",
             )
             held.append(model)
             language = detect_language_multiwindow(model, audio)
@@ -81,9 +107,11 @@ def align_lyrics(
     import qwen_align
     if get_align_backend() == "qwen" and qwen_align.is_supported(language):
         qwen_segments = _align_lyrics_qwen(
-            clean_lines, audio, language, vocal_start, vocal_end, pre_align_cleanup,
+            clean_lines, line_spans, audio, language, vocal_start, vocal_end, pre_align_cleanup,
+            line_windows,
         )
         if qwen_segments is not None:
+            _trim_words_to_vocals(qwen_segments, audio)
             progress(90, f"Alignment complete: {len(qwen_segments)} segments, lang={language}")
             if qwen_segments:
                 print(f"[nightingale:LOG] First segment: '{qwen_segments[0]['text'][:100]}'", flush=True)
@@ -96,9 +124,13 @@ def align_lyrics(
 
     line_token_pairs: list[list[tuple[str, str]]] | None = None
     if cjk.is_cjk(language):
-        line_token_pairs = [cjk.tokenize_for_alignment(line, language) for line in clean_lines]
+        line_token_pairs = [
+            cjk.tokenize_for_alignment(line, language, spans)
+            for line, spans in zip(clean_lines, line_spans)
+        ]
         cleaned_lines = ["".join(r for _, r in toks) for toks in line_token_pairs]
         full_text = "".join(cleaned_lines)
+        segment_texts = cleaned_lines
         print(
             f"[nightingale:LOG] CJK alignment input: {len(full_text)} chars across "
             f"{sum(1 for c in cleaned_lines if c)} non-empty lines (lang={language}, "
@@ -107,16 +139,10 @@ def align_lyrics(
         )
     else:
         full_text = " ".join(clean_lines)
+        segment_texts = clean_lines
 
-    if timed_lines is not None:
-        raw_segments = []
-        align_lines = cleaned_lines if cjk.is_cjk(language) else clean_lines
-        for line, align_text in zip(timed_lines, align_lines):
-            start = max(0.0, float(line["start"]))
-            end = min(duration_secs, float(line["end"]))
-            if end <= start:
-                raise ValueError("Timed lyrics contain a line with invalid timestamps.")
-            raw_segments.append({"text": align_text, "start": start, "end": end})
+    if line_windows is not None:
+        raw_segments = _window_segments(segment_texts, line_windows, duration_secs)
         print(
             f"[nightingale:LOG] Aligning {len(raw_segments)} timed lyric lines separately",
             flush=True,
@@ -130,12 +156,15 @@ def align_lyrics(
     )
 
     if cjk.is_cjk(language):
-        segments = _map_chars_to_lines_cjk(align_result, clean_lines, line_token_pairs, language)
+        segments = _map_chars_to_lines_cjk(
+            align_result, clean_lines, line_token_pairs, line_spans, language, line_windows,
+        )
     else:
-        segments = _map_words_to_lines(align_result, clean_lines)
-        if cjk.is_korean(language):
-            for seg in segments:
-                cjk.attach_reading(seg["words"], language)
+        segments = _map_words_to_lines(
+            align_result, clean_lines, line_spans, language, line_windows,
+        )
+
+    _trim_words_to_vocals(segments, audio)
 
     progress(90, f"Alignment complete: {len(segments)} segments, lang={language}")
     if segments:
@@ -143,6 +172,124 @@ def align_lyrics(
         print(f"[nightingale:LOG] Last segment: '{segments[-1]['text'][:100]}'", flush=True)
 
     return {"language": language, "segments": segments, "source": "lyrics"}
+
+# LRC line timestamps are often a little early or late, so each line is aligned
+# against its window widened by this much on both sides.
+WINDOW_PAD_SECONDS = 0.5
+
+
+def _line_windows(raw, line_count: int) -> list[tuple[float, float]] | None:
+    """Validate the lyrics file's optional per-line ``{start, end}`` windows.
+
+    Returns ``None`` (plain whole-song alignment) when absent or malformed.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or len(raw) != line_count:
+        print("[nightingale:LOG] Ignoring line timings: they don't match the lyric lines", flush=True)
+        return None
+    windows: list[tuple[float, float]] = []
+    for window in raw:
+        try:
+            start, end = float(window["start"]), float(window["end"])
+        except (TypeError, KeyError, ValueError):
+            print("[nightingale:LOG] Ignoring line timings: malformed window", flush=True)
+            return None
+        if not (math.isfinite(start) and math.isfinite(end)) or start < 0 or end <= start:
+            print("[nightingale:LOG] Ignoring line timings: invalid window", flush=True)
+            return None
+        windows.append((start, end))
+    return windows
+
+
+def _window_segments(
+    texts: list[str], windows: list[tuple[float, float]], duration: float,
+) -> list[dict]:
+    """One alignment segment per non-empty line, spanning its padded window."""
+    return [
+        {
+            "text": text,
+            "start": max(0.0, start - WINDOW_PAD_SECONDS),
+            "end": min(duration, end + WINDOW_PAD_SECONDS),
+        }
+        for text, (start, end) in zip(texts, windows)
+        if text
+    ]
+
+
+def _hold_words_in_window(words: list[dict], window_end: float) -> None:
+    """Keep each word lit until the next one starts, and the line's last word
+    until its LRC end.
+
+    CTC aligners often end a word right after its onset, which makes the player
+    drop a line long before it is sung out. Holds that cross a long vocal
+    silence are cut back afterwards by :func:`_trim_words_to_vocals`.
+    """
+    for word, following in zip(words, words[1:]):
+        word["end"] = round(max(word["end"], following["start"]), 3)
+    if words:
+        words[-1]["end"] = round(max(words[-1]["end"], window_end), 3)
+
+
+def _chars_per_window_line(align_result: dict, counts: list[int]) -> list[list[dict]]:
+    """Aligned chars of each line when every line was its own alignment segment.
+
+    A segment the aligner could not place comes back with no words, so lines
+    are matched to output segments one by one instead of slicing a flat char
+    stream, which would shift every later line. ``counts`` is each line's
+    alignment-char count; a line whose segment failed gets no chars.
+    """
+    segments = align_result.get("segments", [])
+    lines: list[list[dict]] = []
+    for index, count in enumerate(counts):
+        chars = (
+            _collect_aligned({"segments": [segments[index]]})[:count]
+            if index < len(segments)
+            else []
+        )
+        lines.append(chars)
+    return lines
+
+
+def _trim_words_to_vocals(segments: list[dict], audio) -> None:
+    """Shrink words that span a long vocal silence to their longest sung part.
+
+    Aligners fill instrumental breaks by stretching the neighbouring word across
+    them (風 highlighted through a 40 s interlude). Words lying entirely inside a
+    silence are left alone: there is no sung part to move them to.
+    """
+    gaps = silent_gaps(audio)
+    if not gaps:
+        return
+    trimmed = 0
+    for seg in segments:
+        words = seg.get("words") or []
+        for w in words:
+            start, end = w.get("start"), w.get("end")
+            if start is None or end is None:
+                continue
+            pieces: list[tuple[float, float]] = []
+            cursor = start
+            for g_start, g_end in gaps:
+                if g_end <= cursor or g_start >= end:
+                    continue
+                if g_start > cursor:
+                    pieces.append((cursor, g_start))
+                cursor = max(cursor, g_end)
+            if cursor < end:
+                pieces.append((cursor, end))
+            if not pieces or pieces == [(start, end)]:
+                continue
+            best_start, best_end = max(pieces, key=lambda p: p[1] - p[0])
+            w["start"] = round(best_start, 3)
+            w["end"] = round(best_end, 3)
+            trimmed += 1
+        if words:
+            seg["start"] = words[0]["start"]
+            seg["end"] = max(seg["start"], words[-1]["end"])
+    if trimmed:
+        print(f"[nightingale:LOG] Trimmed {trimmed} words stretched over vocal silences", flush=True)
+
 
 def _normalize(word: str) -> str:
     return re.sub(r"[^\w]", "", word).lower()
@@ -178,7 +325,9 @@ def _map_chars_to_lines_cjk(
     align_result: dict,
     original_lines: list[str],
     line_token_pairs: list[list[tuple[str, str]]],
+    line_spans: list[list[tuple[int, int, str]]],
     language: str,
+    line_windows: list[tuple[float, float]] | None = None,
 ) -> list[dict]:
     """Map per-character whisperx timestamps onto fugashi/jieba tokens.
 
@@ -201,15 +350,27 @@ def _map_chars_to_lines_cjk(
     segments: list[dict] = []
     cursor = 0
     skipped_empty = 0
+    window_chars = (
+        _chars_per_window_line(
+            align_result, [sum(len(r) for _, r in pairs) for pairs in line_token_pairs],
+        )
+        if line_windows is not None
+        else None
+    )
 
-    for original, token_pairs in zip(original_lines, line_token_pairs):
+    for index, (original, token_pairs, spans) in enumerate(
+        zip(original_lines, line_token_pairs, line_spans)
+    ):
         n = sum(len(r) for _, r in token_pairs)
         if n == 0:
             skipped_empty += 1
             continue
 
-        slice_chars = aligned[cursor:cursor + n]
-        cursor += len(slice_chars)
+        if window_chars is not None:
+            slice_chars = window_chars[index]
+        else:
+            slice_chars = aligned[cursor:cursor + n]
+            cursor += len(slice_chars)
 
         if not token_pairs:
             continue
@@ -218,6 +379,9 @@ def _map_chars_to_lines_cjk(
 
         fb_start = next((c["start"] for c in slice_chars if c["start"] is not None), None)
         fb_end = next((c["end"] for c in reversed(slice_chars) if c["end"] is not None), None)
+        if line_windows is not None and (fb_start is None or fb_end is None):
+            # Nothing in this line aligned: spread it over its LRC window.
+            fb_start, fb_end = line_windows[index]
 
         entries = cjk.attribute_chars_to_tokens(
             surfaces, slice_chars,
@@ -239,7 +403,9 @@ def _map_chars_to_lines_cjk(
             if "score" in e and e["score"] is not None:
                 e["score"] = round(e["score"], 3)
 
-        cjk.attach_reading(valid, language)
+        cjk.attach_reading(valid, language, line=original, spans=spans)
+        if line_windows is not None:
+            _hold_words_in_window(valid, line_windows[index][1])
 
         seg_start = valid[0]["start"]
         seg_end = valid[-1]["end"]
@@ -291,24 +457,29 @@ def _split_long_segments(segments: list[dict], joiner: str = " ") -> list[dict]:
 
 def _align_lyrics_qwen(
     clean_lines: list[str],
+    line_spans: list[list[tuple[int, int, str]]],
     audio,
     language: str,
     vocal_start: float,
     vocal_end: float,
     pre_align_cleanup=None,
+    line_windows: list[tuple[float, float]] | None = None,
 ) -> list[dict] | None:
     """Align lyrics with Qwen3-ForcedAligner and map tokens back to lines.
 
-    The whole vocal region is aligned in one pass against the newline-joined
-    lyrics (newlines make line boundaries token boundaries and are dropped by
-    Qwen's tokenizer). The flat timed-token stream is then sliced onto lines by
-    cumulative kept-char count. Returns ``None`` on any qwen failure so the
-    caller falls back to the wav2vec2 path.
+    Without LRC windows, the whole vocal region is aligned in one pass against
+    the newline-joined lyrics and the flat token stream is sliced onto lines.
+    With windows, each line is aligned independently so a failed line cannot
+    shift later ones. Returns ``None`` on any qwen failure so the caller falls
+    back to the wav2vec2 path.
     """
     import qwen_align
 
-    full_text = "\n".join(clean_lines)
-    raw_segments = [{"text": full_text, "start": vocal_start, "end": vocal_end}]
+    if line_windows is not None:
+        raw_segments = _window_segments(clean_lines, line_windows, len(audio) / 16000)
+    else:
+        full_text = "\n".join(clean_lines)
+        raw_segments = [{"text": full_text, "start": vocal_start, "end": vocal_end}]
     try:
         result = qwen_align.qwen_align_with_cpu_fallback(
             raw_segments, audio, language, pre_align_cleanup,
@@ -320,7 +491,7 @@ def _align_lyrics_qwen(
         print(f"[nightingale:LOG] Qwen aligner failed: {e}", flush=True)
         return None
 
-    segments = _map_qwen_units_to_lines(result, clean_lines, language)
+    segments = _map_qwen_units_to_lines(result, clean_lines, line_spans, language, line_windows)
     if not segments:
         return None
 
@@ -332,30 +503,61 @@ def _align_lyrics_qwen(
     return segments
 
 
-def _map_qwen_units_to_lines(align_result: dict, clean_lines: list[str], language: str) -> list[dict]:
-    """Slice Qwen's flat timed-token stream onto lyric lines by kept-char count.
+def _map_qwen_units_to_lines(
+    align_result: dict,
+    clean_lines: list[str],
+    line_spans: list[list[tuple[int, int, str]]],
+    language: str,
+    line_windows: list[tuple[float, float]] | None = None,
+) -> list[dict]:
+    """Map Qwen's timed-token stream onto lyric lines.
 
-    Every Qwen token carries a timestamp (the model never drops units), and token
-    surfaces concatenate to each line's kept content, so a running kept-char
-    counter attributes tokens to lines without normalized-text matching. Readings
-    are attached per line for CJK/Korean.
+    With LRC windows, output segments map directly to their source lines.
+    Otherwise, token surfaces concatenate to each line's kept content, so a
+    running kept-char counter attributes tokens without normalized-text matching.
+    Readings are attached per line for CJK/Korean.
+
+    Qwen's tokenizer can merge the last word of a line with the first of the next
+    (金の塔 / 北の丘 -> "塔北"), so such units are split at the line boundary
+    first, and the counter is cumulative so any leftover mismatch stays local
+    instead of shifting every following line.
     """
-    units = _collect_aligned(align_result)
+    line_lens = [cjk.qwen_kept_len(line) for line in clean_lines]
+    window_units = (
+        [
+            _collect_aligned({"segments": [segment]})
+            for segment in align_result.get("segments", [])
+        ]
+        if line_windows is not None
+        else None
+    )
+    units = (
+        []
+        if window_units is not None
+        else _split_units_at_boundaries(
+            _collect_aligned(align_result),
+            set(itertools.accumulate(line_lens)),
+        )
+    )
     segments: list[dict] = []
     cursor = 0
+    consumed = 0
+    target = 0
 
-    for line_text in clean_lines:
-        need = cjk.qwen_kept_len(line_text)
+    for index, (line_text, spans, need) in enumerate(zip(clean_lines, line_spans, line_lens)):
         if need == 0:
             continue
+        target += need
 
-        taken: list[dict] = []
-        acc = 0
-        while cursor < len(units) and acc < need:
-            u = units[cursor]
-            cursor += 1
-            taken.append(u)
-            acc += cjk.qwen_kept_len(u["word"])
+        if window_units is not None:
+            taken = window_units[index] if index < len(window_units) else []
+        else:
+            taken: list[dict] = []
+            while cursor < len(units) and consumed < target:
+                u = units[cursor]
+                cursor += 1
+                taken.append(u)
+                consumed += cjk.qwen_kept_len(u["word"])
 
         words: list[dict] = []
         for u in taken:
@@ -368,11 +570,16 @@ def _map_qwen_units_to_lines(align_result: dict, clean_lines: list[str], languag
                 entry["score"] = round(u["score"], 3)
             words.append(entry)
 
+        if not words and line_windows is not None:
+            start, end = line_windows[index]
+            words = [{"word": line_text, "start": start, "end": end, "estimated": True}]
         if not words:
             continue
 
-        if cjk.is_supported_lang(language):
-            cjk.attach_reading(words, language)
+        if cjk.is_supported_lang(language) or spans:
+            cjk.attach_reading(words, language, line=line_text, spans=spans)
+        if line_windows is not None:
+            _hold_words_in_window(words, line_windows[index][1])
 
         seg_start = words[0]["start"]
         seg_end = words[-1]["end"]
@@ -398,12 +605,61 @@ def _map_qwen_units_to_lines(align_result: dict, clean_lines: list[str], languag
     return _split_long_segments(segments, joiner=joiner)
 
 
-def _map_words_to_lines(align_result: dict, clean_lines: list[str]) -> list[dict]:
+def _split_units_at_boundaries(units: list[dict], boundaries: set[int]) -> list[dict]:
+    """Split units whose kept chars straddle a cumulative line boundary.
+
+    Each piece keeps its share of the unit's time span, proportional to its
+    kept-char count.
+    """
+    out: list[dict] = []
+    consumed = 0
+    for u in units:
+        n = cjk.qwen_kept_len(u["word"])
+        cuts = sorted(b - consumed for b in boundaries if consumed < b < consumed + n)
+        consumed += n
+        if not cuts:
+            out.append(u)
+            continue
+
+        pieces: list[str] = []
+        current = ""
+        kept = 0
+        for ch in u["word"]:
+            current += ch
+            kept += cjk.qwen_kept_len(ch)
+            if cuts and kept == cuts[0]:
+                pieces.append(current)
+                current = ""
+                cuts.pop(0)
+        if current:
+            pieces.append(current)
+
+        timed = u["start"] is not None and u["end"] is not None
+        offset = 0
+        for piece in pieces:
+            k = cjk.qwen_kept_len(piece)
+            part = dict(u, word=piece, norm=_normalize(piece))
+            if timed:
+                span = u["end"] - u["start"]
+                part["start"] = u["start"] + span * offset / n
+                part["end"] = u["start"] + span * (offset + k) / n
+            offset += k
+            out.append(part)
+    return out
+
+
+def _map_words_to_lines(
+    align_result: dict,
+    clean_lines: list[str],
+    line_spans: list[list[tuple[int, int, str]]],
+    language: str,
+    line_windows: list[tuple[float, float]] | None = None,
+) -> list[dict]:
     """Map aligned word timestamps back to original lyric lines.
 
-    Walks the aligned stream with a single forward cursor and bounded lookahead
-    so that a dropped word in a repeated phrase (e.g. the 2nd "love" of three)
-    no longer causes downstream occurrences to inherit each other's timestamps.
+    Without LRC windows, walks the aligned stream with a single forward cursor
+    and bounded lookahead. With windows, each line only searches its own output
+    segment so a failed line cannot consume a later line's timestamps.
     """
     aligned = _collect_aligned(align_result)
     timed_count = sum(1 for a in aligned if a["start"] is not None and a["end"] is not None)
@@ -415,25 +671,39 @@ def _map_words_to_lines(align_result: dict, clean_lines: list[str]) -> list[dict
 
     LOOKAHEAD = 6
     ai = 0
+    window_words = (
+        [
+            _collect_aligned({"segments": [segment]})
+            for segment in align_result.get("segments", [])
+        ]
+        if line_windows is not None
+        else None
+    )
     segments = []
     missed_lyric_words = 0
     interpolated_drops = 0
 
-    for line_text in clean_lines:
+    for index, (line_text, spans) in enumerate(zip(clean_lines, line_spans)):
+        candidates = (
+            window_words[index]
+            if window_words is not None and index < len(window_words)
+            else ([] if window_words is not None else aligned)
+        )
+        line_ai = 0 if window_words is not None else ai
         word_entries = []
         for word_text in line_text.split():
             target = _normalize(word_text)
             matched = -1
             if target:
-                limit = min(ai + LOOKAHEAD, len(aligned))
-                for k in range(ai, limit):
-                    if aligned[k]["norm"] == target:
+                limit = min(line_ai + LOOKAHEAD, len(candidates))
+                for k in range(line_ai, limit):
+                    if candidates[k]["norm"] == target:
                         matched = k
                         break
 
             if matched >= 0:
-                a = aligned[matched]
-                ai = matched + 1
+                a = candidates[matched]
+                line_ai = matched + 1
                 if a["start"] is not None and a["end"] is not None:
                     entry = {
                         "word": word_text,
@@ -450,11 +720,21 @@ def _map_words_to_lines(align_result: dict, clean_lines: list[str]) -> list[dict
                 missed_lyric_words += 1
             word_entries.append(entry)
 
+        if window_words is None:
+            ai = line_ai
         _interpolate_missing(word_entries)
 
         valid_words = [e for e in word_entries if e["start"] is not None]
+        if not valid_words and line_windows is not None:
+            # Nothing in this line aligned: keep it as one token over its window.
+            start, end = line_windows[index]
+            valid_words = [{"word": line_text, "start": start, "end": end, "estimated": True}]
         if not valid_words:
             continue
+        if cjk.is_supported_lang(language) or spans:
+            cjk.attach_reading(valid_words, language, line=line_text, spans=spans)
+        if line_windows is not None:
+            _hold_words_in_window(valid_words, line_windows[index][1])
 
         seg_start = valid_words[0]["start"]
         seg_end = valid_words[-1]["end"]

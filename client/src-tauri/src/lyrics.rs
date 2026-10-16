@@ -10,6 +10,22 @@ pub(crate) fn load_lyrics(file_hash: String) -> Option<LyricsFile> {
 }
 
 #[tauri::command]
+pub(crate) async fn load_sidecar_lrc(
+    file_hash: String,
+) -> Result<Option<app_core::SidecarLrc>, String> {
+    tauri::async_runtime::spawn_blocking(move || app_core::load_sidecar_lrc(&file_hash))
+        .await
+        .map_err(|error| format!("Local lyrics task failed: {error}"))
+}
+
+#[tauri::command]
+pub(crate) async fn align_lrc_lyrics(file_hash: String, lrc_text: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || app_core::align_lrc_lyrics(&file_hash, &lrc_text))
+        .await
+        .map_err(|error| format!("Lyrics alignment task failed: {error}"))?
+}
+
+#[tauri::command]
 pub(crate) async fn search_lrclib_lyrics(file_hash: String) -> Vec<LrclibCandidate> {
     tauri::async_runtime::spawn_blocking(move || search_lrclib_for_hash(&file_hash))
         .await

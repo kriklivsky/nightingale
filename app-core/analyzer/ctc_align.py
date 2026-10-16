@@ -23,6 +23,7 @@ from nltk.data import load as nltk_load
 
 from whisperx.audio import SAMPLE_RATE
 from whisperx.utils import interpolate_nans, PUNKT_LANGUAGES
+from whisper_compat import progress
 
 LANGUAGES_WITHOUT_SPACES = ["ja", "zh"]
 
@@ -118,6 +119,7 @@ def ctc_align(
     # 2. Per-segment: emissions -> forced_align -> char/word/sentence assembly.
     for sdx, segment in enumerate(transcript):
         t1 = segment["start"]
+        progress(80 + 9 * sdx // max(total_segments, 1), f"Aligning lyric lines: {sdx + 1}/{total_segments}")
         t2 = segment["end"]
         text = segment["text"]
         avg_logprob = segment.get("avg_logprob")

@@ -1,4 +1,5 @@
 mod analyzer;
+mod backgrounds;
 mod cache;
 mod config;
 mod logging;
@@ -9,17 +10,26 @@ mod playback_queue;
 mod playback_session;
 mod profile;
 mod scanner;
+mod song_video;
 mod vendor;
+mod window_state;
 
 use analyzer::{
     cancel_analysis, delete_song_cache, enqueue, realign, reanalyze_force_transcribe,
     reanalyze_full, reanalyze_transcript, refresh_metadata, shift_key, shift_tempo,
 };
 use app_core::{AppConfig, LibrarySource, PlaybackQueue, PlaybackSessionStore, SongsStore};
+use backgrounds::{
+    add_custom_background_url, import_custom_background, load_custom_background_shader,
+    remove_custom_background, resolve_custom_background_path,
+};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use cache::{calculate_cache_stats, clear_all, clear_models_command, clear_videos_command};
 use config::{load_config, save_config};
-use lyrics::{apply_timed_lyrics, load_lyrics, provide_lrc, save_lyrics, search_lrclib_lyrics};
+use lyrics::{
+    align_lrc_lyrics, apply_timed_lyrics, load_lyrics, load_sidecar_lrc, provide_lrc, save_lyrics,
+    search_lrclib_lyrics,
+};
 use microphones::{
     list_microphones, set_monitor_gain, start_configured_monitor, start_mic_capture,
     stop_mic_capture,
@@ -29,19 +39,26 @@ use playback::{
     load_transcript,
 };
 use playback_queue::{
-    add_playback_queue_entry, clear_playback_queue, load_playback_queue,
+    add_playback_queue_entry, clear_playback_queue, load_playback_queue, move_playback_queue_entry,
     remove_playback_queue_entry,
 };
 use playback_session::{load_playback_session, save_playback_session};
-use profile::{add_score, create_profile, delete_profile, load_profiles, switch_profile};
+use profile::{
+    add_score, add_scores, create_profile, delete_profile, load_profiles, switch_profile,
+};
 use scanner::{
     clear_library_source, delete_local_song, jellyfin_login, jellyfin_ping, load_analysis_queue,
     load_favorite_hashes, load_library_menu_items, load_songs, load_songs_by_hashes,
     load_songs_meta, navidrome_login, navidrome_ping, plex_begin_pin, plex_manual_login, plex_ping,
-    plex_poll_pin, set_library_source, set_song_favorite, trigger_scan,
+    plex_poll_pin, reconcile_cache, set_library_source, set_song_favorite, trigger_scan,
+};
+use song_video::{
+    download_song_video, get_song_video, remove_song_video, search_song_videos,
+    set_song_video_offset,
 };
 use tauri::{Manager, RunEvent, WebviewWindowBuilder};
 use vendor::{is_ready, trigger_setup};
+use window_state::{load_window_state, track_window_state};
 
 #[tauri::command]
 fn get_media_endpoint() -> app_core::MediaEndpoint {
@@ -87,9 +104,17 @@ fn minimize_window(window: tauri::WebviewWindow) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("TVBOX_STATUS").is_some()
+        && std::env::var_os("GST_PLUGIN_FEATURE_RANK").is_none()
+    {
+        std::env::set_var("GST_PLUGIN_FEATURE_RANK", "openh264dec:512");
+    }
+
     logging::init();
 
     tauri::Builder::default()
+        .manage(window_state::WindowStates::default())
         .manage(PlaybackQueue::default())
         .manage(PlaybackSessionStore::default())
         .plugin(tauri_plugin_dialog::init())
@@ -101,9 +126,16 @@ pub fn run() {
             frontend_ready,
             window_immersive,
             minimize_window,
+            load_window_state,
+            track_window_state,
             // Config
             load_config,
             save_config,
+            add_custom_background_url,
+            import_custom_background,
+            load_custom_background_shader,
+            remove_custom_background,
+            resolve_custom_background_path,
             // Cache
             calculate_cache_stats,
             clear_videos_command,
@@ -115,16 +147,19 @@ pub fn run() {
             create_profile,
             delete_profile,
             add_score,
+            add_scores,
             // Playback queue
             load_playback_queue,
             add_playback_queue_entry,
             remove_playback_queue_entry,
+            move_playback_queue_entry,
             clear_playback_queue,
             // Playback session
             load_playback_session,
             save_playback_session,
             // Scanner
             trigger_scan,
+            reconcile_cache,
             set_library_source,
             clear_library_source,
             jellyfin_login,
@@ -156,6 +191,8 @@ pub fn run() {
             shift_tempo,
             // Lyrics
             load_lyrics,
+            load_sidecar_lrc,
+            align_lrc_lyrics,
             search_lrclib_lyrics,
             save_lyrics,
             provide_lrc,
@@ -167,6 +204,11 @@ pub fn run() {
             ensure_playable_source_video,
             fetch_pixabay_videos,
             get_media_endpoint,
+            get_song_video,
+            search_song_videos,
+            download_song_video,
+            set_song_video_offset,
+            remove_song_video,
             list_microphones,
             start_mic_capture,
             stop_mic_capture,
@@ -239,6 +281,8 @@ pub fn run() {
                 .build()
                 .map_err(|e| e.to_string())?;
 
+            window_state::configure(&window, &config, tvbox_session)?;
+
             if tvbox_session {
                 if let Err(error) = window.set_cursor_visible(false) {
                     tracing::warn!("Failed to hide TV cursor: {error}");
@@ -256,8 +300,9 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, event| {
+        .run(|app, event| {
             if let RunEvent::Exit = event {
+                window_state::save_open(app);
                 app_core::shutdown_server();
             }
         });

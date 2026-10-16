@@ -8,9 +8,11 @@ pub(crate) fn load_config() -> AppConfig {
 }
 
 #[tauri::command]
-pub(crate) fn save_config(config: AppConfig) -> AppConfig {
+pub(crate) fn save_config(mut config: AppConfig) -> AppConfig {
     let previous = AppConfig::load();
     let was_auto_analyze = previous.auto_analyze();
+    config.desktop_window = previous.desktop_window.clone();
+    config.playback_window = previous.playback_window.clone();
     config.save();
     set_monitor_gain(config.mic_monitor_gain());
     if previous.mic_monitoring != config.mic_monitoring

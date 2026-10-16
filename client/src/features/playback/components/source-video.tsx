@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { playbackAdapter } from '@/bridge/playback';
-import { useSourceVideoSync } from '@/features/playback/hooks/use-source-video-sync';
 import { VIDEO_CLASS_NAME } from '@/features/playback/lib/video-styles';
 import { usePlaybackThemeState } from '@/features/playback/providers/playback-theme-context';
 import {
   usePlaybackTransportActions,
   usePlaybackTransportState,
 } from '@/features/playback/providers/playback-transport-context';
+import { useSourceVideoSync } from '@/shared/hooks/use-source-video-sync';
 
 type SourceVideoProps = {
   isActive: boolean;
@@ -38,7 +38,7 @@ function useMediaUrl(filePath: string): string | null {
 }
 
 export const SourceVideo = ({ isActive }: SourceVideoProps) => {
-  const { sourceVideoPath, sourceVideoTempoRatio } = usePlaybackThemeState();
+  const { sourceVideoPath, sourceVideoTempoRatio, sourceVideoOffsetSec } = usePlaybackThemeState();
   const { isReady, isPlaying } = usePlaybackTransportState();
   const { subscribe, getCurrentTime } = usePlaybackTransportActions();
 
@@ -47,11 +47,12 @@ export const SourceVideo = ({ isActive }: SourceVideoProps) => {
 
   const playWhenActive = isReady && isPlaying && isActive;
 
-  const { ready } = useSourceVideoSync({
+  const { ready, visible } = useSourceVideoSync({
     videoRef,
     src: playableSource(sourceVideoPath, src) ? src : null,
     isPlaying: playWhenActive,
     tempoRatio: sourceVideoTempoRatio,
+    offsetSec: sourceVideoOffsetSec,
     subscribe,
     getCurrentTime,
   });
@@ -64,8 +65,9 @@ export const SourceVideo = ({ isActive }: SourceVideoProps) => {
     <video
       ref={videoRef}
       className={VIDEO_CLASS_NAME}
-      style={{ visibility: ready && isActive ? 'visible' : 'hidden' }}
+      style={{ visibility: ready && visible && isActive ? 'visible' : 'hidden' }}
       src={src}
+      preload="auto"
       muted
       playsInline
     />

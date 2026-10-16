@@ -2,9 +2,7 @@ import { useCallback } from 'react';
 import { Outlet, useLocation } from 'react-router';
 
 import { EXIT_SUPPORTED } from '@/bridge/exit';
-import { EmptySongList } from '@/features/library/components/song-list/empty-song-list';
-import { SongList } from '@/features/library/components/song-list/song-list';
-import { useSongsMeta } from '@/features/library/queries/use-songs';
+import { SongSearchDialog } from '@/features/library/components/song-list/song-search-dialog';
 import { EditLyricsDialog } from '@/features/lyrics/components';
 import { SelectLanguageDialog } from '@/features/lyrics/components/language';
 import { ClearCacheDialog } from '@/features/menu/components/clear-cache';
@@ -20,26 +18,13 @@ import { LeaderboardsDialog } from '@/features/profiles/components/leaderboards'
 import { SelectProfileDialog } from '@/features/profiles/components/select';
 import { Setup } from '@/features/setup/components/setup';
 import { useShouldRunSetup } from '@/features/setup/hooks/use-should-run-setup';
+import { SongVideoDialog } from '@/features/song-video/video-dialog';
 import { JellyfinConnectDialog } from '@/features/sources/components/jellyfin-connect';
 import { NavidromeConnectDialog } from '@/features/sources/components/navidrome-connect';
 import { PlexConnectDialog } from '@/features/sources/components/plex-connect';
 import { FolderSourceConfirmDialog } from '@/features/sources/components/source-change-warning';
 import { UpdateDialog } from '@/features/updates/components';
 import { SidebarInset } from '@/shared/components/ui/sidebar';
-
-export const MenuIndex = () => {
-  const { data: meta, isLoading: isLoadingMeta } = useSongsMeta();
-
-  if (isLoadingMeta) {
-    return null;
-  }
-
-  if (typeof meta?.folder === 'string' && meta.folder !== '') {
-    return <SongList />;
-  }
-
-  return <EmptySongList />;
-};
 
 const SourceDialogs = ({ mode }: { mode: DialogMode }) => (
   <>
@@ -87,7 +72,11 @@ export const MenuLayout = () => {
       <DonateDialog />
       <SelectLanguageDialog />
       <EditLyricsDialog />
+      {typeof mode === 'object' && mode?.mode === 'song-video' && (
+        <SongVideoDialog key={mode.song.file_hash} song={mode.song} />
+      )}
       <ClearCacheDialog />
+      {mode === 'song-search' && <SongSearchDialog />}
       <DeleteSongDialog />
       <SourceDialogs mode={mode} />
       <Setup />

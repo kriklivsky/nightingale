@@ -11,6 +11,7 @@ const BEEP_FREQ_HZ = 1000;
 const BEEP_DURATION_SEC = 0.16;
 const BEEP_GAIN = 0.9;
 const NOOP: StopListening = () => {};
+const CAPTURE_ID = 'latency-test';
 
 function toneAmplitude(samples: number[], sampleRate: number, frequency: number): number {
   if (samples.length === 0 || sampleRate <= 0) {
@@ -89,7 +90,7 @@ export async function measureMicLatencySec(
   const context = await createUnlockedAudioContext();
 
   try {
-    await adapter.startCapture(deviceId, { emit_audio: false });
+    await adapter.startCapture(CAPTURE_ID, deviceId, { emit_audio: false });
 
     return await new Promise<number>((resolve, reject) => {
       let done = false;
@@ -101,7 +102,7 @@ export async function measureMicLatencySec(
         }
         done = true;
         stopListening();
-        void adapter.stopCapture().catch(() => {});
+        void adapter.stopCapture(CAPTURE_ID).catch(() => {});
         void context.close().catch(() => {});
         fn();
       };
@@ -117,7 +118,7 @@ export async function measureMicLatencySec(
       }, TEST_TIMEOUT_MS);
 
       adapter
-        .subscribe((frame) => {
+        .subscribe(CAPTURE_ID, (frame) => {
           const now = performance.now();
           const level = toneAmplitude(frame.samples, frame.sample_rate, BEEP_FREQ_HZ);
 
@@ -165,7 +166,7 @@ export async function measureMicLatencySec(
     });
   } catch (error) {
     stopListening();
-    await adapter.stopCapture().catch(() => {});
+    await adapter.stopCapture(CAPTURE_ID).catch(() => {});
     await context.close().catch(() => {});
     throw error;
   }

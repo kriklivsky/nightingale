@@ -34,10 +34,25 @@ export function useMenuNavInput({ menuFocus, refs, lock, scrollToSong }: UseMenu
           if (!action.back) {
             return false;
           }
-          const handled = actionsRef.current.onSidebarBack?.();
-          if (handled !== true) {
-            refs.onBackRef.current();
+          if (actionsRef.current.onSidebarBack?.() === true) {
+            return true;
           }
+
+          if (
+            menuFocus.focus.panel === 'sidebar' &&
+            (actionsRef.current.songCount > 0 || getActionsCount() > 0)
+          ) {
+            menuFocus.setFocus((previous) => ({
+              ...previous,
+              active: true,
+              panel: 'songList',
+              actionsFocused: actionsRef.current.songCount === 0,
+              source: 'nav',
+            }));
+            return true;
+          }
+
+          refs.onBackRef.current();
           return true;
         };
 
@@ -89,7 +104,16 @@ function confirmFocusedAction(
   index: number,
 ): void {
   if (actionsRef.current.onConfirmActions?.(index) !== true) {
-    getActionTarget(index)?.click();
+    const target = getActionTarget(index);
+    if (target instanceof HTMLInputElement) {
+      if (document.documentElement.classList.contains('tvbox-session')) {
+        target.click();
+      } else {
+        target.focus();
+      }
+    } else {
+      target?.click();
+    }
   }
 }
 
@@ -98,9 +122,6 @@ function handleConfirmAction(
   refs: MenuNavHookOptions['refs'],
 ) {
   const now = performance.now();
-  if (!focus.active) {
-    return;
-  }
   if (now - refs.lastConfirmAtRef.current < CONFIRM_COOLDOWN_MS) {
     return;
   }
@@ -137,21 +158,24 @@ function nextSongActionIndex(current: number | null, right: boolean): number | n
   if (right) {
     return Math.min(2, (current ?? -1) + 1);
   }
-  return current === 0 ? null : 0;
+  return current === null || current === 0 ? null : current - 1;
 }
 
 function moveToNextGridSong(
   container: HTMLElement,
   songIndex: number,
-  setFocus: MenuNavHookOptions['menuFocus']['setFocus'],
+  menuFocus: Pick<MenuNavHookOptions['menuFocus'], 'setFocus' | 'actionsRef'>,
   scrollToSong: (index: number) => void,
-): void {
-  const nextIndex = getSongGridTarget(container, songIndex, 'right');
+): boolean {
+  const nextIndex =
+    menuFocus.actionsRef.current.songGridTarget === null
+      ? getSongGridTarget(container, songIndex, 'right')
+      : menuFocus.actionsRef.current.songGridTarget(songIndex, 'right');
   if (nextIndex === null) {
-    return;
+    return false;
   }
 
-  setFocus((previous) => ({
+  menuFocus.setFocus((previous) => ({
     ...previous,
     songIndex: nextIndex,
     songActionIndex: null,
@@ -159,17 +183,48 @@ function moveToNextGridSong(
     source: 'nav',
   }));
   scrollToSong(nextIndex);
+  return true;
+}
+
+function moveFromLastSongAction(
+  {
+    focus,
+    actionsRef,
+    scrollRef,
+    setFocus,
+  }: Pick<MenuNavHookOptions['menuFocus'], 'focus' | 'actionsRef' | 'scrollRef' | 'setFocus'>,
+  scrollToSong: (index: number) => void,
+): boolean {
+  if (
+    isSongGrid(scrollRef.current) &&
+    moveToNextGridSong(scrollRef.current, focus.songIndex, { setFocus, actionsRef }, scrollToSong)
+  ) {
+    return true;
+  }
+
+  if (!actionsRef.current.hasSongDetails) {
+    return false;
+  }
+
+  setFocus((previous) => ({
+    ...previous,
+    panel: 'songDetails',
+    songActionIndex: null,
+    active: true,
+    source: 'nav',
+  }));
+  return true;
 }
 
 function handleSongRowActionNavigation(
   action: NavAction,
-  {
-    focus,
-    scrollRef,
-    setFocus,
-  }: Pick<MenuNavHookOptions['menuFocus'], 'focus' | 'scrollRef' | 'setFocus'>,
+  menuFocus: Pick<
+    MenuNavHookOptions['menuFocus'],
+    'focus' | 'actionsRef' | 'scrollRef' | 'setFocus'
+  >,
   scrollToSong: (index: number) => void,
 ): boolean {
+  const { focus, setFocus } = menuFocus;
   if (focus.panel !== 'songList' || focus.actionsFocused || (!action.left && !action.right)) {
     return false;
   }
@@ -178,8 +233,11 @@ function handleSongRowActionNavigation(
     return false;
   }
 
-  if (focus.songActionIndex === 2 && action.right && isSongGrid(scrollRef.current)) {
-    moveToNextGridSong(scrollRef.current, focus.songIndex, setFocus, scrollToSong);
+  if (
+    focus.songActionIndex === 2 &&
+    action.right &&
+    moveFromLastSongAction(menuFocus, scrollToSong)
+  ) {
     return true;
   }
 
@@ -214,7 +272,8 @@ function handleSongGridAction(
     focus,
     scrollRef,
     setFocus,
-  }: Pick<MenuNavHookOptions['menuFocus'], 'focus' | 'scrollRef' | 'setFocus'>,
+    actionsRef,
+  }: Pick<MenuNavHookOptions['menuFocus'], 'focus' | 'scrollRef' | 'setFocus' | 'actionsRef'>,
   scrollToSong: (index: number) => void,
 ): boolean {
   const direction = getGridDirection(action);
@@ -223,7 +282,10 @@ function handleSongGridAction(
     return false;
   }
 
-  const targetIndex = getSongGridTarget(container, focus.songIndex, direction);
+  const targetIndex =
+    actionsRef.current.songGridTarget === null
+      ? getSongGridTarget(container, focus.songIndex, direction)
+      : actionsRef.current.songGridTarget(focus.songIndex, direction);
   if (targetIndex !== null) {
     setFocus((previous) => ({
       ...previous,
@@ -433,7 +495,9 @@ function handleHorizontalAction(
   setFocus((prev) => {
     let panel = prev.panel;
     if (prev.panel === 'sidebar') {
-      panel = 'songList';
+      if (actionsRef.current.songCount > 0 || getActionsCount() > 0) {
+        panel = 'songList';
+      }
     } else if (prev.panel === 'songList' && actionsRef.current.hasSongDetails) {
       panel = 'songDetails';
     }
@@ -441,7 +505,7 @@ function handleHorizontalAction(
     return {
       ...prev,
       panel,
-      actionsFocused: false,
+      actionsFocused: panel === 'songList' && actionsRef.current.songCount === 0,
       songActionIndex: null,
       active: true,
       source: 'nav',
@@ -459,6 +523,12 @@ type SongListMove = {
 };
 
 function moveSongListFocus(move: SongListMove): void {
+  if (move.songCount === 0) {
+    move.next.actionsFocused = getActionsCount() > 0;
+    move.next.songActionIndex = null;
+    return;
+  }
+
   if (move.previous.actionsFocused) {
     if (move.action.down) {
       move.next.actionsFocused = false;

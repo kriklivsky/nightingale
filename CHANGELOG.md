@@ -15,6 +15,30 @@ below.
 
 ### Features
 
+- Backport Nightingale 1.3.0 features onto the TV-box fork: local multiplayer for two to four singers, independent solo/multiplayer channel-combining controls, shared hardware capture with separate channel scores, remembered player assignments and ranked per-player reports. Retain native low-latency monitoring, TV navigation, favorites, confirmed deletion, the scoring worker and synchronized YouTube clips.
+- Add custom image/shader/silent-video backgrounds, background selection and playback master volume in Settings, folder browsing and artist/album trees, remote/keyboard queue reordering, a song loading screen and persisted desktop/playback window sizes.
+- Import adjacent LRC/ELRC into the lyric editor without modifying files until Save, align words inside authored line windows, support custom reading annotations and optional CJK romanization, and discover completed shared-cache analyses on rescan. Preserve LRCLIB/Lyricsfile analysis and Rockchip RKNN processing.
+
+- Add a separate, paired LAN-only WebRTC screen-sharing application to the TV launcher, with an HTTPS browser sender, independent microphone monitoring on the selected ALSA output, rotating TV codes and no cloud relay or recording; Nightingale remains unchanged.
+
+- Add a remote-controlled HDMI / Behringer UMC202HD output selector to the TV launcher. Persist the shared ALSA route for karaoke music, native microphone monitoring and Moonlight, without changing microphone capture or restarting HDMI.
+
+- Add a preview-first TV-box cleanup command for failed local songs, with explicit permanent deletion, database backup and manifest, shared-file protection, transactional staging, and resumption of other analysis jobs.
+
+- Add a TV-box command to retry failed song analysis with a database backup and an application-only restart; refuse to interrupt active or queued analysis.
+
+- Add remote-friendly YouTube clip search and downloads for local songs, duration-ranked results, conservative audio-based offset matching, and a silent video preview with manual timing adjustments. Shared playback keeps video synchronized through pause, seek and tempo changes; original media and karaoke audio remain unchanged. Self-hosted video operations require a separately configured access token.
+
+- Replace distracting live pitch traces and rapidly changing messages with a calm, fixed-scale pitch meter. End-of-song results now include measured pitch accuracy, voice detection, above/below deviations and a remote-paged lyric-line report; reports are kept only for the current performance and score calculation remains unchanged.
+
+- TV-box song search keeps its on-screen keyboard in fixed rows below the visible song list and updates search results after each entered character, without a Search confirmation button.
+
+- TV-box song search now opens a remote-controlled on-screen keyboard with Cyrillic, Latin, digits, space, backspace and clear actions; browser and desktop text entry remain unchanged.
+
+- TV-focused layout and defaults: song details open on Play or the first available action, its controls and metadata are easier to read, Settings show remote directions, and larger pause/results dialogs keep their primary actions prominent. When a queue has a next song, the results screen selects Next Song first.
+
+- Made the library usable with a TV remote: search, filters, sorting, queue and view controls are reachable with arrows; empty-library setup and rescan actions can be selected with OK. Song-row actions now move left one step at a time, selection opens details, and clearer focus states and on-screen hints show the available navigation. Dialog arrows stop at the edge instead of wrapping unexpectedly.
+
 - Added a confirmed Delete button beside Favorite and Play for local songs in the desktop app. UltraStar deletion includes referenced media and artwork; shared files and songs undergoing analysis are protected.
 
 - Added persistent song favorites with a top-level Favorites library view, plus remote-focusable Favorite and Play buttons on each song row and grid card. Grid cards now let the TV remote move Right through Favorite, Play, and the next card. TV-box sessions now hide the native mouse pointer.
@@ -28,6 +52,61 @@ below.
 - During playback, the Left/Right arrows (keyboard, gamepad D-pad/stick, and CEC remote) now adjust the guide vocal volume while a song with guide vocals is playing — right is louder, left is quieter — and the level is remembered between sessions. When guide vocals are unavailable or the song is paused, the arrows keep their normal navigation behavior; the `G` toggle and `+` / `-` hotkeys still work as before.
 
 ### Fixes
+
+- Reuse active native capture capabilities when listing channels or adding another singer, so an exclusively opened USB microphone remains selectable without reopening it.
+- Initialize multiplayer channel assignments from the preferred interface instead of unrelated onboard or virtual inputs.
+- Keep the proven CPAL 0.17.3 native audio backend while adding shared multichannel capture; avoid CPAL 0.18 ALSA regressions in saved device IDs, fixed HDMI periods and repeated monitor underruns.
+
+- Suspend song/queue sidebar navigation while multiplayer setup covers it, preventing the parent panel from stealing remote focus from the modal.
+
+- Save multiplayer profile scores in one batch rather than racing independent profile-file writes, and protect active/queued analysis jobs during shared-cache reconciliation. Preserve existing output-volume settings and window geometry when saving configuration.
+- Keep the audio callback lock-free and allocation-free, independent adaptive input/output periods and 48 kHz USB/HDMI preferences.
+
+- Resume karaoke audio only once when confirming Continue in the pause dialog, and do not resume it while exiting to the menu.
+
+- Bound analyzer startup and IPC messages, distinguish heartbeat liveness from stage progress, and restart unresponsive or stalled workers instead of leaving the queue blocked indefinitely. The stage timeout defaults to 30 minutes and can be set with `NIGHTINGALE_ANALYZER_STALL_TIMEOUT_SECS` (300–86400 seconds).
+
+- Wait out LRCLIB's shared rate-limit cooldown before each analyzer lyric request, retry HTTP 429 up to three times without restarting a successful search step, and avoid immediately failing the remaining queue; waiting remains cancellable and interactive searches still fail promptly.
+
+- Serialize batch cancellation with enqueue and progress updates, commit cancellation before changing memory, and keep queue database errors from being treated as empty queues during recovery or file deletion.
+
+- Mark analysis jobs for missing library songs as failed instead of leaving them queued forever, and keep source-video conversion outside the analysis queue lock.
+
+- Reject non-regular ALSA configuration files before reading them, preventing a named pipe from freezing the launcher's audio selector.
+
+- Make library search Unicode-aware across song title, artist, album and path, including Cyrillic case-insensitivity and ё/е equivalence without rewriting tags. Database failures now produce an explicit, remote-retryable error instead of an empty song list.
+
+- Persist analysis batches atomically before exposing them to the worker, avoid quadratic duplicate checks, propagate enqueue failures, and allow explicitly filtered failed songs to be retried while automatic scanning still skips failures.
+
+- Ignore symlinked video-cache subdirectories when calculating clearable bytes or clearing clips, preventing deletion through links outside the cache.
+
+- Share canonical media-path validation between desktop and web adapters, including explicitly configured song caches so relocated stems remain playable. Prepare source video and resolve media files outside UI/async request threads.
+
+- Default the standalone web server to loopback and warn when explicitly exposing its unauthenticated API; Docker and installer listener overrides remain unchanged.
+
+- Require valid JSON command bodies before dispatching web API actions, so malformed requests and ordinary cross-site HTML form posts cannot trigger no-argument cache-clearing commands.
+
+- Restore the HDMI mode before announcing the selected CEC source, preventing soundbar wake announcements from being sent on the link that is about to be retrained.
+
+- Run a VSync-enabled XRender compositor in the HDMI TV session to remove horizontal tearing, with no compositor in headless mode or during direct-DRM Moonlight playback.
+
+- Prepare the source clip and its initial offset while karaoke audio loads, keeping the same video element when playback starts instead of loading it late and repeatedly seeking to catch up.
+
+- Wait for a valid positive media duration before the first video seek, avoiding repeated zero-duration seeks during WebKit's initial media setup.
+
+- Serve native local media with an explicit `Content-Length` instead of automatic chunked transfer, fixing WebKit/GStreamer seeks that hang on attached clips. Stream files and bounded byte ranges directly from disk; invalid or unsatisfiable ranges return HTTP 416 instead of allocating an invalid buffer.
+
+- Preload source clips explicitly and wait for WebKit/GStreamer preroll before the initial seek; keep positive-offset clips hidden until the requested frame is ready. Wait for pending seeks or buffering before correcting drift, and throttle large corrections too, preventing per-tick seek storms in karaoke and previews.
+
+- Install the missing WebKit/GStreamer video plugins on the Orange Pi and prefer OpenH264 in native Linux TV-box sessions to avoid reproducible `avdec_h264` seek failures. Document playback dependencies separately from the analyzer's bundled FFmpeg; preserve explicit decoder-rank overrides.
+
+- Keep microphone capture and speaker-monitor buffer adaptation independent, identify the failing stream in logs, and retry smaller periods after a bounded cooldown instead of permanently retaining a high-latency recovery floor. Native CPAL audio workers now request real-time scheduling; Linux TV-box deployment uses RTKit.
+
+- On TV source selection, retrain an already-active 4K60 HDMI link at 59.94→60 Hz. When the TV first selects only the soundbar, wait for the Orange Pi's CEC address before activating its HDMI input; remote button presses do not trigger retraining.
+
+- Restore native 3840×2160 at 60 Hz on TV-box startup and ignore brief connector renegotiations before restarting the display session.
+
+- Select the Orange Pi HDMI route with separate CEC commands before retraining the soundbar input; a CEC timeout no longer aborts the display-wake sequence.
 
 - Keep analyzer progress readable by suppressing only known harmless RKNN static-shape/layout diagnostics and weight-loading spinners; each song start now logs its artist, title, and number of songs still queued.
 
@@ -47,6 +126,20 @@ below.
 - The "Measure latency" button in Settings now sits on its own row below the latency slider, so a TV remote can reach it with the arrow keys instead of it being trapped in the slider's row.
 
 ### Performance
+
+- Reuse RKNN transformer worker threads across chunks and expose context-initialization cost in optional RKNN profiling; retain single-chunk inference, model integrity checks and the existing model/overlap-add behavior.
+
+- Virtualize song tables and card grids while preserving global TV-remote navigation and scroll restoration; keep per-song action callbacks stable so moving focus does not rerender every visible song.
+
+- Prepare pitch-scoring reference duration in a cancellable Web Worker before starting music, and reuse the pitch detector between renders without changing scoring calculations.
+
+- Move cache scans and cleanup off desktop UI/server async threads, cache statistics for one minute, and refresh them immediately after explicit cleanup or cache-path changes.
+
+- Use bounded single-producer/single-consumer microphone buffers and mix samples directly in native audio callbacks, avoiding callback allocations and blocking queue locks; size monitoring queues for both capture and output periods.
+
+- Move library reads and analysis actions off the desktop UI and server async workers. Refresh library pages only when scan metadata or analysis status changes, not on each percentage update or unchanged incomplete scan.
+
+- Run Linux song analysis at background CPU priority (`nice=10`), including existing worker threads and subprocesses; restore it after each RKNN context initialization instead of retaining the runtime's automatic `nice=-19` boost.
 
 - Run independent RK3588 UVR transformer slices across three NPU cores in streamed mode on the Orange Pi TV box, reducing measured per-chunk inference time while preserving the serial path elsewhere.
 

@@ -8,6 +8,7 @@ import { SongRowActions } from './song-row-actions';
 
 type SongTableRowProps = {
   bestScore?: number;
+  measure: (element: HTMLElement | null) => void;
 } & SongItemProps;
 
 export const SongTableRow = memo(
@@ -26,26 +27,32 @@ export const SongTableRow = memo(
     onPlay,
     onDelete,
     bestScore,
+    measure,
   }: SongTableRowProps) => {
     const onKeyDown = (event: KeyboardEvent<HTMLTableRowElement>) => {
       if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) {
         return;
       }
       event.preventDefault();
-      onSelect();
+      onSelect(song);
     };
 
     return (
       <tr
+        ref={measure}
+        data-index={index}
+        aria-rowindex={index + 2}
         tabIndex={0}
         data-song-index={index}
         data-nav-focused={isFocused}
         aria-selected={isSelected}
-        onClick={onSelect}
+        onClick={() => onSelect(song)}
         onKeyDown={onKeyDown}
         className={cn(
           'cursor-pointer border-b border-border/70 outline-none [&>td]:bg-background [&>td]:transition-colors hover:[&>td]:bg-accent focus-visible:[&>td]:bg-primary/15',
-          (isFocused || isSelected) && '[&>td]:bg-primary/15 hover:[&>td]:bg-primary/20',
+          isSelected && '[&>td]:bg-primary/10',
+          isFocused &&
+            '[&>td]:bg-primary/20 hover:[&>td]:bg-primary/25 [&>td:first-child]:border-l-4 [&>td:first-child]:border-primary',
         )}
       >
         {SONG_COLUMNS.map((column) => (

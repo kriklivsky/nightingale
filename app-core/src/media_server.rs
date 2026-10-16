@@ -31,7 +31,6 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 use tracing::warn;
 use ts_rs::TS;
 
-use crate::config::{AppConfig, LibrarySource};
 use crate::library_db;
 use crate::source::{StreamResponse, active_source};
 
@@ -189,7 +188,7 @@ fn handle_local_file(request: Request, path_segment: &str) {
     };
 
     let candidate = PathBuf::from(&cleaned);
-    let Some(resolved) = resolve_within_allowed_roots(&candidate) else {
+    let Some(resolved) = crate::resolve_media_path(&candidate) else {
         let _ = request.respond(with_cors(not_found("file not in allowed roots")));
         return;
     };
@@ -197,34 +196,15 @@ fn handle_local_file(request: Request, path_segment: &str) {
     serve_file(request, &resolved);
 }
 
-fn resolve_within_allowed_roots(input: &Path) -> Option<PathBuf> {
-    let canonical_input = std::fs::canonicalize(input).ok()?;
-    for root in allowed_roots() {
-        let Ok(canon_root) = std::fs::canonicalize(&root) else {
-            continue;
-        };
-        if canonical_input.starts_with(&canon_root) {
-            return Some(canonical_input);
-        }
-    }
-    None
-}
-
-fn allowed_roots() -> Vec<PathBuf> {
-    let config = AppConfig::load();
-    let mut roots = vec![
-        crate::cache::nightingale_dir(),
-        crate::cache::default_nightingale_dir(),
-        config.effective_data_path(),
-    ];
-    if let Some(LibrarySource::Folder { path }) = config.library_source.as_ref() {
-        roots.push(path.clone());
-    }
-    roots
-}
-
 fn serve_file(request: Request, file_path: &Path) {
-    let file_len = match std::fs::metadata(file_path) {
+    let mut file = match std::fs::File::open(file_path) {
+        Ok(file) => file,
+        Err(_) => {
+            let _ = request.respond(with_cors(server_error("open")));
+            return;
+        }
+    };
+    let file_len = match file.metadata() {
         Ok(m) => m.len(),
         Err(_) => {
             let _ = request.respond(with_cors(server_error("metadata")));
@@ -246,51 +226,42 @@ fn serve_file(request: Request, file_path: &Path) {
         return;
     };
 
-    let range_val = request_header(&request, "Range");
-
-    if let Some((start, end)) = range_val.as_deref().and_then(|r| parse_range(r, file_len)) {
-        let mut file = match std::fs::File::open(file_path) {
-            Ok(f) => f,
-            Err(_) => {
-                let _ = request.respond(with_cors(server_error("open")));
+    let mut headers = vec![content_type, accept_ranges, no_sniff];
+    let (start, length, status) = if let Some(range) = request_header(&request, "Range") {
+        let Some((start, end)) = parse_range(&range, file_len) else {
+            let Some(content_range) = header("Content-Range", format!("bytes */{file_len}")) else {
+                let _ = request.respond(with_cors(server_error("content range")));
                 return;
-            }
-        };
-        let chunk_len = (end - start + 1) as usize;
-        let mut buf = vec![0u8; chunk_len];
-        let _ = file.seek(SeekFrom::Start(start));
-        if file.read_exact(&mut buf).is_err() {
-            let _ = request.respond(with_cors(server_error("read range")));
+            };
+            let _ = request.respond(with_cors(
+                Response::empty(StatusCode(416)).with_header(content_range),
+            ));
             return;
-        }
+        };
         let Some(content_range) =
             header("Content-Range", format!("bytes {start}-{end}/{file_len}"))
         else {
             let _ = request.respond(with_cors(server_error("content range")));
             return;
         };
-        let resp = Response::from_data(buf)
-            .with_status_code(StatusCode(206))
-            .with_header(content_type)
-            .with_header(accept_ranges)
-            .with_header(no_sniff)
-            .with_header(content_range);
-        let _ = request.respond(with_cors(resp));
+        headers.push(content_range);
+        (start, end - start + 1, StatusCode(206))
+    } else {
+        (0, file_len, StatusCode(200))
+    };
+    let Ok(response_len) = usize::try_from(length) else {
+        let _ = request.respond(with_cors(server_error("file size")));
+        return;
+    };
+    if start > 0 && file.seek(SeekFrom::Start(start)).is_err() {
+        let _ = request.respond(with_cors(server_error("seek")));
         return;
     }
 
-    match std::fs::read(file_path) {
-        Ok(data) => {
-            let resp = Response::from_data(data)
-                .with_header(content_type)
-                .with_header(accept_ranges)
-                .with_header(no_sniff);
-            let _ = request.respond(with_cors(resp));
-        }
-        Err(_) => {
-            let _ = request.respond(with_cors(server_error("read")));
-        }
-    }
+    // WebKit/GStreamer needs a known byte length to seek local HTTP media.
+    let response = Response::new(status, headers, file.take(length), Some(response_len), None)
+        .with_chunked_threshold(usize::MAX);
+    let _ = request.respond(with_cors(response));
 }
 
 fn mime_for_path(path: &Path) -> &'static str {
@@ -313,21 +284,28 @@ fn mime_for_path(path: &Path) -> &'static str {
 }
 
 fn parse_range(range_header: &str, file_len: u64) -> Option<(u64, u64)> {
+    if file_len == 0 {
+        return None;
+    }
     let spec = range_header.strip_prefix("bytes=")?;
-    let mut parts = spec.splitn(2, '-');
-    let start_str = parts.next().unwrap_or("");
-    let end_str = parts.next().unwrap_or("");
+    let (start_str, end_str) = spec.split_once('-')?;
 
     if start_str.is_empty() {
         let suffix: u64 = end_str.parse().ok()?;
-        Some((file_len.saturating_sub(suffix), file_len.saturating_sub(1)))
+        if suffix == 0 {
+            return None;
+        }
+        Some((file_len.saturating_sub(suffix), file_len - 1))
     } else {
         let start: u64 = start_str.parse().ok()?;
         let end = if end_str.is_empty() {
-            file_len.saturating_sub(1)
+            file_len - 1
         } else {
-            end_str.parse::<u64>().ok()?.min(file_len.saturating_sub(1))
+            end_str.parse::<u64>().ok()?.min(file_len - 1)
         };
+        if start >= file_len || end < start {
+            return None;
+        }
         Some((start, end))
     }
 }

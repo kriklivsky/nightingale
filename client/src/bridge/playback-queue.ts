@@ -25,6 +25,12 @@ export const addPlaybackQueueEntry = async (
 ): Promise<PlaybackQueueEntry[]> =>
   parseQueue(await invoke('add_playback_queue_entry', { fileHash, tempo, keyOffset }));
 
+export const movePlaybackQueueEntry = async (
+  id: string,
+  targetIndex: number,
+): Promise<PlaybackQueueEntry[]> =>
+  parseQueue(await invoke('move_playback_queue_entry', { id, targetIndex }));
+
 export const removePlaybackQueueEntry = async (id: string): Promise<PlaybackQueueEntry[]> =>
   parseQueue(await invoke('remove_playback_queue_entry', { id }));
 

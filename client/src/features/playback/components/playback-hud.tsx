@@ -5,6 +5,7 @@ import type { VideoFlavor } from '@/features/playback/lib/video-flavor';
 import {
   usePlaybackMicActions,
   usePlaybackMicState,
+  type PlaybackPlayerMicState,
   usePlaybackThemeActions,
   usePlaybackThemeState,
   usePlaybackTranscriptActions,
@@ -13,9 +14,10 @@ import {
   usePlaybackTransportState,
 } from '@/features/playback/providers';
 import { computeLyricGapCaption, findCurrentSegment } from '@/features/playback/utils/lyrics-gap';
+import { playerColorOption } from '@/shared/player-colors';
 import type { AppConfig } from '@/types/AppConfig';
 
-import { isPixabayTheme, themeName } from './theme';
+import { isPixabayTheme, themeName, type PlaybackTheme } from './theme';
 
 function formatTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
@@ -28,8 +30,8 @@ function formatGuideText(volume: number): string {
   return pct === 0 ? 'Guide: OFF [←/→]' : `Guide: ${pct}% [←/→ / G]`;
 }
 
-function formatThemeText(themeIndex: number, videoFlavor: VideoFlavor): string {
-  return `Theme: ${themeName(themeIndex, videoFlavor)} [T${isPixabayTheme(themeIndex) ? '/F' : ''}]`;
+function formatThemeText(theme: PlaybackTheme, videoFlavor: VideoFlavor): string {
+  return `Theme: ${themeName(theme, videoFlavor)} [T${isPixabayTheme(theme) ? '/F' : ''}]`;
 }
 
 const SkipButton = forwardRef<HTMLButtonElement, { label: string; onClick: () => void }>(
@@ -103,7 +105,8 @@ function SettingsInfo({
   micUserEnabled,
   micName,
   micMonitorUserEnabled,
-  themeIndex,
+  multiplayer,
+  theme,
   videoFlavor,
   showShortcuts,
 }: {
@@ -112,7 +115,8 @@ function SettingsInfo({
   micUserEnabled: boolean;
   micName: string;
   micMonitorUserEnabled: boolean;
-  themeIndex: number;
+  multiplayer: boolean;
+  theme: PlaybackTheme;
   videoFlavor: VideoFlavor;
   showShortcuts: boolean;
 }) {
@@ -125,18 +129,20 @@ function SettingsInfo({
             : `Guide: ${Math.round(guideVolume * 100)}%`}
         </HintText>
       )}
-      <HintText>
-        Mic: {micUserEnabled ? micName : 'OFF'}
-        {showShortcuts ? ' [M/N]' : ''}
-      </HintText>
+      {!multiplayer && (
+        <HintText>
+          Mic: {micUserEnabled ? micName : 'OFF'}
+          {showShortcuts ? ' [M/N]' : ''}
+        </HintText>
+      )}
       <HintText>
         Monitor: {micMonitorUserEnabled ? 'ON' : 'OFF'}
         {showShortcuts ? ' [R]' : ''}
       </HintText>
       <HintText>
         {showShortcuts
-          ? formatThemeText(themeIndex, videoFlavor)
-          : `Theme: ${themeName(themeIndex, videoFlavor)}`}
+          ? formatThemeText(theme, videoFlavor)
+          : `Theme: ${themeName(theme, videoFlavor)}`}
       </HintText>
       {showShortcuts && <HintText>[ESC] Back</HintText>}
     </div>
@@ -155,9 +161,9 @@ function TouchControls({
   const [open, setOpen] = useState(false);
   const { guideVolume, guideAvailable } = usePlaybackTransportState();
   const { setGuideVolume, handlePause } = usePlaybackTransportActions();
-  const { micUserEnabled, micName, micMonitorUserEnabled } = usePlaybackMicState();
+  const { micUserEnabled, micName, micMonitorUserEnabled, multiplayer } = usePlaybackMicState();
   const { handleToggleMic, handleCycleMic, handleToggleMicMonitor } = usePlaybackMicActions();
-  const { themeIndex, videoFlavor } = usePlaybackThemeState();
+  const { theme, videoFlavor } = usePlaybackThemeState();
   const { cycleTheme, cycleFlavor } = usePlaybackThemeActions();
   const persistConfig = usePlaybackConfigPersist(config);
 
@@ -185,7 +191,8 @@ function TouchControls({
           micUserEnabled={micUserEnabled}
           micName={micName}
           micMonitorUserEnabled={micMonitorUserEnabled}
-          themeIndex={themeIndex}
+          multiplayer={multiplayer}
+          theme={theme}
           videoFlavor={videoFlavor}
           showShortcuts={false}
         />
@@ -219,18 +226,21 @@ function TouchControls({
               />
             </>
           )}
-          <TouchButton label={micUserEnabled ? 'Mic Off' : 'Mic On'} onClick={handleToggleMic} />
-          <TouchButton label="Mic Select" onClick={handleCycleMic} />
+          {!multiplayer && (
+            <>
+              <TouchButton
+                label={micUserEnabled ? 'Mic Off' : 'Mic On'}
+                onClick={handleToggleMic}
+              />
+              <TouchButton label="Mic Select" onClick={handleCycleMic} />
+            </>
+          )}
           <TouchButton
             label={micMonitorUserEnabled ? 'Monitor Off' : 'Monitor On'}
             onClick={handleToggleMicMonitor}
           />
           <TouchButton label="Theme" onClick={cycleTheme} />
-          <TouchButton
-            label="Flavor"
-            onClick={cycleFlavor}
-            disabled={!isPixabayTheme(themeIndex)}
-          />
+          <TouchButton label="Flavor" onClick={cycleFlavor} disabled={!isPixabayTheme(theme)} />
         </div>
       )}
     </div>
@@ -306,6 +316,33 @@ function creditPositionClass(position: PlaybackHudPosition, windowControls: bool
   return windowControls && position === 'bottom' ? 'top-12' : notePositionClass(position);
 }
 
+const scoreTextClass = (score: number | null): string =>
+  `text-base md:text-lg ${score !== null && score !== 0 ? 'text-white' : 'text-white/50'}`;
+
+function MultiplayerScores({ players }: { players: PlaybackPlayerMicState[] }) {
+  return (
+    <div className="grid justify-items-end gap-0.5" aria-label="Player scores">
+      {players.map((player, index) => (
+        <div
+          key={player.id}
+          className={`flex items-center justify-end gap-2 ${scoreTextClass(player.pitchScore)}`}
+        >
+          <span className="whitespace-nowrap">
+            {player.profile ?? `Guest ${index + 1}`}: {player.pitchScore ?? '--'}
+          </span>
+          <span
+            className={`size-2 rounded-full ${playerColorOption(player.color).className}`}
+            aria-hidden="true"
+          />
+          <span className="sr-only">
+            {player.micReady ? 'Microphone ready' : 'Microphone unavailable'}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 type PlaybackHudProps = {
   title: string;
   artist: string;
@@ -323,11 +360,12 @@ function PlaybackHudImpl({
 }: PlaybackHudProps) {
   const { duration, guideVolume, guideAvailable } = usePlaybackTransportState();
   const { subscribe, getCurrentTime } = usePlaybackTransportActions();
-  const { themeIndex, videoFlavor } = usePlaybackThemeState();
+  const { theme, videoFlavor } = usePlaybackThemeState();
   const { firstSegmentStart, lastSegmentEnd, introSkipLeadSec, segments, transcriptSource } =
     usePlaybackTranscriptState();
   const { handleSkipIntro, handleSkipOutro } = usePlaybackTranscriptActions();
-  const { pitchScore, micUserEnabled, micName, micMonitorUserEnabled } = usePlaybackMicState();
+  const { pitchScore, micUserEnabled, micName, micMonitorUserEnabled, multiplayer, players } =
+    usePlaybackMicState();
 
   const lastSecondRef = useRef(-1);
   const timerRef = useRef<HTMLParagraphElement>(null);
@@ -336,7 +374,7 @@ function PlaybackHudImpl({
   const gapCaptionRef = useRef<HTMLOutputElement>(null);
   const gapHintRef = useRef(0);
 
-  const showPixabayCredit = isPixabayTheme(themeIndex);
+  const showPixabayCredit = isPixabayTheme(theme);
   const hasTouch = useHasTouchInput();
 
   // Update playback text without triggering React renders every frame.
@@ -430,11 +468,12 @@ function PlaybackHudImpl({
         </div>
 
         <div className={`flex min-w-0 items-end ${hudFlowClass} ${rightHudOffset}`}>
-          <div
-            className={`text-base md:text-lg ${typeof pitchScore === 'number' && pitchScore !== 0 ? 'text-white' : 'text-white/50'}`}
-          >
-            Score: {pitchScore ?? '--'}
-          </div>
+          {multiplayer ? (
+            <MultiplayerScores players={players} />
+          ) : (
+            <div className={scoreTextClass(pitchScore)}>Score: {pitchScore ?? '--'}</div>
+          )}
+          <div className="my-1.5 hidden h-px w-full bg-white/20 sm:block" aria-hidden="true" />
           <div className="hidden sm:block">
             <SettingsInfo
               guideVolume={guideVolume}
@@ -442,7 +481,8 @@ function PlaybackHudImpl({
               micUserEnabled={micUserEnabled}
               micName={micName}
               micMonitorUserEnabled={micMonitorUserEnabled}
-              themeIndex={themeIndex}
+              multiplayer={multiplayer}
+              theme={theme}
               videoFlavor={videoFlavor}
               showShortcuts={!hasTouch}
             />

@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 
 import { setFullScreen, isFullScreen as tauriIsFullScreen } from '@/bridge/fullScreen';
-import { clampPlaybackScale } from '@/features/playback/lib/display-scale';
+import { clampPlaybackScale, DEFAULT_PLAYBACK_SCALE } from '@/features/playback/lib/display-scale';
+import { BackgroundSettings } from '@/features/settings/components/background-settings';
 import {
   ALIGN_BACKENDS,
   DEFAULTS,
   LYRICS_HORIZONTAL_POSITIONS,
+  LYRICS_ROMANIZATION_MODES,
   LYRICS_VERTICAL_POSITIONS,
   NAV,
   PLAYBACK_MODES,
@@ -38,6 +40,7 @@ const generalSettings = (config: AppConfig | undefined) => {
     return {
       fullscreen: undefined,
       preferredMic: null,
+      combineMultiChannel: true,
       micMonitorGain: DEFAULTS.mic_monitor_gain,
       micLatency: DEFAULTS.mic_latency_compensation_sec,
     };
@@ -46,18 +49,35 @@ const generalSettings = (config: AppConfig | undefined) => {
   return {
     fullscreen: config.fullscreen,
     preferredMic: config.preferred_mic,
+    combineMultiChannel: config.combine_multi_channel ?? true,
     micMonitorGain: config.mic_monitor_gain ?? DEFAULTS.mic_monitor_gain,
     micLatency: config.mic_latency_compensation_sec ?? DEFAULTS.mic_latency_compensation_sec,
   };
 };
 
-const playbackSettings = (config: AppConfig | undefined) => ({
-  mode: config?.playback_mode ?? DEFAULTS.playback_mode,
-  lyricsVertical: config?.lyrics_vertical_position ?? DEFAULTS.lyrics_vertical_position,
-  lyricsHorizontal: config?.lyrics_horizontal_position ?? DEFAULTS.lyrics_horizontal_position,
-  lyricsScale: clampPlaybackScale(config?.lyrics_scale),
-  pitchGraphScale: clampPlaybackScale(config?.pitch_graph_scale),
-});
+const playbackSettings = (config: AppConfig | undefined) => {
+  if (!config) {
+    return {
+      mode: DEFAULTS.playback_mode,
+      masterVolume: DEFAULTS.output_volume,
+      lyricsVertical: DEFAULTS.lyrics_vertical_position,
+      lyricsHorizontal: DEFAULTS.lyrics_horizontal_position,
+      lyricsScale: DEFAULT_PLAYBACK_SCALE,
+      pitchGraphScale: DEFAULT_PLAYBACK_SCALE,
+      lyricsRomanizationMode: DEFAULTS.lyrics_romanization_mode,
+    };
+  }
+
+  return {
+    mode: config.playback_mode ?? DEFAULTS.playback_mode,
+    masterVolume: config.output_volume ?? DEFAULTS.output_volume,
+    lyricsVertical: config.lyrics_vertical_position ?? DEFAULTS.lyrics_vertical_position,
+    lyricsHorizontal: config.lyrics_horizontal_position ?? DEFAULTS.lyrics_horizontal_position,
+    lyricsScale: clampPlaybackScale(config.lyrics_scale),
+    pitchGraphScale: clampPlaybackScale(config.pitch_graph_scale),
+    lyricsRomanizationMode: config.lyrics_romanization_mode ?? DEFAULTS.lyrics_romanization_mode,
+  };
+};
 
 const pendingValue = <T,>(input: T | null, saved: T): T => input ?? saved;
 
@@ -89,6 +109,8 @@ export const SettingsPage = () => {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [tab, setTab] = useState<SettingsTab>('general');
+  const [backgroundDialogOpen, setBackgroundDialogOpen] = useState(false);
+  const [hasMultiChannelInput, setHasMultiChannelInput] = useState(false);
   const general = generalSettings(config);
   const playback = playbackSettings(config);
   const analysis = analysisSettings(config);
@@ -112,6 +134,9 @@ export const SettingsPage = () => {
     void navigate('/');
   };
   const analysisNav = getAnalysisNav();
+  const [masterVolumeInput, setMasterVolume] = useState<number | null>(null);
+  const masterVolume = pendingValue(masterVolumeInput, playback.masterVolume);
+  const masterVolumePct = Math.round(masterVolume * 100);
   const lyricsScalePct = Math.round(lyricsScale * 100);
   const pitchGraphScalePct = Math.round(pitchGraphScale * 100);
   const vocalThresholdDisplayPct = Math.round(vocalThresholdPct * 100);
@@ -132,6 +157,11 @@ export const SettingsPage = () => {
   const updateMicLatency = (latencySec: number) => {
     setMicLatencySec(latencySec);
     mutate({ mic_latency_compensation_sec: latencySec });
+  };
+
+  const updateMasterVolume = (volume: number) => {
+    setMasterVolume(volume);
+    mutate({ output_volume: volume });
   };
 
   const updateLyricsScale = (scale: number) => {
@@ -157,6 +187,7 @@ export const SettingsPage = () => {
 
   const resetDefaults = () => {
     mutate(DEFAULTS);
+    setMasterVolume(DEFAULTS.output_volume);
     setMicMonitorGain(DEFAULTS.mic_monitor_gain);
     setMicLatencySec(DEFAULTS.mic_latency_compensation_sec);
     setLyricsVertical(DEFAULTS.lyrics_vertical_position);
@@ -168,6 +199,10 @@ export const SettingsPage = () => {
 
   const { footerSegment, getFocusClassName, syncFocusFromElement } = useSettingsNavigation({
     containerRef,
+    enabled: !backgroundDialogOpen,
+    hasMultiChannelInput,
+    masterVolume,
+    onMasterVolumeChange: updateMasterVolume,
     tab,
     micMonitorGain,
     micLatencySec,
@@ -192,6 +227,9 @@ export const SettingsPage = () => {
     >
       <div className="mx-auto flex max-w-4xl flex-col gap-5">
         <PageHeader />
+        <p className="rounded-md border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-muted-foreground">
+          Remote: ↑↓ move · ←→ choose or adjust · OK select · Back close
+        </p>
 
         <Tabs
           value={tab}
@@ -206,7 +244,7 @@ export const SettingsPage = () => {
               <TabsTrigger
                 key={settingsTab.value}
                 value={settingsTab.value}
-                className={getFocusClassName(NAV.tabSegment, slot)}
+                className={`min-h-11 px-5 text-base ${getFocusClassName(NAV.tabSegment, slot)}`}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
                     setTab(settingsTab.value);
@@ -242,6 +280,8 @@ export const SettingsPage = () => {
 
               <MicrophoneSettings
                 savedMicId={general.preferredMic}
+                combineMultiChannel={general.combineMultiChannel}
+                onMultiChannelAvailabilityChange={setHasMultiChannelInput}
                 monitorGain={micMonitorGain}
                 latencySec={micLatencySec}
                 getFocusClassName={getFocusClassName}
@@ -263,6 +303,12 @@ export const SettingsPage = () => {
               </div>
 
               <FieldGroup>
+                <BackgroundSettings
+                  selectClassName={getFocusClassName(NAV.playback.background, 0)}
+                  manageClassName={getFocusClassName(NAV.playback.background, 1)}
+                  onDialogOpenChange={setBackgroundDialogOpen}
+                />
+
                 <Field>
                   <Label htmlFor="playback-mode-1">Playback mode</Label>
                   <Hint>Choose whether playback replaces the menu or runs beside it</Hint>
@@ -278,8 +324,21 @@ export const SettingsPage = () => {
                 </Field>
 
                 <Field>
+                  <Label>Master volume</Label>
+                  <Hint>Overall playback volume ({masterVolumePct}%)</Hint>
+                  <Slider
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={[masterVolumePct]}
+                    onValueChange={([pct]) => updateMasterVolume(pct / 100)}
+                    className={getFocusClassName(NAV.playback.masterVolume)}
+                  />
+                </Field>
+
+                <Field>
                   <Label htmlFor="lyrics-vertical-position-1">Lyrics vertical position</Label>
-                  <Hint>Top moves playback HUD and pitch graph to the bottom</Hint>
+                  <Hint>Top moves playback HUD and pitch meter to the bottom</Hint>
                   <SettingsSelect
                     id="lyrics-vertical-position-1"
                     label="Lyrics vertical position"
@@ -325,8 +384,8 @@ export const SettingsPage = () => {
                 </Field>
 
                 <Field>
-                  <Label>Pitch graph scale</Label>
-                  <Hint>Size of pitch graph during playback ({pitchGraphScalePct}%)</Hint>
+                  <Label>Pitch meter scale</Label>
+                  <Hint>Size of the calm pitch meter during playback ({pitchGraphScalePct}%)</Hint>
                   <Slider
                     min={PLAYBACK_SCALE_MIN * 100}
                     max={PLAYBACK_SCALE_MAX * 100}
@@ -335,6 +394,24 @@ export const SettingsPage = () => {
                     onValueChange={([pct]) => updatePitchGraphScale(pct / 100)}
                     className={getFocusClassName(NAV.playback.pitchGraphScale)}
                   />
+                </Field>
+                <Field>
+                  <Label>Romanized lyrics</Label>
+                  <Hint>Show readings for Chinese, Japanese and Korean lyrics</Hint>
+                  <ButtonGroup>
+                    {LYRICS_ROMANIZATION_MODES.map((option, slot) => (
+                      <Button
+                        key={option.value}
+                        variant={
+                          playback.lyricsRomanizationMode === option.value ? 'default' : 'outline'
+                        }
+                        className={getFocusClassName(NAV.playback.lyricsRomanizationMode, slot)}
+                        onClick={() => mutate({ lyrics_romanization_mode: option.value })}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </ButtonGroup>
                 </Field>
               </FieldGroup>
             </div>
@@ -415,11 +492,15 @@ export const SettingsPage = () => {
           <Button
             variant="ghost"
             onClick={resetDefaults}
-            className={getFocusClassName(footerSegment, 0)}
+            className={`min-h-11 text-base ${getFocusClassName(footerSegment, 0)}`}
           >
             Restore Defaults
           </Button>
-          <Button variant="outline" onClick={close} className={getFocusClassName(footerSegment, 1)}>
+          <Button
+            variant="outline"
+            onClick={close}
+            className={`min-h-11 text-base ${getFocusClassName(footerSegment, 1)}`}
+          >
             Close
           </Button>
         </div>

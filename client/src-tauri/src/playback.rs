@@ -19,10 +19,16 @@ pub(crate) fn ensure_mp3_stems(app: AppHandle, file_hash: String) {
 }
 
 #[tauri::command]
-pub(crate) fn ensure_playable_source_video(file_hash: String) -> Option<String> {
-    app_core::ensure_playable_source_video(&file_hash)
-        .ok()
-        .flatten()
+pub(crate) async fn ensure_playable_source_video(
+    file_hash: String,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app_core::ensure_playable_source_video(&file_hash)
+            .ok()
+            .flatten()
+    })
+    .await
+    .map_err(|_| "Video preparation interrupted. Try again.".to_string())
 }
 
 #[tauri::command]

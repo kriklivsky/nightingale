@@ -1,9 +1,5 @@
 /**
- * Owns the visual background selection: shader / Pixabay / source-video index,
- * the current Pixabay flavor, and the (async) playable source-video path.
- *
- * Cycle handlers persist their result via the playback config, so call sites
- * just trigger `cycleTheme()` / `cycleFlavor()` without threading persistence.
+ * Owns visual background selection, Pixabay flavor, and playable song-video path.
  */
 
 import {
@@ -13,34 +9,35 @@ import {
   useEffect,
   useMemo,
   useState,
-  type Dispatch,
   type ReactNode,
-  type SetStateAction,
 } from 'react';
+import { toast } from 'sonner';
 
 import { ensurePlayableSourceVideo } from '@/bridge/playback';
 import {
-  SOURCE_VIDEO_INDEX,
+  createPlaybackThemes,
+  initialThemeKey,
   nextFlavorIndex,
-  nextThemeIndex,
+  nextThemeKey,
+  selectionForTheme,
+  themeKey,
+  type PlaybackTheme,
 } from '@/features/playback/components/theme';
 import { usePlaybackConfigPersist } from '@/features/playback/hooks/use-playback-config-persist';
 import { FLAVORS, type VideoFlavor } from '@/features/playback/lib/video-flavor';
+import { useSongVideo } from '@/features/song-video/queries';
 import type { AppConfig } from '@/types/AppConfig';
 import type { Song } from '@/types/Song';
 
 export type PlaybackThemeState = {
-  themeIndex: number;
-  flavorIndex: number;
+  theme: PlaybackTheme;
   videoFlavor: VideoFlavor;
   sourceVideoPath: string | undefined;
   sourceVideoTempoRatio: number;
-  hasSourceVideo: boolean;
+  sourceVideoOffsetSec: number;
 };
 
 export type PlaybackThemeActions = {
-  setThemeIndex: Dispatch<SetStateAction<number>>;
-  setFlavorIndex: Dispatch<SetStateAction<number>>;
   cycleTheme: () => void;
   cycleFlavor: () => void;
 };
@@ -60,32 +57,26 @@ function resolveSourceVideoPath(
   song: Song,
   playableVideo: PlayableVideo | null,
 ): string | undefined {
-  if (!song.is_video) {
+  if (!song.is_video && typeof song.usdx?.video !== 'string') {
     return undefined;
   }
-
-  return playableVideo?.fileHash === song.file_hash ? playableVideo.path : song.path;
+  return playableVideo?.fileHash === song.file_hash
+    ? playableVideo.path
+    : (song.usdx?.video ?? song.path);
 }
 
-export function PlaybackThemeProvider({ song, config, children }: PlaybackThemeProviderProps) {
+function useSourceVideo(song: Song) {
   const fileHash = song.file_hash;
-  const initialTheme = config?.last_theme ?? 0;
-  const initialVideoFlavor = config?.last_video_flavor ?? 0;
-
-  const [themeIndex, setThemeIndex] = useState(song.is_video ? SOURCE_VIDEO_INDEX : initialTheme);
-  const [flavorIndex, setFlavorIndex] = useState(initialVideoFlavor);
-
-  const persistConfig = usePlaybackConfigPersist(config);
-
+  const { data: attachedVideo, error: videoError } = useSongVideo(fileHash);
+  const hasAuthoredVideo = song.is_video || typeof song.usdx?.video === 'string';
   const [playableVideo, setPlayableVideo] = useState<PlayableVideo | null>(null);
 
   useEffect(() => {
-    if (!song.is_video) {
+    if (!hasAuthoredVideo) {
       return undefined;
     }
 
     let cancelled = false;
-
     void ensurePlayableSourceVideo(fileHash)
       .then((path) => {
         if (!cancelled && typeof path === 'string' && path !== '') {
@@ -98,23 +89,60 @@ export function PlaybackThemeProvider({ song, config, children }: PlaybackThemeP
     return () => {
       cancelled = true;
     };
-  }, [fileHash, song.is_video]);
+  }, [fileHash, hasAuthoredVideo]);
 
-  const sourceVideoPath = resolveSourceVideoPath(song, playableVideo);
+  const sourceVideoPath = attachedVideo?.path ?? resolveSourceVideoPath(song, playableVideo);
+
+  useEffect(() => {
+    if (videoError instanceof Error) {
+      toast.error(`Cannot load the song video: ${videoError.message}`);
+    }
+  }, [videoError]);
+
+  return { sourceVideoPath, sourceVideoOffsetSec: attachedVideo?.offset_sec ?? 0 };
+}
+
+function configuredThemeKey(
+  themes: readonly PlaybackTheme[],
+  hasSourceVideo: boolean,
+  config: AppConfig | null,
+): string {
+  return initialThemeKey({
+    themes,
+    hasSourceVideo,
+    selection: config?.last_background,
+    legacyIndex: config?.last_theme ?? 0,
+  });
+}
+
+export function PlaybackThemeProvider({ song, config, children }: PlaybackThemeProviderProps) {
+  const { sourceVideoPath, sourceVideoOffsetSec } = useSourceVideo(song);
+  const hasSourceVideo = sourceVideoPath !== undefined;
+  const themes = useMemo(
+    () => createPlaybackThemes(config?.custom_backgrounds ?? [], hasSourceVideo),
+    [config?.custom_backgrounds, hasSourceVideo],
+  );
+  const [selectedThemeKey, setCurrentThemeKey] = useState<string | null>(null);
+  const currentThemeKey = selectedThemeKey ?? configuredThemeKey(themes, hasSourceVideo, config);
+  const [flavorIndex, setFlavorIndex] = useState(config?.last_video_flavor ?? 0);
+  const theme = themes.find((candidate) => themeKey(candidate) === currentThemeKey) ?? themes[0];
+  const persistConfig = usePlaybackConfigPersist(config);
 
   const cycleTheme = useCallback(() => {
-    setThemeIndex((prev) => {
-      const next = nextThemeIndex(prev, song.is_video);
-      if (next !== SOURCE_VIDEO_INDEX) {
-        persistConfig({ last_theme: next });
+    setCurrentThemeKey((current) => {
+      const nextKey = nextThemeKey(themes, current ?? currentThemeKey);
+      const next = themes.find((candidate) => themeKey(candidate) === nextKey);
+      const selection = next ? selectionForTheme(next) : null;
+      if (selection) {
+        persistConfig({ last_background: selection });
       }
-      return next;
+      return nextKey;
     });
-  }, [song.is_video, persistConfig]);
+  }, [currentThemeKey, persistConfig, themes]);
 
   const cycleFlavor = useCallback(() => {
-    setFlavorIndex((prev) => {
-      const next = nextFlavorIndex(prev);
+    setFlavorIndex((current) => {
+      const next = nextFlavorIndex(current);
       persistConfig({ last_video_flavor: next });
       return next;
     });
@@ -122,23 +150,17 @@ export function PlaybackThemeProvider({ song, config, children }: PlaybackThemeP
 
   const stateValue = useMemo<PlaybackThemeState>(
     () => ({
-      themeIndex,
-      flavorIndex,
+      theme,
       videoFlavor: FLAVORS[flavorIndex % FLAVORS.length],
       sourceVideoPath,
       sourceVideoTempoRatio: song.tempo,
-      hasSourceVideo: song.is_video,
+      sourceVideoOffsetSec,
     }),
-    [themeIndex, flavorIndex, sourceVideoPath, song.tempo, song.is_video],
+    [theme, flavorIndex, sourceVideoPath, song.tempo, sourceVideoOffsetSec],
   );
 
   const actionsValue = useMemo<PlaybackThemeActions>(
-    () => ({
-      setThemeIndex,
-      setFlavorIndex,
-      cycleTheme,
-      cycleFlavor,
-    }),
+    () => ({ cycleTheme, cycleFlavor }),
     [cycleTheme, cycleFlavor],
   );
 

@@ -21,6 +21,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from scheduling import set_background_priority
+set_background_priority(report=True)
+
 from whisper_compat import progress, detect_device, set_align_backend
 from audio import set_vocal_threshold_pct
 from pipeline import run_pipeline

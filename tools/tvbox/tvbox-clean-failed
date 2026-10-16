@@ -1,0 +1,241 @@
+#!/usr/bin/python3
+import argparse
+from contextlib import closing
+import fcntl
+import json
+import os
+from pathlib import Path
+import sqlite3
+import stat
+import subprocess
+import sys
+import time
+
+
+DATA = Path('/var/lib/tvbox/.nightingale')
+LIBRARY = Path('/var/lib/tvbox/songs')
+DATABASE = DATA / 'songs.db'
+KIND = Path('/run/tvbox-active.kind')
+
+
+def connect(writable=False):
+    db = sqlite3.connect(f'file:{DATABASE}?mode={"rw" if writable else "ro"}', uri=True, timeout=10)
+    db.row_factory = sqlite3.Row
+    db.execute('PRAGMA foreign_keys = ON')
+    return db
+
+
+def references(row):
+    payload = json.loads(row['payload'])
+    paths = {Path(row['path'])}
+    if row['album_art_path']:
+        paths.add(Path(row['album_art_path']))
+    bundle = payload.get('usdx')
+    if bundle:
+        paths.update(Path(value) for value in bundle.values() if isinstance(value, str))
+        source = Path(row['path'])
+        try:
+            raw = source.read_bytes()
+        except OSError as error:
+            raise RuntimeError(f'Cannot verify UltraStar references: {source}') from error
+        try:
+            text = raw.decode('utf-8-sig')
+        except UnicodeDecodeError:
+            text = raw.decode('cp1252', errors='replace')
+        for line in text.splitlines():
+            tag, separator, value = line.partition(':')
+            if separator and tag.strip().upper() in {'#AUDIO', '#MP3', '#VOCALS', '#INSTRUMENTAL', '#VIDEO', '#COVER'}:
+                paths.add(source.parent / value.strip())
+    return paths
+
+
+def make_plan(db):
+    root = LIBRARY.resolve(strict=True)
+    folder = db.execute('SELECT folder FROM library_meta WHERE id=1').fetchone()[0]
+    if root != LIBRARY or Path(folder).resolve() != root:
+        raise RuntimeError('This command only supports the local /var/lib/tvbox/songs library')
+    rows = db.execute('SELECT s.*, a.status, a.failed_message FROM songs s LEFT JOIN analysis_queue a USING(file_hash) ORDER BY s.id').fetchall()
+    candidates = []
+    skipped = []
+    for row in rows:
+        if row['status'] != 'failed':
+            continue
+        payload = json.loads(row['payload'])
+        path = Path(row['path'])
+        try:
+            if payload.get('origin', {}).get('kind', 'local_file') != 'local_file' or payload.get('usdx'):
+                raise ValueError('remote or UltraStar song; use the application deletion action')
+            if row['is_analyzed'] or payload.get('is_analyzed'):
+                raise ValueError('song already has successful analysis')
+            if not path.is_absolute() or path.resolve() != path or not path.is_relative_to(root) or path == root:
+                raise ValueError('path is outside the library or traverses a symlink')
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError('not a regular, unshared file')
+            candidates.append({**dict(row), 'size': info.st_size, 'device': info.st_dev, 'inode': info.st_ino, 'mtime_ns': info.st_mtime_ns})
+        except (OSError, ValueError) as error:
+            skipped.append({'path': str(path), 'reason': str(error)})
+
+    while True:
+        selected = {row['id'] for row in candidates}
+        protected = {path.resolve() for row in rows if row['id'] not in selected for path in references(row)}
+        shared = [row for row in candidates if Path(row['path']) in protected]
+        if not shared:
+            return candidates, skipped
+        shared_ids = {row['id'] for row in shared}
+        skipped.extend({'path': row['path'], 'reason': 'file referenced by a retained song'} for row in shared)
+        candidates = [row for row in candidates if row['id'] not in shared_ids]
+
+
+def show_plan(plan, skipped):
+    print(f'{len(plan)} failed song files, {sum(row["size"] for row in plan) / 1024**3:.2f} GiB; {len(skipped)} protected/skipped.', flush=True)
+    for row in plan:
+        print(f'  DELETE {row["artist"]} — {row["title"]}: {row["path"]}')
+    for row in skipped:
+        print(f'  KEEP {row["path"]}: {row["reason"]}')
+
+
+def running():
+    result = subprocess.run(['pgrep', '-x', 'Nightingale'], check=False, stdout=subprocess.DEVNULL)
+    if result.returncode not in (0, 1):
+        raise RuntimeError('Cannot determine whether Nightingale is running')
+    return result.returncode == 0
+
+
+def stop_app():
+    if KIND.read_text().strip() != 'nightingale' or not running():
+        raise RuntimeError('Open Nightingale in the TV launcher before cleanup')
+    subprocess.run(['/usr/local/bin/tvbox-return'], check=True)
+    for _ in range(80):
+        if not running():
+            return
+        time.sleep(0.25)
+    raise RuntimeError('Nightingale did not stop; no files were touched')
+
+
+def start_app():
+    env = {**os.environ, 'DISPLAY': ':0', 'XAUTHORITY': '/run/tvbox.Xauthority'}
+    for _ in range(80):
+        if KIND.exists() and KIND.read_text().strip() == 'launcher':
+            result = subprocess.run(['xdotool', 'search', '--onlyvisible', '--name', '^Orange Pi TV$'], env=env, capture_output=True, text=True, check=False)
+            if result.returncode == 0:
+                window = result.stdout.strip().splitlines()
+                if len(window) != 1:
+                    raise RuntimeError('Cannot identify the TV launcher window')
+                subprocess.run(['xdotool', 'windowfocus', '--sync', window[0]], env=env, check=True)
+                subprocess.run(['xdotool', 'key', '--clearmodifiers', 'Return'], env=env, check=True)
+                for _ in range(80):
+                    if KIND.exists() and KIND.read_text().strip() == 'nightingale' and running():
+                        print('Nightingale reopened; other saved analysis jobs will resume.', flush=True)
+                        return
+                    time.sleep(0.25)
+                break
+        time.sleep(0.25)
+    raise RuntimeError('Open Nightingale manually to resume its saved analysis queue')
+
+
+def cleanup(db):
+    plan, skipped = make_plan(db)
+    show_plan(plan, skipped)
+    if not plan:
+        return
+    nonce = time.time_ns()
+    backup_path = DATA / f'songs.db.pre-failed-cleanup-{nonce}'
+    with closing(sqlite3.connect(backup_path)) as backup:
+        db.backup(backup)
+    for index, row in enumerate(plan):
+        row['staged'] = str(Path(row['path']).with_name(f'.nightingale-clean-{nonce}-{index}'))
+    manifest = DATA / f'failed-cleanup-{nonce}.json'
+    with manifest.open('x', encoding='utf-8') as output:
+        json.dump({'backup': str(backup_path), 'files': plan, 'skipped': skipped}, output, ensure_ascii=False, indent=2)
+        output.flush()
+        os.fsync(output.fileno())
+    print(f'Database backup: {backup_path}\nDeletion manifest: {manifest}', flush=True)
+
+    staged = []
+    committed = False
+    try:
+        db.execute('BEGIN IMMEDIATE')
+        if make_plan(db)[0] != [{key: value for key, value in row.items() if key != 'staged'} for row in plan]:
+            raise RuntimeError('Library changed since the backup; no files deleted')
+        for row in plan:
+            original, temporary = Path(row['path']), Path(row['staged'])
+            info = original.lstat()
+            if original.resolve() != original or (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_nlink) != (row['device'], row['inode'], row['size'], row['mtime_ns'], 1):
+                raise RuntimeError(f'File changed: {original}')
+            if temporary.exists() or temporary.is_symlink():
+                raise RuntimeError(f'Staging path already exists: {temporary}')
+            original.rename(temporary)
+            staged.append(row)
+            count = db.execute('DELETE FROM songs WHERE id=? AND file_hash=? AND path=?', (row['id'], row['file_hash'], row['path'])).rowcount
+            if count != 1:
+                raise RuntimeError(f'Song changed: {original}')
+        for file_hash in {row['file_hash'] for row in plan}:
+            if not db.execute('SELECT 1 FROM songs WHERE file_hash=?', (file_hash,)).fetchone():
+                db.execute('DELETE FROM favorite_songs WHERE file_hash=?', (file_hash,))
+                db.execute("DELETE FROM analysis_queue WHERE file_hash=? AND status='failed'", (file_hash,))
+        db.commit()
+        committed = True
+    finally:
+        if not committed:
+            db.rollback()
+            for row in reversed(staged):
+                original = Path(row['path'])
+                if original.exists() or original.is_symlink():
+                    print(f'Cannot restore over a new file: {original}; staged file: {row["staged"]}', file=sys.stderr)
+                    continue
+                try:
+                    Path(row['staged']).rename(original)
+                except OSError as error:
+                    print(f'Restore failed: {row["staged"]}: {error}', file=sys.stderr)
+
+    failures = []
+    for row in staged:
+        try:
+            temporary = Path(row['staged'])
+            info = temporary.lstat()
+            if temporary.resolve() != temporary or (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) != (row['device'], row['inode'], row['size'], row['mtime_ns']):
+                raise RuntimeError('Staged file changed; refusing deletion')
+            temporary.unlink()
+        except (OSError, RuntimeError) as error:
+            failures.append(f'{row["staged"]}: {error}')
+    print(f'Removed {len(plan)} library entries and {len(plan) - len(failures)} source files; {len(skipped)} skipped.', flush=True)
+    if failures:
+        raise RuntimeError('Some staged files remain on disk:\n' + '\n'.join(failures))
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Preview failed local songs, or permanently delete their library rows and source files with --delete. Database backup does not back up audio/video.')
+    parser.add_argument('--delete', action='store_true', help='confirm permanent source-file deletion and restart only Nightingale; its other analysis jobs resume')
+    args = parser.parse_args()
+    if not args.delete:
+        with closing(connect()) as db:
+            show_plan(*make_plan(db))
+        print('Preview only. Use --delete to permanently remove the listed source files.')
+        return
+    if os.geteuid() != 0:
+        raise RuntimeError('Run --delete with sudo or as root')
+    os.umask(0o077)
+    with open('/run/tvbox-clean-failed.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with closing(connect()) as db:
+            plan, skipped = make_plan(db)
+            if not plan:
+                show_plan(plan, skipped)
+                return
+        stop_app()
+        try:
+            if running():
+                raise RuntimeError('Nightingale restarted unexpectedly; no files touched')
+            with closing(connect(writable=True)) as db:
+                cleanup(db)
+        finally:
+            start_app()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, RuntimeError, ValueError, sqlite3.Error, subprocess.SubprocessError) as error:
+        print(f'Cleanup failed: {error}', file=sys.stderr)
+        sys.exit(1)

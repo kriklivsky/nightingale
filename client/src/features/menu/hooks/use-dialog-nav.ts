@@ -162,7 +162,7 @@ function clampDialogPosition(input: DialogPositionInput) {
  * **Two layouts**
  *
  * 1. **Uniform strip** — only `itemCount` (no `stops`). Behaves like a single
- *    row: left/right wrap between items; up/down also move between items.
+ *    row: arrows stop at the first and last items rather than wrapping.
  *    Use when you have N buttons in one row.
  *
  * 2. **Segmented rows** — pass `stops: [2, 1, 1, …]`. Each number is the
@@ -277,17 +277,17 @@ export function useDialogNav({
         if (useSegmentedHorizontalNav && slotsThisSegment > 1) {
           setSlotInSegment((prev) => Math.min(slotsThisSegment - 1, Math.max(0, prev + delta)));
         } else if (!useSegmentedHorizontalNav) {
-          setSegmentIndex((prev) => (prev + delta + segmentCount) % segmentCount);
+          setSegmentIndex((prev) => Math.min(segmentCount - 1, Math.max(0, prev + delta)));
         }
         return true;
       };
 
       const handleVertical = (): void => {
         if (action.up) {
-          setSegmentIndex((prev) => (prev <= 0 ? segmentCount - 1 : prev - 1));
+          setSegmentIndex((prev) => Math.max(0, prev - 1));
           setSlotInSegment(0);
         } else if (action.down) {
-          setSegmentIndex((prev) => (prev >= segmentCount - 1 ? 0 : prev + 1));
+          setSegmentIndex((prev) => Math.min(segmentCount - 1, prev + 1));
           setSlotInSegment(0);
         }
       };

@@ -685,6 +685,7 @@ pub fn step_install_packages() -> Result<(), String> {
         "demucs>=4.0.0",
         whisperx_pkg,
         "soundfile",
+        "yt-dlp[default]==2026.8.19",
         "PyYAML>=6,<7",
         "huggingface_hub>=0.27.0",
         "transformers>=5.13.0",

@@ -12,7 +12,7 @@ export function useMenuNav({ overlayOpen, onBack }: UseMenuNavOptions) {
   const menuFocus = useMenuFocus();
   const refs = useMenuNavRefs({ overlayOpen, onBack });
   const lock = useNavLock();
-  const scrollToSong = useScrollToSong(menuFocus.scrollRef);
+  const scrollToSong = useScrollToSong(menuFocus.scrollRef, menuFocus.actionsRef);
 
   useMouseMenuFocus({ menuFocus, refs, lock });
   useTabPanelSwitch({ menuFocus, refs, lock });

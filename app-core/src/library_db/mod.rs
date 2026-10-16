@@ -24,16 +24,19 @@ use crate::cache::nightingale_dir;
 mod analysis_queue;
 mod connection;
 mod favorites;
+mod folders;
 mod migrations;
 mod playlists;
 mod queries;
 mod rebase;
 pub(crate) mod remote;
+mod search;
 mod songs;
 
 pub(crate) use analysis_queue::{
-    analysis_queue_clear, analysis_queue_delete, analysis_queue_load_rows,
-    analysis_queue_save_rows, analysis_queue_upsert_row,
+    analysis_queue_clear, analysis_queue_delete, analysis_queue_delete_rows,
+    analysis_queue_enqueue_rows, analysis_queue_load_rows, analysis_queue_save_rows,
+    analysis_queue_upsert_row,
 };
 pub(crate) use favorites::{load_favorite_hashes, set_song_favorite};
 pub(crate) use migrations::rewrite_legacy_jellyfin_paths;
@@ -41,8 +44,8 @@ pub(crate) use playlists::{PlaylistDefinition, PlaylistSongKeyKind, replace_all_
 pub(crate) use queries::{
     iter_file_hashes_filtered_analysis_busy, iter_file_hashes_filtered_full_reanalyzable,
     iter_file_hashes_filtered_not_analyzed, iter_file_hashes_filtered_realignable,
-    iter_file_hashes_filtered_refreshable, load_meta_sql, load_songs_page,
-    query_library_menu_items,
+    iter_file_hashes_filtered_refreshable, iter_file_hashes_reconcilable, load_meta_sql,
+    load_songs_page, query_library_menu_items,
 };
 pub(crate) use rebase::{rebase_song_album_art_cache_paths, rebase_song_album_art_paths};
 pub(crate) use songs::{

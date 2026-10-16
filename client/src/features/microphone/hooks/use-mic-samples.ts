@@ -17,6 +17,7 @@ const defaultAdapter = microphoneAdapter;
  * all subscribers from a single transport.
  */
 export function useMicSamples(
+  captureId: string,
   callback: (frame: MicSampleFrame) => void,
   enabled: boolean,
   adapter: MicrophoneAdapter = defaultAdapter,
@@ -32,7 +33,7 @@ export function useMicSamples(
     let stopListening: StopListening | null = null;
 
     adapter
-      .subscribe((frame) => {
+      .subscribe(captureId, (frame) => {
         if (!cancelled) {
           cbRef.current(frame);
         }
@@ -53,5 +54,5 @@ export function useMicSamples(
       cancelled = true;
       stopListening?.();
     };
-  }, [adapter, cbRef, enabled]);
+  }, [adapter, captureId, cbRef, enabled]);
 }

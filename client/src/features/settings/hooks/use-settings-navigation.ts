@@ -46,9 +46,12 @@ function segmentSlotFromFlatIndex(segmentSizes: readonly number[], flatIndex: nu
 
 type UseSettingsNavigationOptions = {
   containerRef: RefObject<HTMLDivElement | null>;
+  enabled: boolean;
   tab: SettingsTab;
+  hasMultiChannelInput: boolean;
   micMonitorGain: number;
   micLatencySec: number;
+  masterVolume: number;
   lyricsScale: number;
   pitchGraphScale: number;
   vocalThresholdPct: number;
@@ -56,6 +59,7 @@ type UseSettingsNavigationOptions = {
   onTabChange: (tab: SettingsTab) => void;
   onMicMonitorGainChange: (gain: number) => void;
   onMicLatencyChange: (latencySec: number) => void;
+  onMasterVolumeChange: (volume: number) => void;
   onLyricsScaleChange: (scale: number) => void;
   onPitchGraphScaleChange: (scale: number) => void;
   onVocalThresholdChange: (pct: number) => void;
@@ -63,9 +67,12 @@ type UseSettingsNavigationOptions = {
 
 export function useSettingsNavigation({
   containerRef,
+  enabled,
   tab,
+  hasMultiChannelInput,
   micMonitorGain,
   micLatencySec,
+  masterVolume,
   lyricsScale,
   pitchGraphScale,
   vocalThresholdPct,
@@ -73,16 +80,20 @@ export function useSettingsNavigation({
   onTabChange,
   onMicMonitorGainChange,
   onMicLatencyChange,
+  onMasterVolumeChange,
   onLyricsScaleChange,
   onPitchGraphScaleChange,
   onVocalThresholdChange,
 }: UseSettingsNavigationOptions) {
-  const stops = useMemo(() => getSettingsStops(tab), [tab]);
+  const stops = useMemo(
+    () => getSettingsStops(tab, hasMultiChannelInput),
+    [hasMultiChannelInput, tab],
+  );
   const itemCount = useMemo(() => stops.reduce((sum, size) => sum + size, 0), [stops]);
   const footerSegment = stops.length - 1;
 
   const { isFocused, focusSegment } = useDialogNav({
-    open: true,
+    open: enabled,
     itemCount,
     stops,
     onBack,
@@ -105,6 +116,12 @@ export function useSettingsNavigation({
       };
 
       const adjustPlayback = (): boolean => {
+        if (segment === NAV.playback.masterVolume) {
+          const delta = action.right ? 0.01 : -0.01;
+          onMasterVolumeChange(Math.min(1, Math.max(0, masterVolume + delta)));
+          return true;
+        }
+
         const delta = action.right ? PLAYBACK_SCALE_STEP : -PLAYBACK_SCALE_STEP;
         if (segment === NAV.playback.lyricsScale) {
           onLyricsScaleChange(

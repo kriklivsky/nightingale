@@ -43,6 +43,16 @@ Key and tempo are adjusted from the song details sidebar after a song has been a
 - D-pad and left stick both work for navigation
 - Face buttons map to confirm (A/South) and cancel (B/East)
 
+## Multiple microphones
+
+On desktop, Settings → General shows **Combine multi-channel** when an audio interface has several input channels. Disable it to select a single channel for solo scoring. With it enabled, scoring follows the strongest channel; microphone monitoring remains a separate control.
+
+Open a song's details and choose **Play multiplayer** for two to four singers, or use the multiplayer button in the playback queue. Multiplayer has its own **Combine multi-channel** setting and remembers player assignments. For a Behringer UMC202HD with two microphones, disable this setting and assign **Channel 1** to one player and **Channel 2** to the other. They share one hardware capture stream but receive independent scores. Guests do not write scores to a saved profile.
+
+Results show the ranking and let you switch between each singer's line-by-line report. For queued playback, **Change players** configures the next song. Native monitoring continues to use the selected HDMI/Behringer output independently of the backing-track volume.
+
+Queue entries have **Move up** / **Move down** actions for the remote. With a keyboard, focus the drag handle and use **Alt+↑/↓**, or start dragging with Space and use arrows; pointer dragging is also supported.
+
 ## Settings Navigation
 
 Settings use the same navigation model: move between General, Playback, and Analysis tabs, change sliders/selects/buttons, and close or restore defaults without a mouse.

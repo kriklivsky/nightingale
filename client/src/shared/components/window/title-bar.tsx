@@ -3,14 +3,34 @@ import { MinusIcon, SquareIcon, XIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { loadConfig, saveConfig } from '@/bridge/config';
-import { isFullScreen as tauriIsFullScreen, setFullScreen } from '@/bridge/fullScreen';
+import {
+  FULLSCREEN_CHANGE_EVENT,
+  isFullScreen as tauriIsFullScreen,
+  setFullScreen,
+} from '@/bridge/fullScreen';
 import { isSessionPlayback } from '@/bridge/playback-session';
 import { isTauri } from '@/bridge/runtime';
 import { minimizeWindow, triggerFrontendReady, windowImmersive } from '@/bridge/window';
 
 export function TauriAppShell({ children }: { children: React.ReactNode }) {
+  const [fullscreen, setFullscreen] = useState(false);
+
   useEffect(() => {
-    void triggerFrontendReady();
+    if (!isTauri) {
+      return undefined;
+    }
+
+    const refreshFullscreen = () => {
+      void windowImmersive()
+        .then(setFullscreen)
+        .catch(() => undefined);
+    };
+
+    void triggerFrontendReady().catch(() => undefined);
+    refreshFullscreen();
+    window.addEventListener(FULLSCREEN_CHANGE_EVENT, refreshFullscreen);
+
+    return () => window.removeEventListener(FULLSCREEN_CHANGE_EVENT, refreshFullscreen);
   }, []);
 
   useEffect(() => {
@@ -29,7 +49,7 @@ export function TauriAppShell({ children }: { children: React.ReactNode }) {
         return;
       }
       event.preventDefault();
-      void toggleFullscreen();
+      void toggleFullscreen().catch(() => undefined);
     };
 
     window.addEventListener('keydown', onKeyDown);
@@ -42,51 +62,14 @@ export function TauriAppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-svh min-h-0 flex-col">
-      <TitleBar />
+      <TitleBar fullscreen={fullscreen} />
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
     </div>
   );
 }
 
-function TitleBar() {
-  const [fullscreen, setFullscreen] = useState(false);
+function TitleBar({ fullscreen }: { fullscreen: boolean }) {
   const sessionPlayback = isSessionPlayback();
-
-  useEffect(() => {
-    const win = getCurrentWindow();
-
-    const sync = async () => {
-      setFullscreen(await windowImmersive());
-    };
-
-    void sync();
-
-    let unlistenResize: (() => void) | undefined;
-    let unlistenFocus: (() => void) | undefined;
-
-    void win
-      .onResized(() => {
-        void sync();
-      })
-      .then((fn) => {
-        unlistenResize = fn;
-        return undefined;
-      });
-
-    void win
-      .onFocusChanged(() => {
-        void sync();
-      })
-      .then((fn) => {
-        unlistenFocus = fn;
-        return undefined;
-      });
-
-    return () => {
-      unlistenResize?.();
-      unlistenFocus?.();
-    };
-  }, []);
 
   useEffect(() => {
     document.documentElement.style.setProperty(

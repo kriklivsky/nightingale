@@ -1,11 +1,3 @@
-/**
- * Owns everything mic-shaped during playback: device selection, pitch capture,
- * monitor toggle, reactive shader uniforms, and the pitch-scoring series/score.
- *
- * Reads playback state (isReady, isPlaying, paused) from the transport context
- * to gate hardware capture, and persists user toggles to the app config.
- */
-
 import {
   createContext,
   useCallback,
@@ -18,21 +10,46 @@ import {
 } from 'react';
 import { toast } from 'sonner';
 
+import type { PlaybackPlayer } from '@/bridge/playback-session';
 import { useMicCapture, useMicPitch } from '@/features/microphone/hooks/use-mic-pitch';
 import { useMicReactive, type MicReactiveRef } from '@/features/microphone/hooks/use-mic-reactive';
-import { useMicDevices } from '@/features/microphone/queries/use-mic-devices';
-import { usePitchScoring } from '@/features/playback/hooks/use-pitch-scoring';
+import { useMicDevices, type MicDevice } from '@/features/microphone/queries/use-mic-devices';
+import {
+  usePitchScoring,
+  type PitchScoringSource,
+} from '@/features/playback/hooks/use-pitch-scoring';
 import { usePlaybackConfigPersist } from '@/features/playback/hooks/use-playback-config-persist';
 import { DEFAULT_MIC_LATENCY_COMPENSATION_SEC } from '@/features/playback/lib/pitch/constants';
+import type { PitchReport } from '@/features/playback/lib/pitch/report';
 import type { PitchSeries } from '@/features/playback/lib/pitch/state';
+import { defaultPlayerColor, type PlayerColor } from '@/shared/player-colors';
 import type { AppConfig } from '@/types/AppConfig';
+import type { Segment } from '@/types/Transcript';
 
 import {
   usePlaybackTransportActions,
   usePlaybackTransportState,
 } from './playback-transport-context';
 
+export type PlaybackPlayerMicState = {
+  getPitchReport: (segments: readonly Segment[]) => PitchReport;
+  id: string;
+  profile: string | null;
+  microphoneId: string | null;
+  color: PlayerColor;
+  micName: string;
+  pitchScore: number | null;
+  rawScore: number;
+  series: PitchSeries;
+  micCaptureActive: boolean;
+  micPitchActive: boolean;
+  micReady: boolean;
+  error: string | null;
+};
+
 export type PlaybackMicState = {
+  multiplayer: boolean;
+  players: PlaybackPlayerMicState[];
   micUserEnabled: boolean;
   micMonitorUserEnabled: boolean;
   selectedMicId: string | null;
@@ -46,100 +63,295 @@ export type PlaybackMicState = {
 };
 
 export type PlaybackMicActions = {
+  getPitchReport: (segments: readonly Segment[]) => PitchReport;
   reactiveRef: MicReactiveRef;
   handleToggleMic: () => void;
   handleCycleMic: () => void;
   handleToggleMicMonitor: () => void;
 };
 
+const EMPTY_PLAYERS: readonly PlaybackPlayer[] = [];
 const MicStateContext = createContext<PlaybackMicState | null>(null);
 const MicActionsContext = createContext<PlaybackMicActions | null>(null);
 
 type PlaybackMicProviderProps = {
   config: AppConfig | null;
+  players?: readonly PlaybackPlayer[];
   children: ReactNode;
 };
 
-type CaptureStateInput = {
-  isReady: boolean;
-  isPlaying: boolean;
-  paused: boolean;
-  micEnabled: boolean;
-  monitorEnabled: boolean;
+type MicPlayerConfig = {
+  present: boolean;
+  id: string;
+  profile: string | null;
+  microphoneId: string | null;
+  color: PlayerColor;
 };
 
-const captureState = (input: CaptureStateInput) => {
-  const playbackActive = input.isReady && input.isPlaying && !input.paused;
-  const micPitchEnabled = playbackActive && input.micEnabled;
-  const micMonitorEnabled = input.monitorEnabled;
+type InternalPlayerMicState = PlaybackPlayerMicState & { present: boolean };
 
-  return {
-    micPitchEnabled,
-    micMonitorEnabled,
-    captureEnabled: micPitchEnabled || micMonitorEnabled,
-  };
+type PlayerMicInput = {
+  player: MicPlayerConfig;
+  captureEnabled: boolean;
+  pitchEnabled: boolean;
+  emitAudio: boolean;
+  source: PitchScoringSource;
+  latencySec: number;
+};
+
+type CaptureSettings = {
+  captureEnabled: boolean;
+  pitchEnabled: boolean;
+  emitAudio: boolean;
 };
 
 const latencyCompensation = (config: AppConfig | null): number =>
   config?.mic_latency_compensation_sec ?? DEFAULT_MIC_LATENCY_COMPENSATION_SEC;
 
-export function PlaybackMicProvider({ config, children }: PlaybackMicProviderProps) {
-  const { isReady, isPlaying, paused, duration } = usePlaybackTransportState();
+const combineMultiChannel = (config: AppConfig | null, multiplayer: boolean): boolean =>
+  multiplayer
+    ? (config?.multiplayer_combine_multi_channel ?? true)
+    : (config?.combine_multi_channel ?? true);
+
+function playerConfigs(
+  players: readonly PlaybackPlayer[],
+  selectedMicId: string | null,
+): MicPlayerConfig[] {
+  if (players.length === 0) {
+    return [
+      {
+        present: true,
+        id: 'solo',
+        profile: null,
+        microphoneId: selectedMicId,
+        color: defaultPlayerColor(0),
+      },
+    ];
+  }
+  return players.map((player) => ({
+    present: true,
+    id: player.id,
+    profile: player.profile,
+    microphoneId: player.microphoneId,
+    color: player.color,
+  }));
+}
+
+function playerAt(players: readonly MicPlayerConfig[], index: number): MicPlayerConfig {
+  const player = players.at(index);
+  if (player !== undefined) {
+    return player;
+  }
+  return {
+    present: false,
+    id: `inactive-${index + 1}`,
+    profile: null,
+    microphoneId: null,
+    color: defaultPlayerColor(index),
+  };
+}
+
+function captureSettings(
+  multiplayer: boolean,
+  playbackActive: boolean,
+  micUserEnabled: boolean,
+  micMonitorUserEnabled: boolean,
+): CaptureSettings {
+  if (multiplayer) {
+    return {
+      captureEnabled: playbackActive || micMonitorUserEnabled,
+      pitchEnabled: playbackActive,
+      emitAudio: micMonitorUserEnabled,
+    };
+  }
+  const pitchEnabled = playbackActive && micUserEnabled;
+  return {
+    captureEnabled: pitchEnabled || micMonitorUserEnabled,
+    pitchEnabled,
+    emitAudio: micMonitorUserEnabled,
+  };
+}
+
+function usePlayerMic({
+  player,
+  captureEnabled,
+  pitchEnabled,
+  emitAudio,
+  source,
+  latencySec,
+}: PlayerMicInput): InternalPlayerMicState {
+  const shouldCapture = captureEnabled && player.present;
+  const shouldTrackPitch = pitchEnabled && player.present;
+  const captureOptions = useMemo(() => ({ emit_audio: emitAudio }), [emitAudio]);
+  const { active: micCaptureActive, error: micCaptureError } = useMicCapture({
+    captureId: player.id,
+    deviceId: player.microphoneId,
+    enabled: shouldCapture,
+    options: captureOptions,
+  });
+  const {
+    latestPitch,
+    active: micPitchActive,
+    error: micPitchError,
+  } = useMicPitch(player.id, shouldTrackPitch);
+  const { series, score, getPitchReport } = usePitchScoring(
+    { ...source, isReady: source.isReady && player.present },
+    latestPitch,
+    latencySec,
+  );
+  const micReady = micCaptureActive && micPitchActive;
+
+  return {
+    ...player,
+    getPitchReport,
+    micName: '',
+    pitchScore: micReady ? score : null,
+    rawScore: score,
+    series,
+    micCaptureActive,
+    micPitchActive,
+    micReady,
+    error: micCaptureError ?? micPitchError,
+  };
+}
+
+function namePlayer(player: InternalPlayerMicState, devices: readonly MicDevice[]) {
+  const device = devices.find((candidate) => candidate.deviceId === player.microphoneId);
+  return {
+    getPitchReport: player.getPitchReport,
+    id: player.id,
+    profile: player.profile,
+    microphoneId: player.microphoneId,
+    color: player.color,
+    micName: device?.label ?? player.microphoneId ?? 'Default',
+    pitchScore: player.pitchScore,
+    rawScore: player.rawScore,
+    series: player.series,
+    micCaptureActive: player.micCaptureActive,
+    micPitchActive: player.micPitchActive,
+    micReady: player.micReady,
+    error: player.error,
+  } satisfies PlaybackPlayerMicState;
+}
+
+function errorPrefix(multiplayer: boolean, index: number): string {
+  return multiplayer ? `Player ${index + 1}` : 'Microphone';
+}
+
+type MicStateInput = {
+  multiplayer: boolean;
+  players: PlaybackPlayerMicState[];
+  primary: PlaybackPlayerMicState;
+  micUserEnabled: boolean;
+  micMonitorUserEnabled: boolean;
+};
+
+function micState(input: MicStateInput): PlaybackMicState {
+  const { multiplayer, players, primary } = input;
+  if (multiplayer) {
+    return {
+      multiplayer,
+      players,
+      micUserEnabled: true,
+      micMonitorUserEnabled: input.micMonitorUserEnabled,
+      selectedMicId: primary.microphoneId,
+      micName: primary.micName,
+      pitchScore: primary.pitchScore,
+      rawScore: primary.rawScore,
+      series: primary.series,
+      micCaptureActive: primary.micCaptureActive,
+      micPitchActive: primary.micPitchActive,
+      micReady: primary.micReady,
+    };
+  }
+  return {
+    multiplayer,
+    players,
+    micUserEnabled: input.micUserEnabled,
+    micMonitorUserEnabled: input.micMonitorUserEnabled,
+    selectedMicId: primary.microphoneId,
+    micName: primary.micName,
+    pitchScore: primary.pitchScore,
+    rawScore: primary.rawScore,
+    series: primary.series,
+    micCaptureActive: primary.micCaptureActive,
+    micPitchActive: primary.micPitchActive,
+    micReady: primary.micReady,
+  };
+}
+
+export function PlaybackMicProvider({ config, players, children }: PlaybackMicProviderProps) {
+  const sessionPlayers = players ?? EMPTY_PLAYERS;
+  const { isReady, isPlaying, paused, duration, singableDuration } = usePlaybackTransportState();
   const { subscribe, getScoringBuffer } = usePlaybackTransportActions();
-
   const persistConfig = usePlaybackConfigPersist(config);
-
+  const multiplayer = sessionPlayers.length > 0;
   const [micUserEnabled, setMicUserEnabled] = useState(config?.mic_active ?? true);
   const [micMonitorUserEnabled, setMicMonitorUserEnabled] = useState(
     config?.mic_monitoring ?? false,
   );
   const [selectedMicId, setSelectedMicId] = useState<string | null>(config?.preferred_mic ?? null);
-
-  const micDevices = useMicDevices();
-
-  const { micPitchEnabled, micMonitorEnabled, captureEnabled } = captureState({
-    isReady,
-    isPlaying,
-    paused,
-    micEnabled: micUserEnabled,
-    monitorEnabled: micMonitorUserEnabled,
+  const micDevices = useMicDevices(undefined, combineMultiChannel(config, multiplayer));
+  const settings = captureSettings(
+    multiplayer,
+    isReady && isPlaying && !paused,
+    micUserEnabled,
+    micMonitorUserEnabled,
+  );
+  const source = useMemo<PitchScoringSource>(
+    () => ({
+      isReady,
+      duration,
+      singableDuration,
+      getReferenceBuffer: getScoringBuffer,
+      subscribe,
+    }),
+    [duration, singableDuration, getScoringBuffer, isReady, subscribe],
+  );
+  const configs = playerConfigs(sessionPlayers, selectedMicId);
+  const latencySec = latencyCompensation(config);
+  const playerInput = (index: number): PlayerMicInput => ({
+    player: playerAt(configs, index),
+    ...settings,
+    source,
+    latencySec,
   });
+  const slotOne = usePlayerMic(playerInput(0));
+  const slotTwo = usePlayerMic(playerInput(1));
+  const slotThree = usePlayerMic(playerInput(2));
+  const slotFour = usePlayerMic(playerInput(3));
+  const namedPlayers = [slotOne, slotTwo, slotThree, slotFour]
+    .filter((player) => player.present)
+    .map((player) => namePlayer(player, micDevices));
+  const primary = namedPlayers[0];
+  const getPitchReport = slotOne.getPitchReport;
+  const reactiveRef = useMicReactive([
+    { captureId: slotOne.id, enabled: slotOne.micReady },
+    { captureId: slotTwo.id, enabled: slotTwo.micReady },
+    { captureId: slotThree.id, enabled: slotThree.micReady },
+    { captureId: slotFour.id, enabled: slotFour.micReady },
+  ]);
 
-  const captureOptions = useMemo(() => ({ emit_audio: micMonitorEnabled }), [micMonitorEnabled]);
-
-  const { active: micCaptureActive, error: micCaptureError } = useMicCapture(
-    selectedMicId,
-    captureEnabled,
-    captureOptions,
-  );
-  const {
-    latestPitch,
-    active: micPitchActive,
-    error: micPitchError,
-  } = useMicPitch(micPitchEnabled);
-  const reactiveRef = useMicReactive(micPitchEnabled);
-
-  const { series, score } = usePitchScoring(
-    { isReady, duration, getReferenceBuffer: getScoringBuffer, subscribe },
-    latestPitch,
-    latencyCompensation(config),
-  );
-
-  const micErrorShown = useRef(false);
+  const shownErrors = useRef(new Set<string>());
   useEffect(() => {
-    const micError = micCaptureError ?? micPitchError;
-    if (typeof micError === 'string' && micError !== '' && !micErrorShown.current) {
-      micErrorShown.current = true;
-      toast.error(`Microphone: ${micError}`);
+    for (const [index, player] of namedPlayers.entries()) {
+      if (player.error === null) {
+        shownErrors.current.delete(player.id);
+        continue;
+      }
+      if (!shownErrors.current.has(player.id)) {
+        shownErrors.current.add(player.id);
+        toast.error(`${errorPrefix(multiplayer, index)}: ${player.error}`);
+      }
     }
-    if (typeof micError !== 'string' || micError === '') {
-      micErrorShown.current = false;
-    }
-  }, [micCaptureError, micPitchError]);
+  }, [multiplayer, namedPlayers]);
 
   const handleToggleMic = useCallback(() => {
-    setMicUserEnabled((prev) => {
-      const next = !prev;
+    if (multiplayer) {
+      return;
+    }
+    setMicUserEnabled((previous) => {
+      const next = !previous;
       if (!next && micMonitorUserEnabled) {
         setMicMonitorUserEnabled(false);
         persistConfig({ mic_active: false, mic_monitoring: false });
@@ -148,65 +360,50 @@ export function PlaybackMicProvider({ config, children }: PlaybackMicProviderPro
       }
       return next;
     });
-  }, [persistConfig, micMonitorUserEnabled]);
+  }, [micMonitorUserEnabled, multiplayer, persistConfig]);
 
   const handleCycleMic = useCallback(() => {
-    if (micDevices.length <= 1) {
+    if (multiplayer || micDevices.length <= 1) {
       return;
     }
-    const currentIdx = micDevices.findIndex((d) => d.deviceId === selectedMicId);
-    const nextIdx = (currentIdx + 1) % micDevices.length;
-    const next = micDevices[nextIdx];
+    const currentIndex = micDevices.findIndex((device) => device.deviceId === selectedMicId);
+    const next = micDevices[(currentIndex + 1) % micDevices.length];
     setSelectedMicId(next.deviceId);
     persistConfig({ preferred_mic: next.deviceId });
-  }, [micDevices, selectedMicId, persistConfig]);
+  }, [micDevices, multiplayer, persistConfig, selectedMicId]);
 
   const handleToggleMicMonitor = useCallback(() => {
-    setMicMonitorUserEnabled((prev) => {
-      const next = !prev;
+    setMicMonitorUserEnabled((previous) => {
+      const next = !previous;
       persistConfig({ mic_monitoring: next });
-      if (next && !micUserEnabled) {
+      if (!multiplayer && next && !micUserEnabled) {
         setMicUserEnabled(true);
         persistConfig({ mic_active: true });
       }
       return next;
     });
-  }, [persistConfig, micUserEnabled]);
+  }, [micUserEnabled, multiplayer, persistConfig]);
 
-  const stateValue = useMemo<PlaybackMicState>(() => {
-    const micReady = micCaptureActive && micPitchActive && micUserEnabled;
-    const selectedMic = micDevices.find((device) => device.deviceId === selectedMicId);
-    return {
-      micUserEnabled,
-      micMonitorUserEnabled,
-      selectedMicId,
-      micName: selectedMic?.label ?? selectedMicId ?? 'Default',
-      pitchScore: micReady ? score : null,
-      rawScore: score,
-      series,
-      micCaptureActive,
-      micPitchActive,
-      micReady,
-    };
-  }, [
-    micUserEnabled,
-    micMonitorUserEnabled,
-    selectedMicId,
-    score,
-    series,
-    micCaptureActive,
-    micPitchActive,
-    micDevices,
-  ]);
-
+  const stateValue = useMemo(
+    () =>
+      micState({
+        multiplayer,
+        players: namedPlayers,
+        primary,
+        micUserEnabled,
+        micMonitorUserEnabled,
+      }),
+    [micMonitorUserEnabled, micUserEnabled, multiplayer, namedPlayers, primary],
+  );
   const actionsValue = useMemo<PlaybackMicActions>(
     () => ({
+      getPitchReport,
       reactiveRef,
       handleToggleMic,
       handleCycleMic,
       handleToggleMicMonitor,
     }),
-    [reactiveRef, handleToggleMic, handleCycleMic, handleToggleMicMonitor],
+    [getPitchReport, handleCycleMic, handleToggleMic, handleToggleMicMonitor, reactiveRef],
   );
 
   return (
@@ -217,17 +414,17 @@ export function PlaybackMicProvider({ config, children }: PlaybackMicProviderPro
 }
 
 export function usePlaybackMicState(): PlaybackMicState {
-  const ctx = useContext(MicStateContext);
-  if (!ctx) {
+  const context = useContext(MicStateContext);
+  if (!context) {
     throw new Error('usePlaybackMicState must be used within a PlaybackMicProvider');
   }
-  return ctx;
+  return context;
 }
 
 export function usePlaybackMicActions(): PlaybackMicActions {
-  const ctx = useContext(MicActionsContext);
-  if (!ctx) {
+  const context = useContext(MicActionsContext);
+  if (!context) {
     throw new Error('usePlaybackMicActions must be used within a PlaybackMicProvider');
   }
-  return ctx;
+  return context;
 }

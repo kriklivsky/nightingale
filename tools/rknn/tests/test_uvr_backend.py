@@ -137,6 +137,12 @@ class TensorAdapterTests(unittest.TestCase):
     def test_split_components_preserve_axis_and_band_order(self):
         backend = object.__new__(uvr_backend.RknnUvrBackend)
         backend.metadata = {"chunk_samples": 4, "core_output_shape": [1, 2, 60]}
+        backend._closed = False
+        backend._stream_components = False
+        backend._parallel_cores = False
+        backend._executor = None
+        backend._runtime_init_s = 0.0
+        backend._runtime_init_count = 0
         features = np.zeros((1, 2, 1), dtype=np.float32)
         encoded = np.zeros((1, 2, 60, 1), dtype=np.float32)
         runtimes = [
@@ -182,6 +188,7 @@ class TensorAdapterTests(unittest.TestCase):
                 )
             )
         backend._runtimes = runtimes
+        backend.metadata["components"] = [component for component, _runtime in runtimes]
         preprocess_lengths = []
         captured = {}
 

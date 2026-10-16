@@ -181,6 +181,7 @@
 @layer components {
   .song-table-shell {
     container-type: inline-size;
+    overflow-anchor: none;
   }
 
   .song-table-thumbnail {
@@ -209,7 +210,7 @@
   }
 
   .song-table-actions {
-    width: 8.5rem;
+    width: 9.5rem;
   }
 
   .song-table-header {

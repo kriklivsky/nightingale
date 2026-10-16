@@ -95,6 +95,16 @@ pub(crate) fn analysis_queue_upsert_row(
     })
 }
 
+pub(crate) fn analysis_queue_enqueue_rows(hashes: &[String]) -> rusqlite::Result<()> {
+    with_conn_mut(|connection| {
+        let transaction = connection.transaction()?;
+        for hash in hashes {
+            upsert_queue_in_tx(&transaction, hash, "queued", None, None)?;
+        }
+        transaction.commit()
+    })
+}
+
 pub(crate) fn analysis_queue_delete(file_hash: &str) -> rusqlite::Result<()> {
     with_conn_mut(|c| {
         c.execute(
@@ -102,6 +112,16 @@ pub(crate) fn analysis_queue_delete(file_hash: &str) -> rusqlite::Result<()> {
             [file_hash],
         )?;
         Ok(())
+    })
+}
+
+pub(crate) fn analysis_queue_delete_rows(hashes: &[&str]) -> rusqlite::Result<()> {
+    with_conn_mut(|connection| {
+        let transaction = connection.transaction()?;
+        for hash in hashes {
+            transaction.execute("DELETE FROM analysis_queue WHERE file_hash = ?1", [hash])?;
+        }
+        transaction.commit()
     })
 }
 

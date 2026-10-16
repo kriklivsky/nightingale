@@ -18,34 +18,8 @@ struct ResolvedPath(PathBuf);
 
 impl ResolvedPath {
     fn resolve(input: &Path) -> Option<Self> {
-        let canonical_input = std::fs::canonicalize(input).ok()?;
-        let allowed_roots = allowed_roots();
-        for root in allowed_roots {
-            if let Ok(canon_root) = std::fs::canonicalize(&root) {
-                if canonical_input.starts_with(&canon_root) {
-                    return Some(Self(canonical_input));
-                }
-            }
-        }
-        None
+        app_core::resolve_media_path(input).map(Self)
     }
-}
-
-fn allowed_roots() -> Vec<PathBuf> {
-    // The data path and the default Nightingale dir (which can hold `config.json`,
-    // logs, etc.) are both legitimate sources of media. Songs scanned from
-    // user library folders are streamed straight from disk, so we additionally
-    // honour the configured `library_source` folder if any.
-    let mut roots = vec![
-        app_core::nightingale_dir(),
-        app_core::default_nightingale_dir(),
-    ];
-    let config = app_core::AppConfig::load();
-    roots.push(config.effective_data_path());
-    if let Some(app_core::LibrarySource::Folder { path }) = config.library_source.as_ref() {
-        roots.push(path.clone());
-    }
-    roots
 }
 
 #[derive(Deserialize)]
@@ -74,11 +48,21 @@ pub(crate) async fn handle_hashed(
     headers: HeaderMap,
     request: Request<Body>,
 ) -> Response<Body> {
-    let path = match kind.as_str() {
+    let path = match tokio::task::spawn_blocking(move || match kind.as_str() {
         "instrumental" => Some(app_core::get_audio_paths(&hash).instrumental),
         "vocals" => app_core::get_audio_paths(&hash).vocals,
         "source-video" | "video" => app_core::ensure_playable_source_video(&hash).ok().flatten(),
         _ => None,
+    })
+    .await
+    {
+        Ok(path) => path,
+        Err(_) => {
+            return response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Body::from("media operation interrupted"),
+            )
+        }
     };
 
     let Some(path) = path else {
@@ -89,8 +73,16 @@ pub(crate) async fn handle_hashed(
 }
 
 async fn serve(path: &Path, _headers: HeaderMap, request: Request<Body>) -> Response<Body> {
-    let Some(resolved) = ResolvedPath::resolve(path) else {
-        return not_found("media path not found or outside data dir");
+    let path = path.to_path_buf();
+    let resolved = match tokio::task::spawn_blocking(move || ResolvedPath::resolve(&path)).await {
+        Ok(Some(resolved)) => resolved,
+        Ok(None) => return not_found("media path not found or outside data dir"),
+        Err(_) => {
+            return response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Body::from("media operation interrupted"),
+            )
+        }
     };
 
     let serve = ServeFile::new(&resolved.0);

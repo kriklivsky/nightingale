@@ -30,6 +30,10 @@ export type MenuFocus = {
 export type MenuFocusActions = {
   onConfirmSong: ((index: number) => void) | null;
   onConfirmSongAction: ((songIndex: number, actionIndex: number) => void) | null;
+  scrollToSong: ((index: number) => void) | null;
+  songGridTarget:
+    | ((index: number, direction: 'up' | 'down' | 'left' | 'right') => number | null)
+    | null;
   onConfirmSidebar: ((index: number) => void) | null;
   onConfirmActions: ((index: number) => boolean) | null;
   onSidebarBack: (() => boolean) | null;
@@ -70,6 +74,8 @@ const INITIAL_FOCUS: MenuFocus = {
 const INITIAL_ACTIONS: MenuFocusActions = {
   onConfirmSong: null,
   onConfirmSongAction: null,
+  scrollToSong: null,
+  songGridTarget: null,
   onConfirmSidebar: null,
   onConfirmActions: null,
   onSidebarBack: null,

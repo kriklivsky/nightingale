@@ -18,23 +18,26 @@ const compose = (...parts: string[]) => parts.join('\n');
 const withAudio = (frag: string) => compose(audioUniforms, srgb, noise, frag);
 const standalone = (frag: string) => compose(srgb, frag);
 
+export const composeCustomFragment = withAudio;
+
 export const vertexShader = vertex;
 export const loadingFragment = standalone(loading);
 
 export type ShaderDefinition = {
+  id: string;
   name: string;
   fragmentShader: string;
 };
 
 export const shaders: ShaderDefinition[] = [
-  { name: 'Plasma', fragmentShader: withAudio(plasma) },
-  { name: 'Waves', fragmentShader: withAudio(waves) },
-  { name: 'Nebula', fragmentShader: withAudio(nebula) },
-  { name: 'Starfield', fragmentShader: withAudio(starfield) },
-  { name: 'Sonar', fragmentShader: withAudio(sonar) },
-  { name: 'Voronoi', fragmentShader: withAudio(voronoi) },
-  { name: 'Vortex', fragmentShader: withAudio(vortex) },
-  { name: 'Metaballs', fragmentShader: withAudio(metaballs) },
-  { name: 'Spectrum', fragmentShader: withAudio(spectrum) },
-  { name: 'Oscilloscope', fragmentShader: withAudio(oscilloscope) },
+  { id: 'plasma', name: 'Plasma', fragmentShader: withAudio(plasma) },
+  { id: 'waves', name: 'Waves', fragmentShader: withAudio(waves) },
+  { id: 'nebula', name: 'Nebula', fragmentShader: withAudio(nebula) },
+  { id: 'starfield', name: 'Starfield', fragmentShader: withAudio(starfield) },
+  { id: 'sonar', name: 'Sonar', fragmentShader: withAudio(sonar) },
+  { id: 'voronoi', name: 'Voronoi', fragmentShader: withAudio(voronoi) },
+  { id: 'vortex', name: 'Vortex', fragmentShader: withAudio(vortex) },
+  { id: 'metaballs', name: 'Metaballs', fragmentShader: withAudio(metaballs) },
+  { id: 'spectrum', name: 'Spectrum', fragmentShader: withAudio(spectrum) },
+  { id: 'oscilloscope', name: 'Oscilloscope', fragmentShader: withAudio(oscilloscope) },
 ];

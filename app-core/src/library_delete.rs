@@ -122,7 +122,10 @@ pub fn delete_local_song(file_hash: &str, path: &Path) -> Result<(), String> {
         return Err("Remote songs cannot be deleted from disk".to_string());
     }
     if matches!(
-        AnalysisQueue::load().entries.get(file_hash),
+        AnalysisQueue::load()
+            .map_err(|error| format!("Cannot check analysis status: {error}"))?
+            .entries
+            .get(file_hash),
         Some(QueuedStatus::Queued | QueuedStatus::Analyzing(_))
     ) {
         return Err("Wait until song analysis finishes before deleting it".to_string());

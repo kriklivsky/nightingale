@@ -13,12 +13,14 @@ export type DialogMode =
   | 'update'
   | 'donate'
   | 'clear-playback-queue'
+  | 'song-search'
   | 'folder-source-confirm'
   | 'jellyfin-connect'
   | 'navidrome-connect'
   | 'plex-connect'
   | { mode: 'language'; song: Song }
   | { mode: 'edit-lyrics'; song: Song }
+  | { mode: 'song-video'; song: Song }
   | { mode: 'song-leaderboard'; song: Song }
   | { mode: 'delete-song'; song: Song }
   | { mode: 'clear-cache'; target: ClearCacheTarget }

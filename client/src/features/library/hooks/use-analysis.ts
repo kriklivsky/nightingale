@@ -39,7 +39,7 @@ const withoutAnalysisCache = (song: Song): Song => ({
 
 export const useAnalysis = () => {
   const queryClient = useQueryClient();
-  const { artist, album, playlist, query, status, transcript_source } = useLibraryFilter();
+  const { artist, album, playlist, folder, query, status, transcript_source } = useLibraryFilter();
   const { search } = useSearch();
 
   return useMemo(() => {
@@ -47,6 +47,7 @@ export const useAnalysis = () => {
       artist,
       album,
       playlist,
+      folder,
       query,
       status,
       transcript_source,
@@ -130,7 +131,12 @@ export const useAnalysis = () => {
 
     return {
       enqueueOne: wrap((fileHash: string) => enqueue(one(fileHash)), invalidateQueue),
-      enqueueAll: wrap(() => enqueue(filtered()), invalidateQueue),
+      enqueueAll: wrapBulk(
+        BulkActionKind.Queued,
+        'analysis',
+        () => enqueue(filtered()),
+        invalidateQueue,
+      ),
       cancelAnalysisOne: wrap((fileHash: string) => cancelAnalysis(one(fileHash)), invalidateSongs),
       cancelAnalysisAll: wrapBulk(
         BulkActionKind.Immediate,
@@ -184,5 +190,5 @@ export const useAnalysis = () => {
         invalidateSongs,
       ),
     };
-  }, [queryClient, artist, album, playlist, query, status, transcript_source, search]);
+  }, [queryClient, artist, album, playlist, folder, query, status, transcript_source, search]);
 };

@@ -16,7 +16,7 @@ import platform
 import time
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -274,8 +274,13 @@ class RknnUvrBackend(UvrInferenceBackend):
         if self._parallel_cores and not self._stream_components:
             raise UvrBackendError("parallel RKNN cores require streamed components")
         self._closed = False
+        self._runtime_init_s = 0.0
+        self._runtime_init_count = 0
+        self._executor = None
         self.last_profile: dict[str, float] | None = None
         self._initialise_runtimes()
+        if self._parallel_cores:
+            self._executor = ThreadPoolExecutor(max_workers=3)
 
         self.freq_indices = torch.tensor(self.metadata["freq_indices"], dtype=torch.long)
         self.num_bands_per_freq = torch.tensor(
@@ -293,15 +298,20 @@ class RknnUvrBackend(UvrInferenceBackend):
         from rknnlite.api import RKNNLite
 
         model_path = self.model_path.parent / component["file"]
+        started = time.perf_counter()
         runtime = RKNNLite(verbose=False)
         try:
             if runtime.load_rknn(str(model_path)) != 0:
                 raise UvrBackendError(f"failed to load RKNN model {model_path}")
             if runtime.init_runtime(core_mask=self._core_mask if core_mask is None else core_mask) != 0:
                 raise UvrBackendError(f"failed to initialise RKNN model {model_path}")
+            from scheduling import set_background_priority
+            set_background_priority()
         except Exception:
             runtime.release()
             raise
+        self._runtime_init_s += time.perf_counter() - started
+        self._runtime_init_count += 1
         return runtime
 
     def _initialise_runtimes(self) -> None:
@@ -519,6 +529,8 @@ class RknnUvrBackend(UvrInferenceBackend):
             raise UvrBackendError(
                 f"RKNN UVR input must have 3 dimensions, got {tensor.ndim}"
             )
+        if tensor.shape[0] != 1:
+            raise UvrBackendError("RKNN UVR requires one audio chunk per inference")
         output_length = tensor.shape[-1]
         chunk_samples = int(self.metadata["chunk_samples"])
         if output_length <= 0 or output_length > chunk_samples:
@@ -529,6 +541,8 @@ class RknnUvrBackend(UvrInferenceBackend):
         if output_length < chunk_samples:
             tensor = torch.nn.functional.pad(tensor, (0, chunk_samples - output_length))
         total_start = time.perf_counter()
+        init_s_before = self._runtime_init_s
+        init_count_before = self._runtime_init_count
         features, stft = self._preprocess(tensor)
         preprocess_end = time.perf_counter()
         with self._runtime(0) as (band_component, band_runtime):
@@ -537,23 +551,21 @@ class RknnUvrBackend(UvrInferenceBackend):
         batch, time_frames, frequency_bands, dimension = encoded.shape
         if batch != 1:
             raise UvrBackendError(f"RKNN UVR only supports batch 1, got {batch}")
-        executor = ThreadPoolExecutor(max_workers=3) if self._parallel_cores else nullcontext(None)
-        with executor as pool:
-            for layer in range(6):
-                time_view = encoded.transpose(0, 2, 1, 3).reshape(
-                    frequency_bands, time_frames, dimension
-                )
-                time_outputs = self._run_transformer_axis(1 + layer * 2, time_view, pool)
-                encoded = time_outputs.reshape(
-                    1, frequency_bands, time_frames, dimension
-                ).transpose(0, 2, 1, 3)
+        for layer in range(6):
+            time_view = encoded.transpose(0, 2, 1, 3).reshape(
+                frequency_bands, time_frames, dimension
+            )
+            time_outputs = self._run_transformer_axis(1 + layer * 2, time_view, self._executor)
+            encoded = time_outputs.reshape(
+                1, frequency_bands, time_frames, dimension
+            ).transpose(0, 2, 1, 3)
 
-                frequency_view = encoded.reshape(time_frames, frequency_bands, dimension)
-                frequency_outputs = self._run_transformer_axis(
-                    2 + layer * 2, frequency_view, pool
-                )
-                encoded = frequency_outputs.reshape(1, time_frames, frequency_bands, dimension)
-                del time_outputs, frequency_outputs, time_view, frequency_view
+            frequency_view = encoded.reshape(time_frames, frequency_bands, dimension)
+            frequency_outputs = self._run_transformer_axis(
+                2 + layer * 2, frequency_view, self._executor
+            )
+            encoded = frequency_outputs.reshape(1, time_frames, frequency_bands, dimension)
+            del time_outputs, frequency_outputs, time_view, frequency_view
 
         mask_outputs = []
         expected_band_start = 0
@@ -593,6 +605,8 @@ class RknnUvrBackend(UvrInferenceBackend):
             "inference_s": inference_end - preprocess_end,
             "postprocess_s": total_end - inference_end,
             "total_s": total_end - total_start,
+            "runtime_init_s": self._runtime_init_s - init_s_before,
+            "runtime_init_count": self._runtime_init_count - init_count_before,
         }
         if os.environ.get("NIGHTINGALE_RKNN_PROFILE", "").strip() == "1":
             values = " ".join(
@@ -621,6 +635,9 @@ class RknnUvrBackend(UvrInferenceBackend):
 
     def close(self) -> None:
         self._closed = True
+        if self._executor is not None:
+            self._executor.shutdown(wait=True)
+            self._executor = None
         for _component, runtime in reversed(self._runtimes):
             runtime.release()
         self._runtimes.clear()

@@ -11,6 +11,7 @@ import { Hint } from './settings-controls';
 
 const MAX_RECORDING_MS = 5000;
 const MAX_RECORDING_SECONDS = MAX_RECORDING_MS / 1000;
+const CAPTURE_ID = 'microphone-test';
 
 type MicRecording = {
   samples: Float32Array;
@@ -86,7 +87,7 @@ export function MicTestField({
     }
     stopListeningRef.current?.();
     stopListeningRef.current = null;
-    await microphoneAdapter.stopCapture().catch(() => {});
+    await microphoneAdapter.stopCapture(CAPTURE_ID).catch(() => {});
 
     const sampleRate = sampleRateRef.current;
     const sampleCount = sampleCountRef.current;
@@ -118,7 +119,7 @@ export function MicTestField({
     }, 1000);
 
     try {
-      stopListeningRef.current = await microphoneAdapter.subscribe((frame) => {
+      stopListeningRef.current = await microphoneAdapter.subscribe(CAPTURE_ID, (frame) => {
         if (!recordingActiveRef.current) {
           return;
         }
@@ -140,7 +141,7 @@ export function MicTestField({
           void finishRecording();
         }
       });
-      await microphoneAdapter.startCapture(selectedMicId, { emit_audio: false });
+      await microphoneAdapter.startCapture(CAPTURE_ID, selectedMicId, { emit_audio: false });
       onCaptureStarted?.();
 
       timerRef.current = window.setTimeout(() => void finishRecording(), MAX_RECORDING_MS);
@@ -151,7 +152,7 @@ export function MicTestField({
       counterRef.current = null;
       stopListeningRef.current?.();
       stopListeningRef.current = null;
-      await microphoneAdapter.stopCapture().catch(() => {});
+      await microphoneAdapter.stopCapture(CAPTURE_ID).catch(() => {});
       const message = error instanceof Error ? error.message : String(error);
       toast.error(`Microphone test failed: ${message}`);
     }
@@ -206,7 +207,7 @@ export function MicTestField({
       }
       stopListeningRef.current?.();
       if (captureActive) {
-        void microphoneAdapter.stopCapture().catch(() => {});
+        void microphoneAdapter.stopCapture(CAPTURE_ID).catch(() => {});
       }
       const playback = playbackRef.current;
       if (playback) {

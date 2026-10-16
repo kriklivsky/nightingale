@@ -3,8 +3,10 @@ import { useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { openUrl } from '@/bridge/opener';
 import { useLyricsEditor } from '@/features/lyrics/hooks/use-lyrics-editor';
+import { TIMING_CHOICES, type TimingChoice } from '@/features/lyrics/lib/timing-choice';
 import { useSaveLyricsMutation } from '@/features/lyrics/mutations/use-save-lyrics-mutation';
 import {
+  useAlignLrcMutation,
   useApplyTimedLyricsMutation,
   useProvideLrcMutation,
 } from '@/features/lyrics/mutations/use-timed-lyrics-mutation';
@@ -29,10 +31,11 @@ import type { Song } from '@/types/Song';
 
 import { CarouselNav } from './carousel-nav';
 import { EditLyricsFooter } from './edit-lyrics-footer';
-import { LrcOptions, type TimingChoice } from './lrc-options';
+import { LrcOptions } from './lrc-options';
 import { LrclibMatches } from './lrclib-matches';
 import { LyricsEditor } from './lyrics-editor';
 import { ringFor } from './parts';
+import { SidecarLrcNotice } from './sidecar-lrc-notice';
 
 export { isEditLyricsDialogMode } from '@/features/lyrics/utils/edit-lyrics';
 
@@ -78,9 +81,6 @@ type FooterMessageInput = {
 
 const footerMessage = (input: FooterMessageInput): string | undefined => {
   const hints: string[] = [];
-  if (!input.hasLrc) {
-    hints.push('Paste LRC / Enhanced LRC to set timing directly.');
-  }
   if (input.useProvidedTiming && input.lrcLevel === 'line') {
     hints.push('Line-level LRC highlights whole lines — no per-word timing.');
   }
@@ -205,7 +205,7 @@ function navLayout({
   } else {
     segments.push({ key: 'editor', width: 1 });
     if (timingNav) {
-      segments.push({ key: 'timing', width: 2 });
+      segments.push({ key: 'timing', width: TIMING_CHOICES.length });
     }
     if (audioNav) {
       segments.push({ key: 'audio', width: 2 });
@@ -345,6 +345,7 @@ export const EditLyricsDialog = () => {
   const provideLrcMutation = useProvideLrcMutation();
   const applyTimedMutation = useApplyTimedLyricsMutation();
   const saveLyricsMutation = useSaveLyricsMutation();
+  const alignLrcMutation = useAlignLrcMutation();
 
   const [activeTab, setActiveTab] = useState<EditLyricsTab>('edit');
   const [carouselIndex, setCarouselIndex] = useState(0);
@@ -373,6 +374,7 @@ export const EditLyricsDialog = () => {
     provideLrcMutation.isLoading,
     applyTimedMutation.isLoading,
     saveLyricsMutation.isLoading,
+    alignLrcMutation.isLoading,
   ].some(Boolean);
   const canSave = canSaveLyrics(
     saving,
@@ -415,6 +417,11 @@ export const EditLyricsDialog = () => {
       return;
     }
 
+    if (hasLrc && timingChoice === 'anchored') {
+      alignLrcMutation.mutate({ hash, lrcText: editor.text, title }, { onSuccess: close });
+      return;
+    }
+
     const lines = hasLrc ? stripLrcToPlainLines(editor.text) : editor.normalized;
     if (lines.length === 0) {
       return;
@@ -433,6 +440,12 @@ export const EditLyricsDialog = () => {
       return;
     }
     editor.setText(candidate.synced_lyrics);
+    setTimingChoice('provided');
+    setActiveTab('edit');
+  };
+
+  const applySidecar = () => {
+    editor.applySidecar();
     setTimingChoice('provided');
     setActiveTab('edit');
   };
@@ -475,7 +488,7 @@ export const EditLyricsDialog = () => {
 
       const handleOption = (): boolean => {
         if (layout.timingSegment !== null && segment === layout.timingSegment) {
-          setTimingChoice(slot === 0 ? 'provided' : 'align');
+          setTimingChoice(TIMING_CHOICES[slot] ?? 'align');
           return true;
         }
         if (layout.audioSegment !== null && segment === layout.audioSegment) {
@@ -576,7 +589,17 @@ export const EditLyricsDialog = () => {
         lineCount={editor.normalized.length}
         isDirty={editor.isDirty}
         focused={editorFocused}
+        hasLrc={hasLrc}
       />
+      {editor.sidecar ? (
+        <SidecarLrcNotice
+          fileName={editor.sidecar.file_name}
+          kind={editor.sidecar.kind}
+          showing={editor.showingSidecar}
+          canUse={editor.canUseSidecar && !saving}
+          onUse={applySidecar}
+        />
+      ) : null}
       <LrcOptions
         level={lrcLevel}
         stemsSeparated={stemsSeparated}

@@ -6,9 +6,11 @@
  * presentational tree that consumes the playback contexts via hooks.
  */
 
+import type { PlaybackPlayer } from '@/bridge/playback-session';
 import { isTauri } from '@/bridge/runtime';
 import { Background } from '@/features/playback/components/background';
 import { ResultDialog } from '@/features/playback/components/dialogs/result';
+import { LoadingScreen } from '@/features/playback/components/loading-screen';
 import { LyricsDisplay } from '@/features/playback/components/lyrics-display';
 import { PauseOverlay } from '@/features/playback/components/pause-overlay';
 import { PitchGraph } from '@/features/playback/components/pitch-graph';
@@ -29,6 +31,7 @@ export type PlaybackInnerProps = {
   config: AppConfig | null;
   queuePlayback: boolean;
   sessionPlayback: boolean;
+  players?: readonly PlaybackPlayer[];
 };
 
 type PlaybackLayoutProps = PlaybackInnerProps;
@@ -39,25 +42,38 @@ function displaySettings(config: AppConfig | null) {
     lyricsHorizontalPosition: config?.lyrics_horizontal_position ?? 'center',
     lyricsScale: config?.lyrics_scale,
     pitchGraphScale: config?.pitch_graph_scale,
+    romanizationMode: config?.lyrics_romanization_mode ?? 'enabled',
   };
 }
 
-function PlaybackLayout({ song, config, queuePlayback, sessionPlayback }: PlaybackLayoutProps) {
-  const { isReady, paused } = usePlaybackTransportState();
+function PlaybackLayout({
+  song,
+  config,
+  queuePlayback,
+  sessionPlayback,
+  players,
+}: PlaybackLayoutProps) {
+  const { isReady, paused, guideAvailable } = usePlaybackTransportState();
   const { handleContinue, handleExit } = usePlaybackTransportActions();
   const { segments } = usePlaybackTranscriptState();
-  const { series } = usePlaybackMicState();
-  const { lyricsVerticalPosition, lyricsHorizontalPosition, lyricsScale, pitchGraphScale } =
-    displaySettings(config);
+  const { series, micReady, micUserEnabled, multiplayer } = usePlaybackMicState();
+  const {
+    lyricsVerticalPosition,
+    lyricsHorizontalPosition,
+    lyricsScale,
+    pitchGraphScale,
+    romanizationMode,
+  } = displaySettings(config);
   const hudPosition = lyricsVerticalPosition === 'top' ? 'bottom' : 'top';
   const sessionWindowControls = sessionPlayback && isTauri;
 
   usePlaybackInput(config);
-  const result = usePlaybackResult(song, queuePlayback);
+  const result = usePlaybackResult(song, queuePlayback, players);
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-black" style={{ contain: 'strict' }}>
       <Background />
+      {!isReady && <LoadingScreen song={song} />}
 
       {isReady && (
         <>
@@ -68,12 +84,22 @@ function PlaybackLayout({ song, config, queuePlayback, sessionPlayback }: Playba
             position={hudPosition}
             windowControls={sessionWindowControls}
           />
-          <PitchGraph series={series} position={hudPosition} scale={pitchGraphScale} />
+          {!multiplayer && (
+            <PitchGraph
+              series={series}
+              micReady={micReady}
+              micUserEnabled={micUserEnabled}
+              paused={paused}
+              position={hudPosition}
+              scale={pitchGraphScale}
+            />
+          )}
           <LyricsDisplay
             segments={segments}
             verticalPosition={lyricsVerticalPosition}
             horizontalPosition={lyricsHorizontalPosition}
             scale={lyricsScale}
+            romanizationMode={romanizationMode}
           />
         </>
       )}
@@ -87,7 +113,10 @@ function PlaybackLayout({ song, config, queuePlayback, sessionPlayback }: Playba
 
       <ResultDialog
         open={result.open}
+        results={result.results}
         score={result.score}
+        report={result.report}
+        guideAvailable={guideAvailable}
         song={song}
         scores={result.scores}
         activeProfile={result.activeProfile}
@@ -105,14 +134,16 @@ export function PlaybackInner({
   config,
   queuePlayback,
   sessionPlayback,
+  players,
 }: PlaybackInnerProps) {
   return (
-    <PlaybackProviders song={song} config={config}>
+    <PlaybackProviders song={song} config={config} players={players}>
       <PlaybackLayout
         song={song}
         config={config}
         queuePlayback={queuePlayback}
         sessionPlayback={sessionPlayback}
+        players={players}
       />
     </PlaybackProviders>
   );

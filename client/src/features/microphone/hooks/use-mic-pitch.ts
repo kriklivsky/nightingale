@@ -19,7 +19,7 @@ const RING_CAPACITY = PITCH_WINDOW_SAMPLES * 2;
 
 const defaultAdapter = microphoneAdapter;
 
-export function useMicPitch(enabled: boolean) {
+export function useMicPitch(captureId: string, enabled: boolean) {
   const [latestPitch, setLatestPitch] = useState<number | null>(null);
   const ringRef = useRef<SampleRing | null>(null);
   const sampleRateRef = useRef(0);
@@ -28,10 +28,14 @@ export function useMicPitch(enabled: boolean) {
     ringRef.current = new SampleRing(RING_CAPACITY);
   }
 
-  useMicSamples((frame) => {
-    sampleRateRef.current = frame.sample_rate;
-    ringRef.current?.push(frame.samples);
-  }, enabled);
+  useMicSamples(
+    captureId,
+    (frame) => {
+      sampleRateRef.current = frame.sample_rate;
+      ringRef.current?.push(frame.samples);
+    },
+    enabled,
+  );
 
   useEffect(() => {
     if (!enabled) {
@@ -65,10 +69,15 @@ export function useMicPitch(enabled: boolean) {
   return { latestPitch: enabled ? latestPitch : null, active: enabled, error };
 }
 
+type MicCaptureInput = {
+  captureId: string;
+  deviceId: string | null;
+  enabled: boolean;
+  options: MicCaptureOptions;
+};
+
 export function useMicCapture(
-  deviceId: string | null,
-  enabled: boolean,
-  options: MicCaptureOptions,
+  { captureId, deviceId, enabled, options }: MicCaptureInput,
   adapter: MicrophoneAdapter = defaultAdapter,
 ) {
   const [active, setActive] = useState(false);
@@ -83,7 +92,7 @@ export function useMicCapture(
 
     const run = async () => {
       try {
-        await adapter.startCapture(deviceId, options);
+        await adapter.startCapture(captureId, deviceId, options);
 
         if (cancelled) {
           return;
@@ -93,7 +102,7 @@ export function useMicCapture(
         setError(null);
       } catch (e) {
         if (!cancelled) {
-          void adapter.stopCapture().catch(() => {});
+          void adapter.stopCapture(captureId).catch(() => {});
           const msg = e instanceof Error ? e.message : String(e);
           setError(msg);
           setActive(false);
@@ -105,9 +114,9 @@ export function useMicCapture(
 
     return () => {
       cancelled = true;
-      void adapter.stopCapture().catch(() => {});
+      void adapter.stopCapture(captureId).catch(() => {});
     };
-  }, [adapter, deviceId, enabled, options]);
+  }, [adapter, captureId, deviceId, enabled, options]);
 
   return { active: enabled && active, error: enabled ? error : null };
 }

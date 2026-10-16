@@ -120,13 +120,7 @@ export class PitchScoring {
   }
 }
 
-export function computeSingableTime(vocals: AudioBuffer): number {
-  const sr = vocals.sampleRate;
-  const ch = vocals.numberOfChannels > 0 ? vocals.getChannelData(0) : null;
-  if (ch === null) {
-    return 0;
-  }
-
+export function computeSingableTime(ch: Float32Array, sr: number): number {
   const hop = PITCH_WINDOW_SAMPLES / 2;
   const hopSec = hop / sr;
   const detector = createPitchDetector();

@@ -21,6 +21,7 @@ RELEASING.md
 # JavaScript build output
 client/node_modules/
 client/dist/
+client/screen-dist/
 *.tsbuildinfo
 
 # Generated per-agent configuration and local agent state

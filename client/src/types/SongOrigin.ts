@@ -11,9 +11,9 @@
  * time the user reconnects to a different host.
  */
 export type SongOrigin =
-  | { kind: "local_file" }
+  | { kind: 'local_file' }
   | {
-      kind: "jellyfin";
+      kind: 'jellyfin';
       item_id: string;
       container: string | null;
       /**
@@ -23,7 +23,7 @@ export type SongOrigin =
       cover_tag: string | null;
     }
   | {
-      kind: "navidrome";
+      kind: 'navidrome';
       item_id: string;
       container: string | null;
       /**
@@ -33,7 +33,7 @@ export type SongOrigin =
       cover_tag: string | null;
     }
   | {
-      kind: "plex";
+      kind: 'plex';
       item_id: string;
       /**
        * Server-relative original-media part key. Keeping it relative lets

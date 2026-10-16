@@ -1,0 +1,138 @@
+#!/usr/bin/python3
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import stat
+import sys
+import tempfile
+
+
+OUTPUTS = {
+    "hdmi": ("rockchiphdmi0", "tvbox_hdmi_mix", 20260923),
+    "umc": ("U192k", "tvbox_umc_mix", 20261016),
+}
+
+
+def mixer(card: str, name: str, ipc_key: int) -> str:
+    return f'''pcm.{name} {{
+    type dmix
+    ipc_key {ipc_key}
+    ipc_key_add_uid true
+    slave {{
+        pcm "hw:CARD={card},DEV=0"
+        rate 48000
+        format S32_LE
+        channels 2
+        period_time 0
+        period_size 256
+        buffer_size 4096
+    }}
+}}
+'''
+
+
+def configuration(output: str, *, legacy: bool = False) -> str:
+    card, name, _ = OUTPUTS[output]
+    mixers = [OUTPUTS[output]] if legacy else OUTPUTS.values()
+    definitions = "\n".join(mixer(*item) for item in mixers)
+    return definitions + f'''
+pcm.!default {{
+    type plug
+    slave.pcm "{name}"
+}}
+
+ctl.!default {{
+    type hw
+    card {card}
+}}
+'''
+
+
+def selected_output(path: Path) -> tuple[str | None, str | None]:
+    if path.is_symlink():
+        raise ValueError("Символическая ссылка .asoundrc не изменена.")
+    if not path.exists():
+        return None, None
+    if not path.is_file():
+        raise ValueError("Настройка .asoundrc не является обычным файлом; она не изменена.")
+    text = path.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+    for output in OUTPUTS:
+        if normalized == " ".join(configuration(output).split()):
+            return output, text
+    if normalized == " ".join(configuration("hdmi", legacy=True).split()):
+        return "hdmi", text
+    raise ValueError("Найдена пользовательская настройка ALSA; она не изменена.")
+
+
+def require_device(output: str) -> None:
+    card_id = OUTPUTS[output][0]
+    for card in Path("/proc/asound").glob("card[0-9]*"):
+        try:
+            if (card / "id").read_text().strip() == card_id and (card / "pcm0p").is_dir():
+                return
+        except FileNotFoundError:
+            continue
+    label = "Behringer UMC202HD" if output == "umc" else "HDMI"
+    raise ValueError(f"{label}: устройство вывода не найдено. Настройка не изменена.")
+
+
+def save_configuration(path: Path, text: str, previous: str | None) -> None:
+    mode = stat.S_IMODE(path.stat().st_mode) if previous is not None else 0o600
+    if previous is not None:
+        backup = path.with_name(".asoundrc.pre-tvbox-audio")
+        try:
+            descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(previous)
+                stream.flush()
+                os.fsync(stream.fileno())
+
+    temporary: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, prefix=".asoundrc-", delete=False
+        ) as stream:
+            temporary = stream.name
+            os.fchmod(stream.fileno(), mode)
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            Path(temporary).unlink(missing_ok=True)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Выбор звука ТВ-лаунчера; применяется при запуске приложения.")
+    parser.add_argument("output", nargs="?", choices=OUTPUTS)
+    args = parser.parse_args()
+    path = Path.home() / ".asoundrc"
+    try:
+        selected, previous = selected_output(path)
+        if args.output is None:
+            if selected is None:
+                raise ValueError("Выберите HDMI или UMC202HD для настройки звука.")
+            print(selected)
+            return 0
+        require_device(args.output)
+        text = configuration(args.output)
+        if previous != text:
+            save_configuration(path, text, previous)
+        print(args.output)
+        return 0
+    except (OSError, UnicodeError, ValueError) as error:
+        message = error.strerror if isinstance(error, OSError) else str(error)
+        print(f"Не удалось настроить звук: {message}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

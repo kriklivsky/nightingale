@@ -6,9 +6,9 @@ import type { QueuedStatus } from '@/types/QueuedStatus';
 import type { Song } from '@/types/Song';
 import type { SongSortColumn } from '@/types/SongSortColumn';
 
-import { AlbumArt } from './shared/album-art';
-import { LanguageBadge } from './shared/language-badge';
-import { StatusBadge } from './shared/status-badge';
+import { AlbumArt } from '../song/album-art';
+import { LanguageBadge } from '../song/language-badge';
+import { StatusBadge } from '../song/status-badge';
 
 export type SongColumn = {
   id: string;

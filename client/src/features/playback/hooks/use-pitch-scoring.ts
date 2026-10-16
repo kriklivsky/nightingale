@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { TimeSubscriber } from '@/features/playback/hooks/use-audio-player';
 import {
@@ -11,32 +11,35 @@ import {
   createPitchDetector,
   detectPitchFromSamplesRef,
 } from '@/features/playback/lib/pitch/detect';
+import { PitchReportBuffer } from '@/features/playback/lib/pitch/report';
 import type { PitchSeries } from '@/features/playback/lib/pitch/state';
 import {
-  computeSingableTime,
   PitchScoring,
   PitchStateBuffer,
   pitchSimilarity,
   sampleVocalsWindow,
 } from '@/features/playback/lib/pitch/state';
 import { useLatestRef } from '@/shared/hooks/use-latest-ref';
+import type { Segment } from '@/types/Transcript';
 
 export type PitchScoringSource = {
   isReady: boolean;
   duration: number;
+  singableDuration: number;
   getReferenceBuffer: () => AudioBuffer | null;
   subscribe: (fn: TimeSubscriber) => () => void;
 };
 
 export function usePitchScoring(
-  { isReady, duration, getReferenceBuffer, subscribe }: PitchScoringSource,
+  { isReady, duration, singableDuration, getReferenceBuffer, subscribe }: PitchScoringSource,
   micPitch: number | null,
   latencyCompensationSec = DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
 ) {
-  const refDetector = useRef(createPitchDetector());
-  const scratchRef = useRef(new Float32Array(PITCH_WINDOW_SAMPLES));
+  const [refDetector] = useState(createPitchDetector);
+  const [scratch] = useState(() => new Float32Array(PITCH_WINDOW_SAMPLES));
   const bufferRef = useRef(new PitchStateBuffer());
   const scoringRef = useRef(new PitchScoring(1));
+  const reportRef = useRef(new PitchReportBuffer());
   const micPitchRef = useLatestRef(micPitch);
   const latencyRef = useLatestRef(
     Math.min(
@@ -44,7 +47,6 @@ export function usePitchScoring(
       Math.max(MIN_MIC_LATENCY_COMPENSATION_SEC, latencyCompensationSec),
     ),
   );
-  const singableRef = useRef<number | null>(null);
   const [series, setSeries] = useState<PitchSeries>({
     refPitches: [],
     userPitches: [],
@@ -57,15 +59,13 @@ export function usePitchScoring(
       return;
     }
     bufferRef.current.reset();
+    reportRef.current.reset();
 
-    const reference = getReferenceBuffer();
-    const singable = reference ? computeSingableTime(reference) : duration;
-    singableRef.current = singable;
-    scoringRef.current = new PitchScoring(singable);
+    scoringRef.current = new PitchScoring(singableDuration);
 
     setSeries(bufferRef.current.snapshot());
     setScore(0);
-  }, [isReady, duration, getReferenceBuffer]);
+  }, [isReady, duration, singableDuration]);
 
   useEffect(() => {
     if (!isReady) {
@@ -79,18 +79,17 @@ export function usePitchScoring(
 
       const reference = getReferenceBuffer();
       const mp = micPitchRef.current;
+      const referenceTimeSec = Math.max(0, t - latencyRef.current);
 
-      if (!reference || !sampleVocalsWindow(reference, t, scratchRef.current, latencyRef.current)) {
+      if (!reference || !sampleVocalsWindow(reference, t, scratch, latencyRef.current)) {
         bufferRef.current.tryPush(null, mp, 0, t);
+        reportRef.current.record(referenceTimeSec, null, mp);
       } else {
-        const refHz = detectPitchFromSamplesRef(
-          refDetector.current,
-          scratchRef.current,
-          reference.sampleRate,
-        );
+        const refHz = detectPitchFromSamplesRef(refDetector, scratch, reference.sampleRate);
         const sim = refHz !== null && mp !== null ? pitchSimilarity(refHz, mp) : 0;
         bufferRef.current.tryPush(refHz, mp, sim, t);
         scoringRef.current.accumulate(t, refHz, mp, sim);
+        reportRef.current.record(referenceTimeSec, refHz, mp);
       }
 
       setSeries(bufferRef.current.snapshot());
@@ -98,7 +97,12 @@ export function usePitchScoring(
     };
 
     return subscribe(run);
-  }, [getReferenceBuffer, isReady, latencyRef, micPitchRef, subscribe]);
+  }, [getReferenceBuffer, isReady, latencyRef, micPitchRef, refDetector, scratch, subscribe]);
 
-  return { series, score };
+  const getPitchReport = useCallback(
+    (segments: readonly Segment[]) => reportRef.current.snapshot(segments),
+    [],
+  );
+
+  return { series, score, getPitchReport };
 }

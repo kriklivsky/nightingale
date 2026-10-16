@@ -1,0 +1,22 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+readonly SCREEN_CONFIG="${HOME}/.config/tvbox-screen"
+screen_address="${1:?Usage: tvbox-screen-setup <LAN IPv4 address>}"
+if ! /usr/bin/python3 -c 'import ipaddress, sys; ipaddress.IPv4Address(sys.argv[1])' "${screen_address}"; then
+    exit 1
+fi
+install -d -m 0700 "${SCREEN_CONFIG}"
+if [[ -e "${SCREEN_CONFIG}/server.crt" || -e "${SCREEN_CONFIG}/server.key" ]]; then
+    printf 'Certificate already exists; it has not been replaced.\n' >&2
+    exit 1
+fi
+umask 077
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+    -keyout "${SCREEN_CONFIG}/server.key" -out "${SCREEN_CONFIG}/server.crt" \
+    -days 365 -subj "/CN=Orange Pi Screen" \
+    -addext "subjectAltName=IP:${screen_address},DNS:orangepi5.local" \
+    -addext 'basicConstraints=critical,CA:TRUE,pathlen:0' \
+    -addext 'keyUsage=critical,digitalSignature,keyCertSign' \
+    -addext 'extendedKeyUsage=serverAuth'
+openssl x509 -in "${SCREEN_CONFIG}/server.crt" -noout -fingerprint -sha256

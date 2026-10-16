@@ -1,4 +1,5 @@
 mod analyzer;
+mod backgrounds;
 mod cache;
 mod config;
 mod error;
@@ -8,6 +9,7 @@ mod library_menu;
 mod library_model;
 mod lrc;
 mod lyrics;
+mod media_path;
 pub mod media_server;
 mod playback;
 mod playback_queue;
@@ -16,6 +18,7 @@ mod profile;
 mod scanner;
 mod secret;
 mod song;
+mod song_video;
 mod source;
 mod usdx;
 mod vendor;
@@ -25,12 +28,18 @@ pub use analyzer::{
     AnalysisQueue, cancel_analysis, delete_cache, enqueue, realign, reanalyze_force_transcribe,
     reanalyze_full, reanalyze_transcript, refresh_metadata, shutdown_server,
 };
+pub use backgrounds::{
+    BackgroundSelection, CustomBackground, CustomBackgroundKind, CustomBackgroundSource,
+    MAX_BACKGROUND_UPLOAD_BYTES, add_custom_background_url, custom_background_kind_for_name,
+    custom_background_max_bytes, import_custom_background_file, load_custom_background_shader,
+    remove_custom_background, resolve_custom_background_path,
+};
 pub use cache::{
     CacheDir, CachePaths, CacheStats, cache_roots, change_app_data_path, clear_models,
     clear_videos, default_nightingale_dir, nightingale_dir, normalized_target_path, same_path,
     set_default_data_path,
 };
-pub use config::{AppConfig, LibrarySource};
+pub use config::{AppConfig, LibrarySource, WindowState};
 pub use library_db::{init_library, library_db_path};
 pub use library_delete::delete_local_song;
 
@@ -51,9 +60,11 @@ pub use library_model::{
     SongsStore, SortDirection,
 };
 pub use lyrics::{
-    LrclibCandidate, LyricsFile, apply_timed_lyrics, load_lyrics_file, provide_lrc,
-    save_lyrics_and_realign, search_lrclib_for_hash,
+    LineWindow, LrclibCandidate, LyricsFile, SidecarLrc, SidecarLrcKind, align_lrc_lyrics,
+    apply_timed_lyrics, load_lyrics_file, load_sidecar_lrc, provide_lrc, save_lyrics_and_realign,
+    search_lrclib_for_hash,
 };
+pub use media_path::resolve_media_path;
 pub use media_server::MediaEndpoint;
 pub use playback::{
     AudioPaths, PixabayVideoDownloaded, ShiftDone, ShiftResult, StemsReady,
@@ -63,10 +74,14 @@ pub use playback::{
     shift_tempo_done_payload,
 };
 pub use playback_queue::{PlaybackQueue, PlaybackQueueEntry};
-pub use playback_session::{PlaybackSession, PlaybackSessionStore};
+pub use playback_session::{PlaybackPlayer, PlaybackSession, PlaybackSessionStore};
 pub use profile::ProfileStore;
-pub use scanner::start_scan;
+pub use scanner::{CacheReconcileSummary, reconcile_cache, start_scan};
 pub use song::{Song, SongOrigin};
+pub use song_video::{
+    SongVideo, VideoCandidate, download_song_video, get_song_video, remove_song_video,
+    search_song_videos, set_song_video_offset,
+};
 pub use source::{
     JellyfinAuth, JellyfinSource, MediaSource, NavidromeAuth, NavidromeSource, PlexAuth,
     PlexSource, SourceKind, active_source,
@@ -94,7 +109,7 @@ pub use vendor::{
 pub fn startup() -> Result<(), String> {
     init_library().map_err(|e| e.to_string())?;
 
-    let interrupted = AnalysisQueue::recover_interrupted();
+    let interrupted = AnalysisQueue::recover_interrupted().map_err(|error| error.to_string())?;
 
     let cache = CacheDir::new();
 

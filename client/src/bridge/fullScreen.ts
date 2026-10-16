@@ -5,6 +5,8 @@ import { windowImmersive } from '@/bridge/window';
 
 import { isTauri } from './runtime';
 
+export const FULLSCREEN_CHANGE_EVENT = 'nightingale:fullscreen-change';
+
 let cachedTauriWindow: ReturnType<typeof getCurrentWindow> | null = null;
 
 const tauriWindow = () => {
@@ -39,6 +41,7 @@ export const setFullScreen = async (next: boolean): Promise<void> => {
         // Same as above.
       }
     }
+    window.dispatchEvent(new CustomEvent(FULLSCREEN_CHANGE_EVENT, { detail: next }));
     return;
   }
   if (platform() === 'macos') {
@@ -46,4 +49,5 @@ export const setFullScreen = async (next: boolean): Promise<void> => {
   } else {
     await tauriWindow().setFullscreen(next);
   }
+  window.dispatchEvent(new CustomEvent(FULLSCREEN_CHANGE_EVENT, { detail: next }));
 };

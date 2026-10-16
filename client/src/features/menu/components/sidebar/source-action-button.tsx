@@ -45,7 +45,7 @@ export const SourceActionButton = ({
         <Button
           tabIndex={-1}
           variant="ghost"
-          size="icon-xs"
+          size="icon-sm"
           aria-label={label}
           disabled={disabled}
           onClick={onClick}

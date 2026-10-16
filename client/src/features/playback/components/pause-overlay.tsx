@@ -43,23 +43,25 @@ export const PauseOverlay = ({ open, exitLabel, onExit, onContinue }: PauseOverl
   });
 
   return (
-    <AlertDialog open={open} onOpenChange={(v) => !v && onContinue()}>
-      <AlertDialogContent onEscapeKeyDown={(e) => e.preventDefault()}>
+    <AlertDialog open={open}>
+      <AlertDialogContent className="sm:max-w-xl" onEscapeKeyDown={(e) => e.preventDefault()}>
         <AlertDialogHeader>
-          <AlertDialogTitle>Paused</AlertDialogTitle>
-          <AlertDialogDescription>Exiting now won&apos;t save your progress</AlertDialogDescription>
+          <AlertDialogTitle className="text-2xl">Paused</AlertDialogTitle>
+          <AlertDialogDescription className="text-base">
+            Exiting now won&apos;t save your progress
+          </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel
             onClick={onContinue}
-            className={cn(NO_FOCUS_RING, open && focusedIndex === 0 && RING)}
+            className={cn('min-h-12 text-base', NO_FOCUS_RING, open && focusedIndex === 0 && RING)}
           >
             Continue
           </AlertDialogCancel>
           <AlertDialogAction
             variant="destructive"
             onClick={onExit}
-            className={cn(NO_FOCUS_RING, open && focusedIndex === 1 && RING)}
+            className={cn('min-h-12 text-base', NO_FOCUS_RING, open && focusedIndex === 1 && RING)}
           >
             {exitLabel}
           </AlertDialogAction>

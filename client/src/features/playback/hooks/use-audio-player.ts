@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { PlaybackAdapter } from '@/bridge/playback';
 import { playbackAdapter } from '@/bridge/playback';
+import { analyzeReferenceDuration } from '@/features/playback/lib/pitch/reference-duration';
 
 export type TimeSubscriber = (time: number) => void;
 
@@ -20,6 +21,7 @@ export type AudioPlayer = {
   getCurrentTime: () => number;
   subscribe: (fn: TimeSubscriber) => () => void;
   duration: number;
+  singableDuration: number;
   isReady: boolean;
   isPlaying: boolean;
   isFinished: boolean;
@@ -59,6 +61,7 @@ export function useAudioPlayer({
   adapter = playbackAdapter,
 }: AudioPlayerOptions): AudioPlayer {
   const ctxRef = useRef<AudioContext | null>(null);
+  const loadingAbortRef = useRef<AbortController | null>(null);
   const instrumentalBufRef = useRef<AudioBuffer | null>(null);
   const vocalsBufRef = useRef<AudioBuffer | null>(null);
   const instrumentalSrcRef = useRef<AudioBufferSourceNode | null>(null);
@@ -77,6 +80,7 @@ export function useAudioPlayer({
   const cancelledRef = useRef(false);
 
   const [duration, setDuration] = useState(0);
+  const [singableDuration, setSingableDuration] = useState(0);
   const [isReady, setIsReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
@@ -203,6 +207,8 @@ export function useAudioPlayer({
     }
 
     let cancelled = false;
+    const loadingAbort = new AbortController();
+    loadingAbortRef.current = loadingAbort;
 
     cancelledRef.current = false;
     playingRef.current = false;
@@ -237,7 +243,7 @@ export function useAudioPlayer({
         setGuideAvailable(vocalsUrl !== null);
 
         const [instData, vocData] = await Promise.all([
-          fetch(paths.instrumental).then((r) => {
+          fetch(paths.instrumental, { signal: loadingAbort.signal }).then((r) => {
             if (!r.ok) {
               throw new Error(`Failed to fetch instrumental: ${r.status}`);
             }
@@ -247,7 +253,7 @@ export function useAudioPlayer({
 
           vocalsUrl === null
             ? Promise.resolve(null)
-            : fetch(vocalsUrl).then((r) => {
+            : fetch(vocalsUrl, { signal: loadingAbort.signal }).then((r) => {
                 if (!r.ok) {
                   throw new Error(`Failed to fetch vocals: ${r.status}`);
                 }
@@ -273,10 +279,16 @@ export function useAudioPlayer({
           return undefined;
         }
 
+        const singable = await analyzeReferenceDuration(vocBuf ?? instBuf, loadingAbort.signal);
+        if (isCancelled()) {
+          return undefined;
+        }
+
         instrumentalBufRef.current = instBuf;
         vocalsBufRef.current = vocBuf;
 
         setDuration(instBuf.duration);
+        setSingableDuration(singable);
 
         startSources(0);
         setIsReady(true);
@@ -318,6 +330,8 @@ export function useAudioPlayer({
 
     return () => {
       cancelled = true;
+      loadingAbort.abort();
+      loadingAbortRef.current = null;
       cancelAnimationFrame(rafRef.current);
       stopSources();
       instrumentalBufRef.current = null;
@@ -399,6 +413,7 @@ export function useAudioPlayer({
 
   const cleanup = useCallback(() => {
     cancelledRef.current = true;
+    loadingAbortRef.current?.abort();
 
     cancelAnimationFrame(rafRef.current);
 
@@ -413,6 +428,7 @@ export function useAudioPlayer({
       getCurrentTime,
       subscribe,
       duration,
+      singableDuration,
       isReady,
       isPlaying,
       isFinished,
@@ -435,6 +451,7 @@ export function useAudioPlayer({
       getCurrentTime,
       subscribe,
       duration,
+      singableDuration,
       isReady,
       isPlaying,
       isFinished,

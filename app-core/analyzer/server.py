@@ -25,12 +25,18 @@ import os
 import secrets
 import socket
 import sys
+import threading
+
+MAX_COMMAND_BYTES = 2 * 1024 * 1024
 
 if os.name == "nt":
     import huggingface_hub.file_download as _hf_dl
     _hf_dl.are_symlinks_supported = lambda *_a, **_kw: False
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from scheduling import set_background_priority
+set_background_priority(report=True)
 
 from gpu import end_of_song_cleanup, hard_free_gpu, log_vram, reset_peak_stats, vram_snapshot
 from whisper_compat import detect_device, is_oom, set_align_backend, set_progress_sink
@@ -77,12 +83,36 @@ def process_song(cmd, device):
         log_vram("song_end")
 
 
-def _send(wfile, payload):
-    try:
-        wfile.write(json.dumps(payload, ensure_ascii=False) + "\n")
-        wfile.flush()
-    except (BrokenPipeError, OSError) as e:
-        print(f"[nightingale:LOG] Failed to send message: {e}", file=sys.stderr, flush=True)
+class ProtocolWriter:
+    def __init__(self, stream):
+        self.stream = stream
+        self.lock = threading.Lock()
+
+    def send(self, payload):
+        with self.lock:
+            try:
+                self.stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                self.stream.flush()
+                return True
+            except OSError:
+                print("[nightingale:LOG] Analyzer connection closed", file=sys.stderr, flush=True)
+                return False
+
+
+def heartbeat(protocol, stopped, busy):
+    while not stopped.wait(5):
+        if busy.is_set() and not protocol.send({"type": "heartbeat"}):
+            return
+
+
+def read_commands(stream):
+    while True:
+        line = stream.readline(MAX_COMMAND_BYTES + 1)
+        if not line:
+            return
+        if len(line) > MAX_COMMAND_BYTES or not line.endswith(b"\n"):
+            raise ValueError("Analyzer command exceeded the protocol size limit")
+        yield line
 
 
 def main():
@@ -109,42 +139,52 @@ def main():
     finally:
         srv.close()
 
-    conn.settimeout(None)
-    rfile = conn.makefile("r", encoding="utf-8", newline="\n")
+    conn.settimeout(60)
+    rfile = conn.makefile("rb")
     wfile = conn.makefile("w", encoding="utf-8", newline="\n")
+    protocol = ProtocolWriter(wfile)
 
-    hello_line = rfile.readline()
+    hello_line = rfile.readline(1025)
     if not hello_line:
         return
     try:
         hello = json.loads(hello_line)
     except json.JSONDecodeError:
         return
-    if hello.get("type") != "hello" or hello.get("token") != token:
+    if not isinstance(hello, dict) or hello.get("type") != "hello" or hello.get("token") != token:
         print("[nightingale:LOG] Auth failed, closing connection", file=sys.stderr, flush=True)
         return
-    _send(wfile, {"type": "hello_ack"})
+    conn.settimeout(None)
+    protocol.send({"type": "hello_ack"})
+    stopped = threading.Event()
+    busy = threading.Event()
+    pulse = threading.Thread(target=heartbeat, args=(protocol, stopped, busy), daemon=True)
+    pulse.start()
 
-    set_progress_sink(lambda pct, msg: _send(wfile, {"type": "progress", "pct": int(pct), "msg": str(msg)}))
+    set_progress_sink(lambda pct, msg: protocol.send({"type": "progress", "pct": int(pct), "msg": str(msg)[:4096]}))
 
     try:
-        for line in rfile:
+        for line in read_commands(rfile):
             line = line.strip()
             if not line:
                 continue
             try:
                 cmd = json.loads(line)
             except json.JSONDecodeError as e:
-                _send(wfile, {"type": "error", "kind": "generic", "msg": f"Invalid JSON: {e}"})
+                protocol.send({"type": "error", "kind": "generic", "msg": f"Invalid JSON: {e}"})
                 continue
 
+            if not isinstance(cmd, dict):
+                protocol.send({"type": "error", "kind": "generic", "msg": "Expected a command object"})
+                continue
             ctype = cmd.get("type")
             if ctype == "quit":
                 break
             if ctype == "analyze":
+                busy.set()
                 try:
                     process_song(cmd, device)
-                    _send(wfile, {"type": "done", "hash": cmd.get("hash", "")})
+                    protocol.send({"type": "done", "hash": cmd.get("hash", "")})
                 except Exception as e:
                     import traceback
                     traceback.print_exc(file=sys.stderr)
@@ -157,12 +197,20 @@ def main():
                                 file=sys.stderr, flush=True,
                             )
                         end_of_song_cleanup()
-                        _send(wfile, {"type": "error", "kind": "oom", "msg": err_str})
+                        protocol.send({"type": "error", "kind": "oom", "msg": err_str[:4096]})
                     else:
-                        _send(wfile, {"type": "error", "kind": "generic", "msg": err_str})
+                        protocol.send({"type": "error", "kind": "generic", "msg": err_str[:4096]})
+                finally:
+                    busy.clear()
             else:
-                _send(wfile, {"type": "error", "kind": "generic", "msg": f"Unknown command: {ctype!r}"})
+                protocol.send({"type": "error", "kind": "generic", "msg": "Unknown command"})
     finally:
+        stopped.set()
+        try:
+            conn.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        pulse.join(timeout=1)
         try:
             wfile.close()
         except Exception:

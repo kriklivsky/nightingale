@@ -375,7 +375,11 @@ pub(crate) fn clearable_video_bytes() -> u64 {
     for entry in std::fs::read_dir(&base).into_iter().flatten().flatten() {
         let flavor_dir = entry.path();
 
-        if !flavor_dir.is_dir() {
+        if flavor_dir.is_symlink() || !flavor_dir.is_dir() {
+            continue;
+        }
+        if flavor_dir == base.join("youtube") {
+            total += dir_size(&flavor_dir);
             continue;
         }
 
@@ -404,7 +408,13 @@ pub fn clear_videos() {
 
     for entry in std::fs::read_dir(&base).into_iter().flatten().flatten() {
         let flavor_dir = entry.path();
-        if !flavor_dir.is_dir() {
+        if flavor_dir.is_symlink() || !flavor_dir.is_dir() {
+            continue;
+        }
+        if flavor_dir == base.join("youtube") {
+            if let Err(_error) = std::fs::remove_dir_all(&flavor_dir) {
+                tracing::warn!("Cannot clear downloaded song video cache");
+            }
             continue;
         }
         let mut mp4s: Vec<_> = std::fs::read_dir(&flavor_dir)

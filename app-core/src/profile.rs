@@ -77,10 +77,12 @@ impl ProfileStore {
         self.save();
     }
 
-    pub fn add_score(&mut self, song_hash: &str, score: u32) {
-        let profile = match &self.active {
-            Some(p) => p.clone(),
-            None => return,
+    pub fn add_score(&mut self, song_hash: &str, score: u32, profile: Option<&str>) {
+        let profile = match profile.or(self.active.as_deref()) {
+            Some(profile) if self.profiles.iter().any(|candidate| candidate == profile) => {
+                profile.to_string()
+            }
+            _ => return,
         };
         let played_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -93,6 +95,42 @@ impl ProfileStore {
             played_at,
         });
         self.save();
+    }
+
+    pub fn add_scores(&mut self, song_hash: &str, scores: &[(String, u32)]) -> Result<(), String> {
+        if scores.is_empty() {
+            return Ok(());
+        }
+        let mut profiles = std::collections::HashSet::new();
+        if scores.len() > 4
+            || scores.iter().any(|(profile, score)| {
+                *score > 1000 || !self.profiles.contains(profile) || !profiles.insert(profile)
+            })
+        {
+            return Err(
+                "Scores require up to four distinct existing profiles and values from 0 to 1000"
+                    .into(),
+            );
+        }
+        let played_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "System clock is before the Unix epoch")?
+            .as_secs();
+        self.scores
+            .extend(scores.iter().map(|(profile, score)| ScoreRecord {
+                profile: profile.clone(),
+                song_hash: song_hash.to_string(),
+                score: *score,
+                played_at,
+            }));
+        let json = serde_json::to_vec_pretty(self)
+            .map_err(|error| format!("Cannot serialize scores: {error}"))?;
+        let path = profiles_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("Cannot create profiles directory: {error}"))?;
+        }
+        std::fs::write(path, json).map_err(|error| format!("Cannot save scores: {error}"))
     }
 
     pub fn best_score(&self, song_hash: &str, profile: &str) -> Option<u32> {

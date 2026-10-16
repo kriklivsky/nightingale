@@ -1,0 +1,88 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+if (( EUID != 0 )); then
+    echo 'Run with sudo or as root.' >&2
+    exit 1
+fi
+
+if [[ "$(cat /run/tvbox-active.kind)" != nightingale ]]; then
+    echo 'Open Nightingale from the TV launcher first.' >&2
+    exit 1
+fi
+
+counts="$(runuser -u tvbox -- python3 - <<'PY'
+import sqlite3
+
+with sqlite3.connect('file:/var/lib/tvbox/.nightingale/songs.db?mode=ro', uri=True) as db:
+    rows = dict(db.execute('SELECT status, COUNT(*) FROM analysis_queue GROUP BY status'))
+    print(rows.get('failed', 0), rows.get('queued', 0) + rows.get('analyzing', 0))
+PY
+)"
+read -r failed busy <<<"${counts}"
+
+if (( busy > 0 )); then
+    echo 'Analysis is still active or queued; wait for it to finish before retrying.' >&2
+    exit 1
+fi
+if (( failed == 0 )); then
+    echo 'No failed songs to retry.'
+    exit 0
+fi
+
+/usr/local/bin/tvbox-return
+for _attempt in $(seq 1 80); do
+    if ! pgrep -x Nightingale >/dev/null; then
+        break
+    fi
+    sleep 0.25
+done
+if pgrep -x Nightingale >/dev/null; then
+    echo 'Nightingale did not stop; the queue was left unchanged.' >&2
+    exit 1
+fi
+
+runuser -u tvbox -- python3 - <<'PY'
+import sqlite3
+import time
+
+path = '/var/lib/tvbox/.nightingale/songs.db'
+with sqlite3.connect(f'file:{path}?mode=rw', uri=True, timeout=10) as db:
+    backup_path = f'{path}.pre-failed-retry-{time.time_ns()}'
+    with sqlite3.connect(backup_path) as backup:
+        db.backup(backup)
+    db.execute('BEGIN IMMEDIATE')
+    busy = db.execute("SELECT COUNT(*) FROM analysis_queue WHERE status IN ('queued', 'analyzing')").fetchone()[0]
+    if busy:
+        raise RuntimeError('Queue changed; refusing to overwrite pending analysis')
+    count = db.execute("UPDATE analysis_queue SET status='queued', analyzing_pct=NULL, failed_message=NULL WHERE status='failed'").rowcount
+    db.commit()
+    print(f'Queued {count} failed songs. Database backup: {backup_path}')
+PY
+
+for _attempt in $(seq 1 80); do
+    if [[ "$(cat /run/tvbox-active.kind 2>/dev/null || true)" == launcher ]]; then
+        break
+    fi
+    sleep 0.25
+done
+if [[ "$(cat /run/tvbox-active.kind)" != launcher ]]; then
+    echo 'Queue saved. Open Nightingale from the TV launcher to start analysis.' >&2
+    exit 1
+fi
+
+export DISPLAY=:0 XAUTHORITY=/run/tvbox.Xauthority
+window_id="$(xdotool search --onlyvisible --name '^Orange Pi TV$')"
+xdotool windowfocus --sync "${window_id}"
+xdotool key --clearmodifiers Return
+
+for _attempt in $(seq 1 80); do
+    if [[ "$(cat /run/tvbox-active.kind 2>/dev/null || true)" == nightingale ]] && pgrep -x Nightingale >/dev/null; then
+        echo 'Nightingale restarted; saved analysis queue will resume automatically.'
+        exit 0
+    fi
+    sleep 0.25
+done
+
+echo 'Queue saved. Open Nightingale from the TV launcher to start analysis.' >&2
+exit 1
