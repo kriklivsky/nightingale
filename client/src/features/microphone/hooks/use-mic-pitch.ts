@@ -15,14 +15,19 @@ import {
 
 /** ~30 Hz pitch updates: more than enough for vocal pitch tracking. */
 const PITCH_TICK_MS = 33;
+const MAX_SAMPLE_AGE_MS = 150;
 const RING_CAPACITY = PITCH_WINDOW_SAMPLES * 2;
 
 const defaultAdapter = microphoneAdapter;
 
 export function useMicPitch(captureId: string, enabled: boolean) {
-  const [latestPitch, setLatestPitch] = useState<number | null>(null);
+  const [pitch, setPitch] = useState<{ captureId: string; hz: number | null }>({
+    captureId,
+    hz: null,
+  });
   const ringRef = useRef<SampleRing | null>(null);
   const sampleRateRef = useRef(0);
+  const lastFrameAtRef = useRef<number | null>(null);
 
   if (ringRef.current === null) {
     ringRef.current = new SampleRing(RING_CAPACITY);
@@ -33,40 +38,58 @@ export function useMicPitch(captureId: string, enabled: boolean) {
     (frame) => {
       sampleRateRef.current = frame.sample_rate;
       ringRef.current?.push(frame.samples);
+      lastFrameAtRef.current = performance.now();
     },
     enabled,
   );
 
   useEffect(() => {
+    ringRef.current?.reset();
+    sampleRateRef.current = 0;
+    lastFrameAtRef.current = null;
     if (!enabled) {
-      ringRef.current?.reset();
-      sampleRateRef.current = 0;
       return undefined;
     }
 
     const detector = createMicPitchDetector();
     const window = new Float32Array(PITCH_WINDOW_SAMPLES);
+    const updatePitch = (hz: number | null) => {
+      setPitch((previous) =>
+        previous.captureId === captureId && previous.hz === hz ? previous : { captureId, hz },
+      );
+    };
 
     const tick = () => {
       const ring = ringRef.current;
       const sr = sampleRateRef.current;
-      if (!ring || sr === 0) {
+      const lastFrameAt = lastFrameAtRef.current;
+      if (
+        !ring ||
+        sr === 0 ||
+        lastFrameAt === null ||
+        performance.now() - lastFrameAt > MAX_SAMPLE_AGE_MS
+      ) {
+        updatePitch(null);
         return;
       }
       if (!ring.readMostRecent(window)) {
         return;
       }
       const hz = detectPitchFromSamplesMic(detector, window, sr);
-      setLatestPitch(hz);
+      updatePitch(hz);
     };
 
     const id = setInterval(tick, PITCH_TICK_MS);
 
     return () => clearInterval(id);
-  }, [enabled]);
+  }, [captureId, enabled]);
 
   const error: string | null = null;
-  return { latestPitch: enabled ? latestPitch : null, active: enabled, error };
+  return {
+    latestPitch: enabled && pitch.captureId === captureId ? pitch.hz : null,
+    active: enabled,
+    error,
+  };
 }
 
 type MicCaptureInput = {

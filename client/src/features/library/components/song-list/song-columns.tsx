@@ -42,10 +42,15 @@ export const SONG_COLUMNS: SongColumn[] = [
     tdClassName: 'song-table-song px-2 py-2 align-middle font-medium',
     cell: (song, _queueStatus, bestScore) => (
       <div className="min-w-0">
-        <div className="flex h-5 min-w-0 items-center gap-2">
-          <span className="min-w-0 truncate leading-5">{song.title}</span>
+        <div className="flex min-w-0 items-start gap-2">
+          <span className="min-w-0 flex-1 line-clamp-2 break-words leading-5" title={song.title}>
+            {song.title}
+          </span>
           <LanguageBadge language={song.language} />
         </div>
+        <span className="song-table-inline-artist truncate text-xs font-normal text-muted-foreground">
+          {song.artist}
+        </span>
         {bestScore === undefined ? null : <Stars score={bestScore} size="sm" className="mt-0.5" />}
       </div>
     ),

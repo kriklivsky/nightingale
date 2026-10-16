@@ -98,8 +98,8 @@ export const Sidebar = ({ children }: PropsWithChildren<{}>) => {
   }, [actionsRef, clampSidebarFocus, confirmSidebarSlot, mainNavigation.ready, sidebarCount]);
 
   return (
-    <SidebarProvider>
-      <ShadCnSidebar>
+    <SidebarProvider className="h-full min-w-0 flex-1">
+      <ShadCnSidebar className="top-[calc(var(--titlebar-offset)+var(--tv-safe-area))] bottom-(--tv-safe-area) data-[side=left]:left-(--tv-safe-area) data-[side=right]:right-(--tv-safe-area)">
         <Header focusedSidebarIndex={THEME_SLOT_INDEX} registerCallback={registerThemeCallback} />
 
         <MainNavigation

@@ -102,14 +102,7 @@ export const SongTable = ({
         </tr>
       </thead>
       <tbody>
-        <tr aria-hidden="true">
-          <td
-            aria-hidden="true"
-            colSpan={SONG_COLUMNS.length + 1}
-            className="p-0"
-            style={{ height: window.before }}
-          />
-        </tr>
+        <tr aria-hidden="true" style={{ height: window.before }} />
         {window.rows.map((row) => (
           <SongTableRow
             key={row.key}
@@ -118,14 +111,7 @@ export const SongTable = ({
             measure={window.measure}
           />
         ))}
-        <tr aria-hidden="true">
-          <td
-            aria-hidden="true"
-            colSpan={SONG_COLUMNS.length + 1}
-            className="p-0"
-            style={{ height: window.after }}
-          />
-        </tr>
+        <tr aria-hidden="true" style={{ height: window.after }} />
       </tbody>
     </table>
   );

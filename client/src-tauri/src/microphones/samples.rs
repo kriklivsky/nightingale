@@ -4,7 +4,9 @@ use std::sync::Arc;
 use rtrb::{Consumer, Producer};
 
 use super::capture::AudioState;
-use super::{monitor_gain, MONITOR_START_BUFFER};
+use super::monitor_gain;
+
+const MONITOR_PREFILL_FRAMES: usize = 256;
 
 pub(super) struct InputSamples {
     pcm: Producer<f32>,
@@ -85,7 +87,7 @@ impl OutputSamples {
 
     fn next_sample(&mut self) -> f32 {
         if !self.initialized {
-            if self.samples.slots() < MONITOR_START_BUFFER {
+            if self.samples.slots() < MONITOR_PREFILL_FRAMES {
                 return 0.0;
             }
             self.current = self.samples.pop().unwrap_or(0.0);

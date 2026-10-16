@@ -53,6 +53,10 @@ below.
 
 ### Fixes
 
+- Keep TV controls inside a small safe area without changing native 4K output, and give song titles flexible width and two lines before secondary table columns when a side panel is open.
+- Reject low-confidence microphone noise and expire stale pitch readings so a silent or disconnected multiplayer input cannot keep earning points from its last note. Channel capture and speaker monitoring stay independent of scoring gates.
+- Reduce native monitor startup prefill to 256 frames without shrinking the proven 512-frame input/output periods or disabling independent adaptive recovery.
+
 - Reuse active native capture capabilities when listing channels or adding another singer, so an exclusively opened USB microphone remains selectable without reopening it.
 - Initialize multiplayer channel assignments from the preferred interface instead of unrelated onboard or virtual inputs.
 - Keep the proven CPAL 0.17.3 native audio backend while adding shared multichannel capture; avoid CPAL 0.18 ALSA regressions in saved device IDs, fixed HDMI periods and repeated monitor underruns.

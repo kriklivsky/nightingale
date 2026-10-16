@@ -193,7 +193,7 @@ function usePlayerMic({
     latestPitch,
     active: micPitchActive,
     error: micPitchError,
-  } = useMicPitch(player.id, shouldTrackPitch);
+  } = useMicPitch(player.id, shouldTrackPitch && micCaptureActive);
   const { series, score, getPitchReport } = usePitchScoring(
     { ...source, isReady: source.isReady && player.present },
     latestPitch,

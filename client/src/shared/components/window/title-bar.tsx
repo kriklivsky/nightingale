@@ -56,13 +56,9 @@ export function TauriAppShell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  if (!isTauri) {
-    return children;
-  }
-
   return (
-    <div className="flex h-svh min-h-0 flex-col">
-      <TitleBar fullscreen={fullscreen} />
+    <div className="flex h-svh min-h-0 min-w-0 flex-col p-(--tv-safe-area)">
+      {isTauri && <TitleBar fullscreen={fullscreen} />}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
     </div>
   );

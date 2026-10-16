@@ -5,7 +5,7 @@ export const MAX_PITCH_HZ = 1000;
 
 export const PITCH_CLARITY_THRESHOLD = 0.4;
 
-export const MIC_PITCH_CLARITY_THRESHOLD = 0.05;
+export const MIC_PITCH_CLARITY_THRESHOLD = 0.65;
 
 export const REF_RMS_GATE = 0.005;
 export const MIC_RMS_GATE = 0.003;

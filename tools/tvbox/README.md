@@ -196,7 +196,9 @@ outside its service's cgroup just to hide the failed promotion. See the
 [kernel cgroup documentation](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html#cpu).
 
 Both streams initially request a 512-frame period (10.7 ms at 48 kHz), subject to
-the selected device's supported limits. Input and output adapt independently
+the selected device's supported limits. Monitor startup prefill is 256 frames
+(5.3 ms); this does not change the hardware period or measured end-to-end delay.
+Input and output adapt independently
 after stream errors. After a stable run they retry a smaller period; an unstable
 recovery delays another attempt by 5–15 minutes instead of blocking recovery
 until the app restarts. Logs distinguish input/output failures and show requested

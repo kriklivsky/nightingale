@@ -16,6 +16,7 @@
   color-scheme: light;
 
   --titlebar-offset: 0px;
+  --tv-safe-area: 0px;
 
   /* Theme::light() — sRGB matches Rust Color::srgb */
   --background: color(srgb 0.955 0.955 0.97);
@@ -50,6 +51,10 @@
   --sidebar-accent-foreground: color(srgb 0.12 0.12 0.15);
   --sidebar-border: color(srgb 0.85 0.85 0.88);
   --sidebar-ring: color(srgb 0.29 0.42 0.97);
+}
+
+.tvbox-session {
+  --tv-safe-area: 2vmin;
 }
 
 .dark {
@@ -189,16 +194,15 @@
   }
 
   .song-table-song {
-    width: 16rem;
+    width: auto;
   }
 
   .song-table-band {
-    width: 12rem;
+    width: 10rem;
   }
 
-  /* Flexible column: absorbs all leftover width so fixed columns never grow. */
   .song-table-album {
-    width: auto;
+    width: 10rem;
   }
 
   .song-table-duration {
@@ -206,7 +210,7 @@
   }
 
   .song-table-status {
-    width: 9rem;
+    width: 8rem;
   }
 
   .song-table-actions {
@@ -225,36 +229,36 @@
     box-shadow: 0 1px 0 var(--border);
   }
 
-  @container (max-width: 1100px) {
+  .song-table-inline-artist {
+    display: none;
+  }
+
+  @container (max-width: 64rem) {
     .song-table-album {
       display: none;
     }
-
-    /* Hand the absorber role to Song so the thumbnail stays fixed. */
-    .song-table-song {
-      width: auto;
-    }
   }
 
-  @container (max-width: 920px) {
+  @container (max-width: 52rem) {
     .song-table-band {
       display: none;
     }
+
+    .song-table-inline-artist {
+      display: block;
+    }
   }
 
-  @container (max-width: 700px) {
-    .song-table-duration {
+  @container (max-width: 40rem) {
+    .song-table-duration,
+    .song-table-status {
       display: none;
     }
   }
 
-  @container (max-width: 520px) {
+  @container (max-width: 28rem) {
     .song-table-thumbnail {
       display: none;
-    }
-
-    .song-table-status {
-      width: 7.5rem;
     }
   }
 }

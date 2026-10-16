@@ -22,7 +22,7 @@ use samples::{InputSamples, OutputSamples};
 /// JS side; smaller chunks lower IPC latency at the cost of more sends/sec.
 const SAMPLE_CHUNK: usize = 512;
 const PCM_QUEUE_CAP: usize = 24_000;
-const MONITOR_START_BUFFER: usize = 512;
+const DEFAULT_PERIOD_FRAMES: usize = 512;
 const DEFAULT_MONITOR_GAIN: f32 = 0.65;
 const MAX_MONITOR_GAIN: f32 = 2.0;
 
@@ -384,9 +384,9 @@ fn try_build_output_stream(
     let sample_rate_ratio = f64::from(input_sample_rate) / f64::from(config.sample_rate);
     let output_period = match config.buffer_size {
         cpal::BufferSize::Fixed(period) => (f64::from(period) * sample_rate_ratio).ceil() as usize,
-        cpal::BufferSize::Default => MONITOR_START_BUFFER,
+        cpal::BufferSize::Default => DEFAULT_PERIOD_FRAMES,
     };
-    let capacity = input_period.max(output_period).max(MONITOR_START_BUFFER) * 2;
+    let capacity = input_period.max(output_period).max(DEFAULT_PERIOD_FRAMES) * 2;
     let (monitor_input, audio) = RingBuffer::new(capacity);
 
     info!(
@@ -507,7 +507,7 @@ fn run_mic_loop(
     );
     let input_period = match config.buffer_size {
         cpal::BufferSize::Fixed(period) => period as usize,
-        cpal::BufferSize::Default => MONITOR_START_BUFFER,
+        cpal::BufferSize::Default => DEFAULT_PERIOD_FRAMES,
     };
     let (pcm_input, mut pcm_output) = RingBuffer::new(PCM_QUEUE_CAP * channels);
     let monitoring = state.monitor_channels.load(Ordering::Relaxed) != 0;

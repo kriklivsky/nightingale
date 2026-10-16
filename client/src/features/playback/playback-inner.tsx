@@ -76,7 +76,7 @@ function PlaybackLayout({
       {!isReady && <LoadingScreen song={song} />}
 
       {isReady && (
-        <>
+        <div className="absolute inset-(--tv-safe-area)">
           <PlaybackHud
             title={song.title}
             artist={song.artist}
@@ -101,7 +101,7 @@ function PlaybackLayout({
             scale={lyricsScale}
             romanizationMode={romanizationMode}
           />
-        </>
+        </div>
       )}
 
       <PauseOverlay
