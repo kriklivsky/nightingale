@@ -53,5 +53,9 @@ export const tauriMicrophoneAdapter: MicrophoneAdapter = {
   listDevices,
   startCapture,
   stopCapture,
+  updateCaptureOptions: (captureId, options) =>
+    enqueue(async () => {
+      await invoke('update_mic_capture_options', { captureId, options });
+    }),
   subscribe: async (captureId, callback) => subscribeMicSamples(captureId, callback),
 };

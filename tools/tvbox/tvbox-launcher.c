@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { LAUNCH_COUNT = 3, HDMI_ITEM = 3, UMC_ITEM = 4, ITEM_COUNT = 5 };
+enum { LAUNCH_COUNT = 3, HDMI_ITEM = 3, UMC_ITEM = 4, NETWORK_ITEM = 5, ITEM_COUNT = 6 };
 
 static GtkWidget *buttons[ITEM_COUNT];
 static GtkWidget *audio_labels[2];
@@ -21,16 +21,16 @@ static void screen_finished(GObject *source, GAsyncResult *response, gpointer da
     gtk_widget_show_all(window);
     gtk_window_present(GTK_WINDOW(window));
     gdk_window_focus(gtk_widget_get_window(window), GDK_CURRENT_TIME);
-    gtk_widget_grab_focus(buttons[1]);
+    gtk_widget_grab_focus(buttons[selected]);
     if (!success) {
         gtk_label_set_text(GTK_LABEL(status_label), error != NULL ? error->message : "Приёмник экрана завершился с ошибкой");
     }
     g_clear_error(&error);
 }
 
-static void start_screen(void) {
+static void start_tool(const char *program) {
     GError *error = NULL;
-    GSubprocess *process = g_subprocess_new(G_SUBPROCESS_FLAGS_NONE, &error, "/usr/local/bin/tvbox-screen", NULL);
+    GSubprocess *process = g_subprocess_new(G_SUBPROCESS_FLAGS_NONE, &error, program, NULL);
     if (process == NULL) {
         gtk_label_set_text(GTK_LABEL(status_label), error->message);
         g_clear_error(&error);
@@ -114,12 +114,16 @@ static void activate_item(int item) {
     if (changing_audio || screen_running) {
         return;
     }
+    if (item == NETWORK_ITEM) {
+        start_tool("/usr/local/bin/tvbox-network");
+        return;
+    }
     if (item >= LAUNCH_COUNT) {
         request_audio(item == HDMI_ITEM ? "hdmi" : "umc");
         return;
     }
     if (item == 1) {
-        start_screen();
+        start_tool("/usr/local/bin/tvbox-screen");
         return;
     }
     static const int results[LAUNCH_COUNT] = {10, 20, 30};
@@ -140,7 +144,7 @@ static gboolean key_pressed(GtkWidget *widget, GdkEventKey *event, gpointer data
         return TRUE;
     }
     int first = selected < LAUNCH_COUNT ? 0 : HDMI_ITEM;
-    int last = selected < LAUNCH_COUNT ? LAUNCH_COUNT - 1 : UMC_ITEM;
+    int last = selected < LAUNCH_COUNT ? LAUNCH_COUNT - 1 : NETWORK_ITEM;
     switch (event->keyval) {
     case GDK_KEY_Left:
         select_item(MAX(first, selected - 1));
@@ -155,7 +159,7 @@ static gboolean key_pressed(GtkWidget *widget, GdkEventKey *event, gpointer data
         return TRUE;
     case GDK_KEY_Down:
         if (selected < LAUNCH_COUNT) {
-            select_item(HDMI_ITEM + MIN(selected, 1));
+            select_item(HDMI_ITEM + selected);
         }
         return TRUE;
     case GDK_KEY_Tab:
@@ -229,7 +233,7 @@ int main(int argc, char **argv) {
     GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     GtkWidget *outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 24);
     GtkWidget *title = gtk_label_new(NULL);
-    GtkWidget *subtitle = gtk_label_new("← → Выбор · ↓ Вывод звука · OK Подтвердить");
+    GtkWidget *subtitle = gtk_label_new("← → Выбор · ↓ Звук и сеть · OK Подтвердить");
     GtkWidget *choices = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 28);
     GtkWidget *audio_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
     GtkWidget *audio_title = gtk_label_new("Вывод звука");
@@ -258,8 +262,12 @@ int main(int argc, char **argv) {
 
     buttons[HDMI_ITEM] = make_audio_button("HDMI / саундбар", HDMI_ITEM);
     buttons[UMC_ITEM] = make_audio_button("UMC202HD / колонки", UMC_ITEM);
+    buttons[NETWORK_ITEM] = gtk_button_new_with_label("Wi-Fi / точка доступа");
+    gtk_style_context_add_class(gtk_widget_get_style_context(buttons[NETWORK_ITEM]), "audio-button");
+    g_signal_connect(buttons[NETWORK_ITEM], "clicked", G_CALLBACK(button_clicked), GINT_TO_POINTER(NETWORK_ITEM));
     gtk_box_pack_start(GTK_BOX(audio_choices), buttons[HDMI_ITEM], TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(audio_choices), buttons[UMC_ITEM], TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(audio_choices), buttons[NETWORK_ITEM], TRUE, TRUE, 0);
     gtk_widget_set_halign(audio_choices, GTK_ALIGN_CENTER);
     gtk_box_pack_start(GTK_BOX(audio_box), audio_title, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(audio_box), audio_choices, FALSE, FALSE, 0);

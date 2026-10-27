@@ -2,10 +2,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
 import { clearAll, clearModels, clearVideos } from '@/bridge/cache';
-import { CACHE_STATS } from '@/shared/query-keys';
+import { useI18n } from '@/shared/i18n/use-i18n';
+import { CACHE_STATS, SONG_VIDEOS } from '@/shared/query-keys';
 
 export const useClearCache = () => {
   const queryClient = useQueryClient();
+  const { t } = useI18n();
 
   const clearCacheFactory = (handler: () => Promise<void>) => {
     return async () => {
@@ -13,11 +15,14 @@ export const useClearCache = () => {
         await handler();
 
         void queryClient.invalidateQueries({ queryKey: CACHE_STATS });
+        void queryClient.invalidateQueries({ queryKey: SONG_VIDEOS });
 
-        toast.info(`Cache was successfully cleared`);
+        toast.info(t('cache.cleared'));
       } catch (error: unknown) {
         toast.error(
-          `Error while deleting cache: ${error instanceof Error ? error.message : 'unknown error'}`,
+          t('cache.clearFailed', {
+            detail: error instanceof Error ? error.message : t('common.unknownError'),
+          }),
         );
       }
     };

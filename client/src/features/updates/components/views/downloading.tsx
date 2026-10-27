@@ -2,15 +2,17 @@ import prettyBytes from 'pretty-bytes';
 
 import { Progress } from '@/shared/components/ui/progress';
 
-import { GENERIC_DESCRIPTION, type ViewParts } from '../parts';
+import type { ViewCtx, ViewParts } from '../parts';
 
 type Args = {
+  ctx: ViewCtx;
   downloaded: number;
   contentLength: number | null;
   version: string;
 };
 
-export const downloadingView = ({ downloaded, contentLength, version }: Args): ViewParts => {
+export const downloadingView = ({ ctx, downloaded, contentLength, version }: Args): ViewParts => {
+  const { t } = ctx;
   const percent =
     typeof contentLength === 'number' && contentLength !== 0 && contentLength > 0
       ? Math.min(100, Math.floor((downloaded / contentLength) * 100))
@@ -18,16 +20,17 @@ export const downloadingView = ({ downloaded, contentLength, version }: Args): V
 
   const sizeLabel =
     typeof contentLength === 'number' && contentLength !== 0
-      ? `${prettyBytes(downloaded)} of ${prettyBytes(contentLength)}${
-          percent !== null ? ` (${percent}%)` : ''
-        }`
-      : prettyBytes(downloaded);
+      ? `${t('update.sizeOf', {
+          downloaded: prettyBytes(downloaded, { locale: ctx.locale }),
+          total: prettyBytes(contentLength, { locale: ctx.locale }),
+        })}${percent !== null ? ` (${percent}%)` : ''}`
+      : prettyBytes(downloaded, { locale: ctx.locale });
 
   return {
-    description: GENERIC_DESCRIPTION,
+    description: t('update.description'),
     body: (
       <div className="flex flex-col gap-3">
-        <p className="text-xs text-muted-foreground">Downloading {version}…</p>
+        <p className="text-xs text-muted-foreground">{t('update.downloading', { version })}</p>
         <Progress value={percent ?? 0} max={100} />
         <p className="text-xs text-muted-foreground">{sizeLabel}</p>
       </div>

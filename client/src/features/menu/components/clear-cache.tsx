@@ -17,6 +17,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/shared/components/ui/alert-dialog';
+import type { MessageKey } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 const RING = 'ring-2 ring-primary';
@@ -33,25 +35,14 @@ const clearCacheTarget = (mode: DialogMode): ClearCacheTarget | null => {
 const focusClass = (open: boolean, focusedIndex: number, index: number): string =>
   cn(NO_FOCUS_RING, open && focusedIndex === index && RING);
 
-const COPY: Record<ClearCacheTarget, { title: string; description: string }> = {
-  all: {
-    title: 'Clear all cache?',
-    description:
-      'This will permanently delete every cached file (songs, videos, models, and anything else). This action cannot be undone.',
-  },
-  videos: {
-    title: 'Clear videos cache?',
-    description:
-      "This will permanently delete all cached background videos. They will be re-downloaded the next time they're needed.",
-  },
-  models: {
-    title: 'Clear models cache?',
-    description:
-      'This will permanently delete the cached analysis models. They will be re-downloaded the next time analysis runs.',
-  },
+const COPY: Record<ClearCacheTarget, { title: MessageKey; description: MessageKey }> = {
+  all: { title: 'cache.allTitle', description: 'cache.allDescription' },
+  videos: { title: 'cache.videosTitle', description: 'cache.videosDescription' },
+  models: { title: 'cache.modelsTitle', description: 'cache.modelsDescription' },
 };
 
 export const ClearCacheDialog = () => {
+  const { t } = useI18n();
   const { close, mode } = useDialog();
   const clearCache = useClearCache();
 
@@ -90,19 +81,19 @@ export const ClearCacheDialog = () => {
     <AlertDialog open={open} onOpenChange={close}>
       <AlertDialogContent onEscapeKeyDown={(e) => e.preventDefault()}>
         <AlertDialogHeader>
-          <AlertDialogTitle>{copy?.title ?? 'Clear cache?'}</AlertDialogTitle>
-          <AlertDialogDescription>{copy?.description ?? ''}</AlertDialogDescription>
+          <AlertDialogTitle>{t(copy?.title ?? 'cache.title')}</AlertDialogTitle>
+          <AlertDialogDescription>{copy ? t(copy.description) : ''}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel onClick={close} className={focusClass(open, focusedIndex, 0)}>
-            Cancel
+            {t('common.cancel')}
           </AlertDialogCancel>
           <AlertDialogAction
             variant="destructive"
             onClick={runClear}
             className={focusClass(open, focusedIndex, 1)}
           >
-            Clear cache
+            {t('cache.clear')}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

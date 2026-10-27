@@ -3,7 +3,10 @@
 import itertools
 import json
 import math
+import os
 import re
+
+import numpy as np
 
 import cjk
 from audio import detect_vocal_region, silent_gaps
@@ -22,6 +25,7 @@ def align_lyrics(
     pre_align_cleanup=None,
     lyrics_lines: list[str] | None = None,
     timed_lines: list[dict] | None = None,
+    mix_path: str | None = None,
 ) -> dict:
     """Align pre-existing lyrics to vocals audio using WhisperX.
 
@@ -108,10 +112,12 @@ def align_lyrics(
     if get_align_backend() == "qwen" and qwen_align.is_supported(language):
         qwen_segments = _align_lyrics_qwen(
             clean_lines, line_spans, audio, language, vocal_start, vocal_end, pre_align_cleanup,
-            line_windows,
+            line_windows, mix_path,
         )
         if qwen_segments is not None:
-            _trim_words_to_vocals(qwen_segments, audio)
+            if line_windows is None:
+                _trim_words_to_vocals(qwen_segments, audio)
+            _separate_lines(qwen_segments)
             progress(90, f"Alignment complete: {len(qwen_segments)} segments, lang={language}")
             if qwen_segments:
                 print(f"[nightingale:LOG] First segment: '{qwen_segments[0]['text'][:100]}'", flush=True)
@@ -154,6 +160,14 @@ def align_lyrics(
         raw_segments, audio, cjk.align_lang_code(language), a_device, pre_align_cleanup,
         model_name=cjk.align_model_for(language),
     )
+    if line_windows is not None:
+        line_segments = _segments_per_line(align_result, segment_texts)
+        if not cjk.is_cjk(language):
+            _realign_contested_lines(
+                line_segments, segment_texts, line_windows, audio, language, a_device,
+                pre_align_cleanup,
+            )
+        align_result = {"segments": line_segments}
 
     if cjk.is_cjk(language):
         segments = _map_chars_to_lines_cjk(
@@ -165,6 +179,7 @@ def align_lyrics(
         )
 
     _trim_words_to_vocals(segments, audio)
+    _separate_lines(segments)
 
     progress(90, f"Alignment complete: {len(segments)} segments, lang={language}")
     if segments:
@@ -176,6 +191,42 @@ def align_lyrics(
 # LRC line timestamps are often a little early or late, so each line is aligned
 # against its window widened by this much on both sides.
 WINDOW_PAD_SECONDS = 0.5
+# Longest stretch of contested lines re-aligned as one passage.
+MAX_JOINT_ALIGN_SECONDS = 30.0
+
+# Qwen chunking: chunk length cap, how far from a (shifted) LRC line boundary
+# a cut may move to reach a vocal pause, and audio kept before the first and
+# after the last line.
+MAX_CHUNK_SECONDS = 40.0
+CUT_SEARCH_SECONDS = 2.0
+EDGE_SECONDS = 2.0
+MAX_OFFSET_SECONDS = 8.0
+ENERGY_FRAME_SECONDS = 0.02
+# Aligner prompt size: audio tokens per second, tokens per word (text plus two
+# timestamp markers, with margin) and fixed template tokens.
+TOKENS_PER_SECOND = 13
+TOKENS_PER_WORD = 5
+PROMPT_TOKENS = 48
+# A chunk is re-cut later when its last SQUASH_WORDS words run into the cut,
+# all start within SQUASH_SECONDS of it and one lasts at most one 80 ms
+# timestamp step: the line did not fit and was pressed into the chunk end.
+CHUNK_RETRIES = 2
+# Vocal-stem frames below this fraction of the song's 95th-percentile level
+# count as silent; lines whose window is mostly silent are aligned on the mix.
+SILENT_VOCAL_RATIO = 0.08
+MIX_FALLBACK_SILENT_FRACTION = 0.6
+# A line starting further than this from its LRC time plus the song's offset is
+# treated as misplaced and re-aligned within its own window, padded by
+# REPAIR_PAD_SECONDS.
+LINE_DRIFT_SECONDS = 3.0
+# A line starting this much before the previous line's last word overlaps it;
+# smaller overlaps are trimmed by _separate_lines.
+OVERLAP_TOLERANCE_SECONDS = 0.2
+REPAIR_PAD_SECONDS = 1.0
+SQUASH_WORDS = 3
+SQUASH_SECONDS = 0.8
+CUT_MARGIN_SECONDS = 0.1
+MIN_WORD_SECONDS = 0.081
 
 
 def _line_windows(raw, line_count: int) -> list[tuple[float, float]] | None:
@@ -249,6 +300,128 @@ def _chars_per_window_line(align_result: dict, counts: list[int]) -> list[list[d
         )
         lines.append(chars)
     return lines
+
+
+def _segments_per_line(align_result: dict, texts: list[str]) -> list[dict]:
+    """Regroup aligner output into exactly one segment per input line.
+
+    WhisperX splits every input segment into sentences ("ке паса? Не вздумай")
+    and may merge or drop some of them, so output segment ``i`` is not line
+    ``i``. Output segments are consumed in order; each one joins the line whose
+    whitespace-free text it continues.
+    """
+    outputs = align_result.get("segments", [])
+    grouped: list[dict] = []
+    cursor = 0
+    for text in texts:
+        line = "".join(text.split())
+        words: list[dict] = []
+        offset = 0
+        while line and cursor < len(outputs):
+            piece = "".join(str(outputs[cursor].get("text", "")).split())
+            found = line.find(piece, offset)
+            if found < 0:
+                break
+            words.extend(outputs[cursor].get("words") or [])
+            offset = found + len(piece)
+            cursor += 1
+        grouped.append({"text": text, "words": words})
+    return grouped
+
+
+def _timed_span(words: list[dict]) -> tuple[float, float] | None:
+    starts = [w["start"] for w in words if w.get("start") is not None]
+    ends = [w["end"] for w in words if w.get("end") is not None]
+    return (min(starts), max(ends)) if starts and ends else None
+
+
+def _contested_runs(
+    line_segments: list[dict], windows: list[tuple[float, float]],
+) -> list[list[int]]:
+    """Runs of adjacent lines whose separately aligned words overlap in time.
+
+    Padded windows overlap, and CTC stretches a line's first word back into the
+    previous line's singing, so both lines claim the same audio.
+    """
+    runs: list[list[int]] = []
+    for index in range(1, len(line_segments)):
+        prev = _timed_span(line_segments[index - 1]["words"])
+        cur = _timed_span(line_segments[index]["words"])
+        if prev is None or cur is None or cur[0] >= prev[1]:
+            continue
+        if (
+            runs
+            and runs[-1][-1] == index - 1
+            and windows[index][1] - windows[runs[-1][0]][0] <= MAX_JOINT_ALIGN_SECONDS
+        ):
+            runs[-1].append(index)
+        else:
+            runs.append([index - 1, index])
+    return runs
+
+
+def _realign_contested_lines(
+    line_segments: list[dict],
+    texts: list[str],
+    windows: list[tuple[float, float]],
+    audio,
+    language: str,
+    device: str,
+    pre_align_cleanup=None,
+) -> None:
+    """Align each contested run of lines as one passage and split its words back.
+
+    A single CTC pass places the words of neighbouring lines strictly in order,
+    so the boundary between them follows the audio instead of the padding.
+    """
+    runs = _contested_runs(line_segments, windows)
+    if not runs:
+        return
+    duration = len(audio) / 16000
+    passages = [
+        {
+            "text": " ".join(texts[index] for index in run),
+            "start": max(0.0, windows[run[0]][0] - WINDOW_PAD_SECONDS),
+            "end": min(duration, windows[run[-1]][1] + WINDOW_PAD_SECONDS),
+        }
+        for run in runs
+    ]
+    result = align_with_fallback(
+        passages, audio, cjk.align_lang_code(language), device, pre_align_cleanup,
+        model_name=cjk.align_model_for(language),
+    )
+    realigned = 0
+    for run, passage in zip(runs, _segments_per_line(result, [p["text"] for p in passages])):
+        words = [w for w in passage["words"] if str(w.get("word", "")).strip()]
+        counts = [len(texts[index].split()) for index in run]
+        if len(words) != sum(counts):
+            continue
+        for index, count in zip(run, counts):
+            line_segments[index]["words"], words = words[:count], words[count:]
+        realigned += len(run)
+    print(
+        f"[nightingale:LOG] Jointly re-aligned {realigned} lines in {len(runs)} contested runs",
+        flush=True,
+    )
+
+
+def _separate_lines(segments: list[dict]) -> None:
+    """Make consecutive lines strictly ordered without overlap.
+
+    A line's held last word runs to its LRC end, which can pass the aligned
+    onset of the next line; the earlier line is cut at that onset.
+    """
+    for prev, cur in zip(segments, segments[1:]):
+        boundary = max(cur["start"], prev["start"])
+        for w in prev["words"]:
+            w["start"] = min(w["start"], boundary)
+            w["end"] = max(w["start"], min(w["end"], boundary))
+        for w in cur["words"]:
+            w["start"] = max(w["start"], boundary)
+            w["end"] = max(w["end"], w["start"])
+        prev["end"] = max(prev["start"], min(prev["end"], boundary))
+        cur["start"] = boundary
+        cur["end"] = max(cur["end"], boundary)
 
 
 def _trim_words_to_vocals(segments: list[dict], audio) -> None:
@@ -419,14 +592,6 @@ def _map_chars_to_lines_cjk(
             "words": valid,
         })
 
-    for i in range(1, len(segments)):
-        prev = segments[i - 1]
-        cur = segments[i]
-        if cur["start"] < prev["end"]:
-            cur["start"] = prev["end"]
-            if cur["end"] < cur["start"]:
-                cur["end"] = cur["start"]
-
     total_words = sum(len(s["words"]) for s in segments)
     print(
         f"[nightingale:LOG] CJK lyrics alignment: {len(segments)} lines, "
@@ -434,25 +599,7 @@ def _map_chars_to_lines_cjk(
         flush=True,
     )
 
-    return _split_long_segments(segments, joiner="")
-
-
-def _split_long_segments(segments: list[dict], joiner: str = " ") -> list[dict]:
-    MAX_WORDS_PER_LINE = 10
-    out: list[dict] = []
-    for seg in segments:
-        words = seg["words"]
-        if len(words) <= MAX_WORDS_PER_LINE:
-            out.append(seg)
-            continue
-        for chunk in [words[i:i+MAX_WORDS_PER_LINE] for i in range(0, len(words), MAX_WORDS_PER_LINE)]:
-            out.append({
-                "text": joiner.join(w["word"] for w in chunk),
-                "start": chunk[0]["start"],
-                "end": chunk[-1]["end"],
-                "words": chunk,
-            })
-    return out
+    return segments
 
 
 def _align_lyrics_qwen(
@@ -464,22 +611,49 @@ def _align_lyrics_qwen(
     vocal_end: float,
     pre_align_cleanup=None,
     line_windows: list[tuple[float, float]] | None = None,
+    mix_path: str | None = None,
 ) -> list[dict] | None:
     """Align lyrics with Qwen3-ForcedAligner and map tokens back to lines.
 
     Without LRC windows, the whole vocal region is aligned in one pass against
     the newline-joined lyrics and the flat token stream is sliced onto lines.
-    With windows, each line is aligned independently so a failed line cannot
-    shift later ones. Returns ``None`` on any qwen failure so the caller falls
-    back to the wav2vec2 path.
+    With windows, lines are aligned in chunks of several verses (see
+    :func:`_align_chunks_qwen`). Returns ``None`` on any qwen failure so the
+    caller falls back to the wav2vec2 path.
     """
     import qwen_align
 
     if line_windows is not None:
-        raw_segments = _window_segments(clean_lines, line_windows, len(audio) / 16000)
-    else:
-        full_text = "\n".join(clean_lines)
-        raw_segments = [{"text": full_text, "start": vocal_start, "end": vocal_end}]
+        try:
+            aligner = qwen_align.open_chunk_aligner(language)
+        except qwen_align.QwenUnsupportedError as e:
+            print(f"[nightingale:LOG] Qwen aligner unsupported: {e}", flush=True)
+            return None
+        except Exception as e:
+            print(f"[nightingale:LOG] Qwen aligner failed to load: {e}", flush=True)
+            return None
+        try:
+            return _align_chunks_qwen(
+                aligner, clean_lines, line_spans, audio, language, line_windows, mix_path,
+            )
+        finally:
+            aligner.close()
+
+    import qwen_rknn
+
+    try:
+        qwen_rknn.resolve_bundle(os.path.dirname(os.environ.get("TORCH_HOME", "")))
+        print(
+            "[nightingale:LOG] Whole-song Qwen alignment needs line timings on this device; "
+            "using wav2vec2",
+            flush=True,
+        )
+        return None
+    except qwen_rknn.AlignerUnavailable:
+        pass
+
+    full_text = "\n".join(clean_lines)
+    raw_segments = [{"text": full_text, "start": vocal_start, "end": vocal_end}]
     try:
         result = qwen_align.qwen_align_with_cpu_fallback(
             raw_segments, audio, language, pre_align_cleanup,
@@ -501,6 +675,287 @@ def _align_lyrics_qwen(
         flush=True,
     )
     return segments
+
+
+def _vocal_energy(audio) -> np.ndarray:
+    hop = int(ENERGY_FRAME_SECONDS * 16000)
+    frames = np.asarray(audio[: len(audio) // hop * hop], dtype=np.float32).reshape(-1, hop)
+    return np.convolve(np.sqrt(np.mean(frames**2, axis=1)), np.ones(5) / 5, mode="same")
+
+
+def _quietest(energy: np.ndarray, lo: float, hi: float) -> float:
+    first = max(0, int(lo / ENERGY_FRAME_SECONDS))
+    last = min(len(energy), int(hi / ENERGY_FRAME_SECONDS))
+    if last <= first:
+        return max(0.0, lo)
+    return (first + int(np.argmin(energy[first:last]))) * ENERGY_FRAME_SECONDS
+
+
+def _chunk_fits(aligner, seconds: float, words: int) -> bool:
+    if seconds > MAX_CHUNK_SECONDS:
+        return False
+    limit = aligner.max_sequence
+    return limit is None or TOKENS_PER_SECOND * seconds + TOKENS_PER_WORD * words + PROMPT_TOKENS <= limit
+
+
+def _squashed_at_end(tokens: list[dict], chunk_seconds: float) -> bool:
+    """The chunk's last words were pressed into its final moment."""
+    tail = tokens[-SQUASH_WORDS:]
+    return (
+        len(tail) == SQUASH_WORDS
+        and tail[-1]["end_time"] >= chunk_seconds - CUT_MARGIN_SECONDS
+        and tail[0]["start_time"] >= chunk_seconds - SQUASH_SECONDS
+        and any(t["end_time"] - t["start_time"] <= MIN_WORD_SECONDS for t in tail)
+    )
+
+
+def _align_chunks_qwen(
+    aligner,
+    clean_lines: list[str],
+    line_spans: list[list[tuple[int, int, str]]],
+    audio,
+    language: str,
+    windows: list[tuple[float, float]],
+    mix_path: str | None = None,
+) -> list[dict]:
+    """Align LRC-timed lines a few verses at a time.
+
+    LRC files are often offset from the recording by a second or more, so line
+    windows only seed the chunking: each chunk ends at the quietest vocal
+    moment near a line boundary shifted by the offset measured on the chunks
+    already aligned, and the aligner places every word of the chunk itself.
+    Lines whose vocal stem is mostly silent (a choir or backing vocals the
+    separator put in the instrumental) form their own chunks, aligned against
+    the original mix. A chunk can still lock onto a repeated chorus elsewhere;
+    the offset therefore only trusts lines near the running offset, and lines
+    left squashed or far from their LRC time are repaired afterwards.
+    """
+    duration = len(audio) / 16000
+    energy = _vocal_energy(audio)
+    silent = energy < np.percentile(energy, 95) * SILENT_VOCAL_RATIO
+    mix = None
+    word_counts = [len(line.split()) for line in clean_lines]
+    # Line start minus LRC start for lines that look trustworthy; their median
+    # is the LRC offset, so one misaligned chunk cannot drag later cuts away.
+    trusted: list[float] = []
+    offset = 0.0
+    results: list[dict | None] = [None] * len(clean_lines)
+    from_mix = [False] * len(clean_lines)
+
+    def unvoiced(index: int) -> bool:
+        first_frame = max(0, int((windows[index][0] + offset) / ENERGY_FRAME_SECONDS))
+        frames = silent[first_frame : max(first_frame, int((windows[index][1] + offset) / ENERGY_FRAME_SECONDS))]
+        return bool(mix_path) and len(frames) > 0 and frames.mean() > MIX_FALLBACK_SILENT_FRACTION
+
+    def source(on_mix: bool):
+        nonlocal mix
+        if not on_mix:
+            return audio
+        if mix is None:
+            import whisperx
+
+            mix = whisperx.load_audio(mix_path)
+        return mix
+
+    def align_span(first: int, last: int, start: float, end: float, on_mix: bool):
+        try:
+            tokens = aligner.align(
+                source(on_mix)[int(start * 16000) : int(end * 16000)],
+                "\n".join(clean_lines[first : last + 1]),
+                language,
+            )
+        except Exception as e:
+            print(f"[nightingale:LOG] Qwen chunk {first + 1}-{last + 1} failed: {e}", flush=True)
+            tokens = []
+        words = [
+            {
+                "word": t["text"],
+                "start": round(min(t["start_time"] + start, end), 3),
+                "end": round(min(t["end_time"] + start, end), 3),
+            }
+            for t in tokens
+        ]
+        mapped = (
+            _map_qwen_units_to_lines(
+                {"segments": [{"words": words}]},
+                clean_lines[first : last + 1],
+                line_spans[first : last + 1],
+                language,
+                None,
+            )
+            if words
+            else []
+        )
+        lines: list[dict | None] = []
+        for index in range(first, last + 1):
+            if mapped and mapped[0]["text"] == clean_lines[index]:
+                segment = mapped.pop(0)
+                _hold_words_in_window(segment["words"], segment["words"][-1]["end"])
+                lines.append(segment)
+            else:
+                lines.append(None)
+        return lines, tokens
+
+    def placed(index: int, segment: dict | None) -> bool:
+        return (
+            segment is not None
+            and not _line_squashed(segment)
+            and abs(segment["start"] - windows[index][0] - offset) <= LINE_DRIFT_SECONDS
+        )
+
+    first = 0
+    start = max(0.0, windows[0][0] - EDGE_SECONDS)
+    while first < len(clean_lines):
+        on_mix = unvoiced(first)
+        last = first
+        while (
+            last + 1 < len(clean_lines)
+            and unvoiced(last + 1) == on_mix
+            and _chunk_fits(
+                aligner,
+                windows[last + 1][1] + offset + CUT_SEARCH_SECONDS - start,
+                sum(word_counts[first : last + 2]),
+            )
+        ):
+            last += 1
+        # The token estimate can be short for long words; check the exact
+        # prompt for the longest audio this chunk may get after re-cuts.
+        while last > first and not aligner.fits(
+            windows[last + 1][0] + offset + (CHUNK_RETRIES + 1) * (CUT_SEARCH_SECONDS + 0.3) - start
+            if last + 1 < len(clean_lines)
+            else windows[last][1] + offset + EDGE_SECONDS - start,
+            "\n".join(clean_lines[first : last + 1]),
+            language,
+        ):
+            last -= 1
+        if last + 1 < len(clean_lines):
+            boundary = windows[last + 1][0] + offset
+            end = _quietest(
+                energy, max(start + 1.0, boundary - CUT_SEARCH_SECONDS), boundary + CUT_SEARCH_SECONDS,
+            )
+        else:
+            end = min(duration, windows[last][1] + offset + EDGE_SECONDS)
+        progress(
+            80 + 8 * first // len(clean_lines),
+            f"Aligning lyric lines: {first + 1}-{last + 1}/{len(clean_lines)}",
+        )
+        if on_mix:
+            print(
+                f"[nightingale:LOG] Vocal stem is silent in lines {first + 1}-{last + 1}; "
+                "aligning them against the original mix",
+                flush=True,
+            )
+        for retry in range(CHUNK_RETRIES + 1):
+            lines, tokens = align_span(first, last, start, end, on_mix)
+            if retry == CHUNK_RETRIES or last + 1 == len(clean_lines) or not _squashed_at_end(tokens, end - start):
+                break
+            # The cut fell inside the chunk's last line: move it to the next pause.
+            end = _quietest(energy, end + 0.3, end + CUT_SEARCH_SECONDS + 0.3)
+        results[first : last + 1] = lines
+        from_mix[first : last + 1] = [on_mix] * len(lines)
+
+        deltas = [
+            segment["start"] - windows[index][0]
+            for index, segment in zip(range(first, last + 1), lines)
+            if segment is not None and len(segment["words"]) > 1 and not _line_squashed(segment)
+        ]
+        reference = offset if trusted else float(np.median(deltas)) if deltas else 0.0
+        trusted += [delta for delta in deltas if abs(delta - reference) <= LINE_DRIFT_SECONDS]
+        if trusted:
+            offset = max(-MAX_OFFSET_SECONDS, min(MAX_OFFSET_SECONDS, float(np.median(trusted))))
+        first = last + 1
+        start = end
+
+    def overlaps(segments: list[dict | None]) -> list[tuple[int, int]]:
+        """Adjacent lines where the later one starts before the earlier one's
+        last word by more than OVERLAP_TOLERANCE_SECONDS."""
+        pairs = []
+        previous = None
+        for index, segment in enumerate(segments):
+            if segment is None:
+                continue
+            if previous is not None and (
+                segment["start"] < segments[previous]["words"][-1]["start"] - OVERLAP_TOLERANCE_SECONDS
+            ):
+                pairs.append((previous, index))
+            previous = index
+        return pairs
+
+    def at_lrc(index: int) -> dict:
+        window_start = min(duration, max(0.0, windows[index][0] + offset))
+        window_end = min(duration, max(window_start, windows[index][1] + offset))
+        return {
+            "text": clean_lines[index],
+            "start": window_start,
+            "end": window_end,
+            "words": [{"word": clean_lines[index], "start": window_start, "end": window_end, "estimated": True}],
+        }
+
+    # Lines that are squashed, far from their (offset) LRC time or overlapping
+    # a neighbour are aligned again on their own window (overlapping lines
+    # together, which orders them), on the stem and then on the mix.
+    for pair in overlaps([segment if placed(i, segment) else None for i, segment in enumerate(results)]):
+        for index in pair:
+            results[index] = None
+    broken = [index for index in range(len(clean_lines)) if not placed(index, results[index])]
+    runs: list[list[int]] = []
+    for index in broken:
+        if runs and runs[-1][-1] == index - 1 and windows[index][1] - windows[runs[-1][0]][0] <= MAX_CHUNK_SECONDS / 2:
+            runs[-1].append(index)
+        else:
+            runs.append([index])
+    for run in runs:
+        first, last = run[0], run[-1]
+        progress(88, f"Re-aligning misplaced lines {first + 1}-{last + 1}")
+        start = max(0.0, windows[first][0] + offset - REPAIR_PAD_SECONDS)
+        end = min(duration, windows[last][1] + offset + REPAIR_PAD_SECONDS)
+        preferred = unvoiced(first)
+        for on_mix in (preferred, not preferred) if mix_path else (False,):
+            lines, _ = align_span(first, last, start, end, on_mix)
+            for index, segment in zip(run, lines):
+                if not placed(index, results[index]) and placed(index, segment):
+                    results[index] = segment
+                    from_mix[index] = on_mix
+            if all(placed(index, results[index]) for index in run):
+                break
+
+    # The stem has no voice under lines aligned on the mix, so only stem
+    # alignments are trimmed to its sung parts.
+    _trim_words_to_vocals(
+        [segment for segment, mixed in zip(results, from_mix) if segment is not None and not mixed], audio,
+    )
+    segments = [segment if placed(index, segment) else at_lrc(index) for index, segment in enumerate(results)]
+    # Lines that still overlap cannot both be right: an aligned line yields to
+    # one kept at its LRC timing, otherwise the one further from its LRC time
+    # yields. Each step pins one more line to the LRC, so this terminates.
+    while pairs := [
+        pair for pair in overlaps(segments)
+        if not all(segments[i]["words"][0].get("estimated") for i in pair)
+    ]:
+        aligned = [i for i in pairs[0] if not segments[i]["words"][0].get("estimated")]
+        loser = (
+            max(aligned, key=lambda i: abs(segments[i]["start"] - windows[i][0] - offset))
+            if len(aligned) == 2
+            else aligned[0]
+        )
+        segments[loser] = at_lrc(loser)
+    estimated = sum(1 for segment in segments if segment["words"][0].get("estimated"))
+    print(
+        f"[nightingale:LOG] Qwen chunked alignment: {len(segments)} lines, LRC offset {offset:+.2f}s, "
+        f"{len(broken)} re-aligned, {estimated} left at LRC timing",
+        flush=True,
+    )
+    return segments
+
+
+def _line_squashed(segment: dict) -> bool:
+    """Most of the line's words were stacked onto one moment."""
+    words = segment["words"]
+    if len(words) == 1:
+        return words[0]["end"] - words[0]["start"] <= MIN_WORD_SECONDS
+    spacing = (words[-1]["start"] - words[0]["start"]) / (len(words) - 1)
+    stacked = sum(1 for w in words if w["end"] - w["start"] <= MIN_WORD_SECONDS)
+    return spacing < MIN_WORD_SECONDS or (len(words) >= 4 and stacked * 2 >= len(words))
 
 
 def _map_qwen_units_to_lines(
@@ -593,16 +1048,7 @@ def _map_qwen_units_to_lines(
             "words": words,
         })
 
-    for i in range(1, len(segments)):
-        prev = segments[i - 1]
-        cur = segments[i]
-        if cur["start"] < prev["end"]:
-            cur["start"] = prev["end"]
-            if cur["end"] < cur["start"]:
-                cur["end"] = cur["start"]
-
-    joiner = "" if cjk.is_cjk(language) else " "
-    return _split_long_segments(segments, joiner=joiner)
+    return segments
 
 
 def _split_units_at_boundaries(units: list[dict], boundaries: set[int]) -> list[dict]:
@@ -748,14 +1194,6 @@ def _map_words_to_lines(
             "words": valid_words,
         })
 
-    for i in range(1, len(segments)):
-        prev = segments[i - 1]
-        cur = segments[i]
-        if cur["start"] < prev["end"]:
-            cur["start"] = prev["end"]
-            if cur["end"] < cur["start"]:
-                cur["end"] = cur["start"]
-
     total_words = sum(len(s["words"]) for s in segments)
     print(
         f"[nightingale:LOG] Lyrics alignment: {len(segments)} lines preserved, "
@@ -764,7 +1202,7 @@ def _map_words_to_lines(
         flush=True,
     )
 
-    return _split_long_segments(segments, joiner=" ")
+    return segments
 
 
 def _interpolate_missing(word_entries: list[dict]):

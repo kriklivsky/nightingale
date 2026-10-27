@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/shared/components/ui/dialog';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 const PATREON_URL = 'https://www.patreon.com/cw/nightingalekaraoke';
@@ -65,6 +66,7 @@ const DonationCard = ({
 );
 
 export const DonateDialog = () => {
+  const { t } = useI18n();
   const { mode, close } = useDialog();
   const { markSeen } = useDonationSeen();
 
@@ -96,28 +98,25 @@ export const DonateDialog = () => {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <HeartIcon className="size-4 text-pink-500" />
-              Support Nightingale
+              {t('menu.supportNightingale')}
             </DialogTitle>
-            <DialogDescription>
-              Nightingale is open-source, free, and built by one person in their spare time. If it
-              brings you joy, you can help keep development going.
-            </DialogDescription>
+            <DialogDescription>{t('donate.description')}</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3">
             <DonationCard
               icon={RepeatIcon}
-              title="Recurring on Patreon"
-              description="Back the project every month. Helps cover hosting, hardware for testing, and ongoing development."
-              cta="Support on Patreon"
+              title={t('donate.patreonTitle')}
+              description={t('donate.patreonDescription')}
+              cta={t('donate.patreonCta')}
               href={PATREON_URL}
               focused={open && focusedIndex === 0}
               onHover={() => focusSegment(0)}
             />
             <DonationCard
               icon={CoffeeIcon}
-              title="One-off on Ko-fi"
-              description="Drop a one-time tip the size of a coffee. No account required."
-              cta="Buy a coffee"
+              title={t('donate.kofiTitle')}
+              description={t('donate.kofiDescription')}
+              cta={t('donate.kofiCta')}
               href={KOFI_URL}
               focused={open && focusedIndex === 1}
               onHover={() => focusSegment(1)}
@@ -130,7 +129,7 @@ export const DonateDialog = () => {
               onMouseEnter={() => focusSegment(2)}
               className={cn(NO_FOCUS_RING, open && focusedIndex === 2 && RING)}
             >
-              Close
+              {t('common.close')}
             </Button>
           </DialogFooter>
         </div>

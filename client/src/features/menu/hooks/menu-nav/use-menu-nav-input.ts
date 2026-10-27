@@ -103,17 +103,19 @@ function confirmFocusedAction(
   actionsRef: MenuNavHookOptions['menuFocus']['actionsRef'],
   index: number,
 ): void {
-  if (actionsRef.current.onConfirmActions?.(index) !== true) {
-    const target = getActionTarget(index);
-    if (target instanceof HTMLInputElement) {
-      if (document.documentElement.classList.contains('tvbox-session')) {
-        target.click();
-      } else {
-        target.focus();
-      }
-    } else {
-      target?.click();
-    }
+  const handler = actionsRef.current.actionConfirmHandlers.get(index);
+  if (handler) {
+    handler();
+    return;
+  }
+  const target = getActionTarget(index);
+  if (
+    target instanceof HTMLInputElement &&
+    !document.documentElement.classList.contains('tvbox-session')
+  ) {
+    target.focus();
+  } else {
+    target?.click();
   }
 }
 

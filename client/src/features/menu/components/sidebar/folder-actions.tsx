@@ -5,6 +5,7 @@ import { useMenuFocus } from '@/features/menu/providers/menu-focus-context';
 import { useSourceButtons } from '@/features/sources/hooks/use-source-buttons';
 import { SidebarGroup, SidebarMenu, SidebarMenuItem } from '@/shared/components/ui/sidebar';
 import { useLatestRef } from '@/shared/hooks/use-latest-ref';
+import { useI18n } from '@/shared/i18n/use-i18n';
 
 import { SourceActionButton } from './source-action-button';
 
@@ -19,6 +20,7 @@ type FolderActionsProps = {
  * `useSourceButtons`; per-button presentation lives in `SourceActionButton`.
  */
 export const FolderActions = ({ focusedSidebarIndex, registerCallback }: FolderActionsProps) => {
+  const { t } = useI18n();
   const { focus, actionsRef } = useMenuFocus();
   const buttons = useSourceButtons();
 
@@ -55,7 +57,7 @@ export const FolderActions = ({ focusedSidebarIndex, registerCallback }: FolderA
           >
             <span className="flex items-center gap-2 text-sidebar-foreground/70">
               <LibraryBigIcon className="size-4 shrink-0" />
-              Library
+              {t('menu.library')}
             </span>
             <div className="flex items-center gap-0.5">
               {buttons.map((button, index) => (

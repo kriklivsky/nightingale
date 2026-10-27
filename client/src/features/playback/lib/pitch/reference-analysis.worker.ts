@@ -1,4 +1,4 @@
-import { computeSingableTime } from './state';
+import { analyzeReferenceSamples } from './state';
 
 globalThis.addEventListener('message', (event: MessageEvent<unknown>) => {
   const value = event.data;
@@ -17,6 +17,9 @@ globalThis.addEventListener('message', (event: MessageEvent<unknown>) => {
     throw new TypeError('Invalid reference audio');
   }
 
-  reply.postMessage(computeSingableTime(value.samples, value.sampleRate), []);
+  const { singableSec, contour } = analyzeReferenceSamples(value.samples, value.sampleRate);
+  reply.postMessage({ singableSec, hopSec: contour.hopSec, semitones: contour.semitones }, [
+    contour.semitones.buffer,
+  ]);
   reply.close();
 });

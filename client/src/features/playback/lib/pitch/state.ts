@@ -11,6 +11,8 @@ export type PitchSeries = {
   refPitches: (number | null)[];
   userPitches: (number | null)[];
   similarities: number[];
+  /** Playback time (seconds) of each sample. */
+  times: number[];
 };
 
 export function freqToSemitone(hz: number): number {
@@ -47,6 +49,7 @@ export class PitchStateBuffer {
   refPitches: (number | null)[] = [];
   userPitches: (number | null)[] = [];
   similarities: number[] = [];
+  times: number[] = [];
   private smoothedRef: number | null = null;
   private smoothedUser: number | null = null;
   private lastPushTime = 0;
@@ -69,10 +72,12 @@ export class PitchStateBuffer {
       this.refPitches.shift();
       this.userPitches.shift();
       this.similarities.shift();
+      this.times.shift();
     }
     this.refPitches.push(this.smoothedRef);
     this.userPitches.push(this.smoothedUser);
     this.similarities.push(similarity);
+    this.times.push(time);
   }
 
   snapshot(): PitchSeries {
@@ -80,6 +85,7 @@ export class PitchStateBuffer {
       refPitches: [...this.refPitches],
       userPitches: [...this.userPitches],
       similarities: [...this.similarities],
+      times: [...this.times],
     };
   }
 
@@ -87,6 +93,7 @@ export class PitchStateBuffer {
     this.refPitches = [];
     this.userPitches = [];
     this.similarities = [];
+    this.times = [];
     this.smoothedRef = null;
     this.smoothedUser = null;
     this.lastPushTime = 0;
@@ -120,23 +127,40 @@ export class PitchScoring {
   }
 }
 
-export function computeSingableTime(ch: Float32Array, sr: number): number {
+/**
+ * Reference melody sampled every `hopSec`: `semitones[i]` is the MIDI note
+ * number of the window starting at `i * hopSec` seconds, or NaN when unvoiced.
+ */
+export type ReferenceContour = {
+  hopSec: number;
+  semitones: Float32Array;
+};
+
+export type ReferenceAnalysis = {
+  singableSec: number;
+  contour: ReferenceContour;
+};
+
+export function analyzeReferenceSamples(ch: Float32Array, sr: number): ReferenceAnalysis {
   const hop = PITCH_WINDOW_SAMPLES / 2;
   const hopSec = hop / sr;
   const detector = createPitchDetector();
   const window = new Float32Array(PITCH_WINDOW_SAMPLES);
+  const frames = Math.max(0, Math.floor((ch.length - PITCH_WINDOW_SAMPLES) / hop) + 1);
+  const semitones = new Float32Array(frames).fill(Number.NaN);
   let total = 0;
-  let offset = 0;
 
-  while (offset + PITCH_WINDOW_SAMPLES <= ch.length) {
+  for (let frame = 0; frame < frames; frame++) {
+    const offset = frame * hop;
     window.set(ch.subarray(offset, offset + PITCH_WINDOW_SAMPLES));
-    if (detectPitchFromSamplesRef(detector, window, sr) !== null) {
+    const hz = detectPitchFromSamplesRef(detector, window, sr);
+    if (hz !== null) {
       total += hopSec;
+      semitones[frame] = freqToSemitone(hz);
     }
-    offset += hop;
   }
 
-  return total;
+  return { singableSec: total, contour: { hopSec, semitones } };
 }
 
 export function sampleVocalsWindow(

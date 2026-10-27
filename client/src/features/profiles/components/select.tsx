@@ -16,7 +16,6 @@ import {
 } from '@/shared/components/ui/dialog';
 import { Field, FieldGroup } from '@/shared/components/ui/field';
 import { Label } from '@/shared/components/ui/label';
-import { Popover, PopoverContent, PopoverTrigger } from '@/shared/components/ui/popover';
 import {
   Select,
   SelectContent,
@@ -26,9 +25,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 export const SelectProfileDialog = () => {
+  const { t } = useI18n();
   const { data } = useProfiles();
   const currentProfile = useCurrentProfile();
   const { mode, close, setMode } = useDialog();
@@ -36,7 +37,11 @@ export const SelectProfileDialog = () => {
   const { mutateAsync } = useProfileMutations();
 
   const [newProfile, setNewProfile] = useState(currentProfile);
-  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
+  const [deleteArmed, setDeleteArmed] = useState(false);
+  const closeDialog = () => {
+    setDeleteArmed(false);
+    close();
+  };
 
   const profiles = data?.profiles ?? [];
 
@@ -44,18 +49,17 @@ export const SelectProfileDialog = () => {
   const { focusedIndex } = useDialogNav({
     open,
     itemCount: 5,
-    onBack: close,
+    onBack: closeDialog,
     containerRef,
   });
 
   const deleteProfile = async (): Promise<void> => {
+    setDeleteArmed(false);
     if (typeof newProfile !== 'string' || newProfile === '') {
-      setDeleteConfirmationOpen(false);
       return;
     }
 
     await mutateAsync({ name: newProfile, type: 'delete' });
-    setDeleteConfirmationOpen(false);
     close();
   };
 
@@ -70,17 +74,20 @@ export const SelectProfileDialog = () => {
   };
 
   return (
-    <Dialog open={open} onOpenChange={close}>
+    <Dialog open={open} onOpenChange={closeDialog}>
       <DialogContent className="sm:max-w-sm">
         <div ref={containerRef} className="contents">
           <DialogHeader>
-            <DialogTitle>Select Profile</DialogTitle>
+            <DialogTitle>{t('profile.selectTitle')}</DialogTitle>
           </DialogHeader>
           <FieldGroup>
             <Field>
-              <Label htmlFor="model-1">Profile</Label>
+              <Label htmlFor="model-1">{t('result.profile')}</Label>
               <Select
-                onValueChange={(profile) => setNewProfile(profile)}
+                onValueChange={(profile) => {
+                  setNewProfile(profile);
+                  setDeleteArmed(false);
+                }}
                 defaultValue={currentProfile}
               >
                 <SelectTrigger
@@ -90,11 +97,11 @@ export const SelectProfileDialog = () => {
                     focusedIndex === 0 && 'ring-2 ring-primary',
                   )}
                 >
-                  <SelectValue placeholder="Select a profile" />
+                  <SelectValue placeholder={t('profile.selectPlaceholder')} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectLabel>Profile</SelectLabel>
+                    <SelectLabel>{t('result.profile')}</SelectLabel>
                     {profiles.map((profile) => (
                       <SelectItem key={profile} value={profile}>
                         {profile}
@@ -109,13 +116,13 @@ export const SelectProfileDialog = () => {
             <DialogClose asChild>
               <Button
                 variant="outline"
-                onClick={close}
+                onClick={closeDialog}
                 className={cn(
                   'focus-visible:ring-0 focus-visible:border-transparent',
                   focusedIndex === 1 && 'ring-2 ring-primary',
                 )}
               >
-                Cancel
+                {t('common.cancel')}
               </Button>
             </DialogClose>
             <Button
@@ -126,39 +133,19 @@ export const SelectProfileDialog = () => {
                 focusedIndex === 2 && 'ring-2 ring-primary',
               )}
             >
-              Create New
+              {t('profile.createNew')}
             </Button>
-            <Popover open={deleteConfirmationOpen} onOpenChange={setDeleteConfirmationOpen}>
-              <PopoverTrigger asChild>
-                <Button
-                  variant="destructive"
-                  onClick={() => setDeleteConfirmationOpen(!deleteConfirmationOpen)}
-                  className={cn(
-                    'focus-visible:ring-0 focus-visible:border-transparent',
-                    focusedIndex === 3 && 'ring-2 ring-primary',
-                  )}
-                >
-                  Delete
-                </Button>
-              </PopoverTrigger>
-
-              <PopoverContent side="bottom" align="start" className="w-48">
-                <p className="text-sm">Are you sure?</p>
-
-                <div className="flex gap-2 justify-end">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setDeleteConfirmationOpen(false)}
-                  >
-                    No
-                  </Button>
-                  <Button size="sm" variant="destructive" onClick={() => void deleteProfile()}>
-                    Yes
-                  </Button>
-                </div>
-              </PopoverContent>
-            </Popover>
+            <Button
+              variant="destructive"
+              disabled={typeof newProfile !== 'string' || newProfile === ''}
+              onClick={() => (deleteArmed ? void deleteProfile() : setDeleteArmed(true))}
+              className={cn(
+                'focus-visible:ring-0 focus-visible:border-transparent',
+                focusedIndex === 3 && 'ring-2 ring-primary',
+              )}
+            >
+              {deleteArmed ? t('profile.confirmDelete') : t('profile.delete')}
+            </Button>
             <Button
               disabled={newProfile === currentProfile}
               onClick={() => void switchProfile()}
@@ -167,7 +154,7 @@ export const SelectProfileDialog = () => {
                 focusedIndex === 4 && 'ring-2 ring-primary',
               )}
             >
-              Select
+              {t('profile.select')}
             </Button>
           </DialogFooter>
         </div>

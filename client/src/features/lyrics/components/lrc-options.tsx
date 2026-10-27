@@ -1,5 +1,6 @@
 import type { TimingChoice } from '@/features/lyrics/lib/timing-choice';
 import type { LrcLevel } from '@/features/lyrics/utils/edit-lyrics';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 import { ringFor } from './parts';
@@ -100,6 +101,7 @@ export const LrcOptions = ({
   audioFocusedSlot,
   onFocusOption,
 }: LrcOptionsProps) => {
+  const { t } = useI18n();
   const hasLrc = level !== 'none';
   const timingDisabled = disabled === true || !hasLrc;
   const displayTiming: TimingChoice = hasLrc ? timingChoice : 'align';
@@ -115,29 +117,49 @@ export const LrcOptions = ({
   return (
     <div className="mt-3 flex flex-col divide-y divide-border">
       <RadioRow<TimingChoice>
-        label="Timing"
+        label={t('lyrics.timing')}
         value={displayTiming}
         disabled={timingDisabled}
         onSelect={onTimingChoiceChange}
         focusedSlot={timingFocusedSlot}
         onFocusSlot={(slot) => onFocusOption?.('timing', slot)}
         options={[
-          { value: 'provided', title: 'Use provided', description: 'Instant · no transcription' },
-          { value: 'anchored', title: 'Align words', description: 'Keeps line timing · runs AI' },
-          { value: 'align', title: 'Run alignment', description: 'Ignores timing · runs AI' },
+          {
+            value: 'provided',
+            title: t('lyrics.timingProvided'),
+            description: t('lyrics.timingProvidedDescription'),
+          },
+          {
+            value: 'anchored',
+            title: t('lyrics.timingAnchored'),
+            description: t('lyrics.timingAnchoredDescription'),
+          },
+          {
+            value: 'align',
+            title: t('lyrics.timingAlign'),
+            description: t('lyrics.timingAlignDescription'),
+          },
         ]}
       />
 
       <RadioRow<'separate' | 'skip'>
-        label="Audio"
+        label={t('lyrics.audio')}
         value={displayAudio}
         disabled={audioDisabled}
         onSelect={(value) => onSeparateStemsChange(value === 'separate')}
         focusedSlot={audioFocusedSlot}
         onFocusSlot={(slot) => onFocusOption?.('audio', slot)}
         options={[
-          { value: 'skip', title: 'Play original', description: 'No separation · detects key' },
-          { value: 'separate', title: 'Separate stems', description: 'Runs AI · takes a while' },
+          {
+            value: 'skip',
+            title: t('lyrics.audioOriginal'),
+            description: t('lyrics.audioOriginalDescription'),
+          },
+          {
+            value: 'separate',
+            title: t('lyrics.audioSeparate'),
+            description: t('lyrics.audioSeparateDescription'),
+          },
         ]}
       />
     </div>

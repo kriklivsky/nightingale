@@ -1,59 +1,39 @@
-import { forwardRef, memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { PauseIcon } from 'lucide-react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
-import { usePlaybackConfigPersist } from '@/features/playback/hooks/use-playback-config-persist';
-import type { VideoFlavor } from '@/features/playback/lib/video-flavor';
+import { useHudActivity } from '@/features/playback/hooks/use-hud-activity';
 import {
-  usePlaybackMicActions,
-  usePlaybackMicState,
   type PlaybackPlayerMicState,
-  usePlaybackThemeActions,
+  usePlaybackMicState,
   usePlaybackThemeState,
   usePlaybackTranscriptActions,
   usePlaybackTranscriptState,
   usePlaybackTransportActions,
   usePlaybackTransportState,
 } from '@/features/playback/providers';
-import { computeLyricGapCaption, findCurrentSegment } from '@/features/playback/utils/lyrics-gap';
+import {
+  computeLyricGapSeconds,
+  findCurrentSegment,
+  skipTarget,
+} from '@/features/playback/utils/lyrics-gap';
+import { Kbd } from '@/shared/components/ui/kbd';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { playerColorOption } from '@/shared/player-colors';
-import type { AppConfig } from '@/types/AppConfig';
+import { cn } from '@/shared/utils/cn';
 
-import { isPixabayTheme, themeName, type PlaybackTheme } from './theme';
+import { PlaybackProgress } from './playback-progress';
+import { isPixabayTheme } from './theme';
 
-function formatTime(seconds: number): string {
+const TOUCH_QUERIES = ['(pointer: coarse)', '(any-pointer: coarse)'];
+
+/** How long the AI/original-mix notes stay on screen after playback starts. */
+const DISCLAIMER_VISIBLE_SEC = 8;
+
+function formatPlaybackTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds) % 60;
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
-
-function formatGuideText(volume: number): string {
-  const pct = Math.round(volume * 100);
-  return pct === 0 ? 'Guide: OFF [←/→]' : `Guide: ${pct}% [←/→ / G]`;
-}
-
-function formatThemeText(theme: PlaybackTheme, videoFlavor: VideoFlavor): string {
-  return `Theme: ${themeName(theme, videoFlavor)} [T${isPixabayTheme(theme) ? '/F' : ''}]`;
-}
-
-const SkipButton = forwardRef<HTMLButtonElement, { label: string; onClick: () => void }>(
-  ({ label, onClick }, ref) => (
-    <button
-      ref={ref}
-      type="button"
-      onClick={onClick}
-      className="pointer-events-auto flex gap-1 rounded-sm border-2 border-white/70 bg-black/10 px-2.5 py-1 text-sm text-white/90 transition-colors hover:bg-black/20"
-      style={{ display: 'none' }}
-    >
-      <span>{label}</span> <span>⏎</span>
-    </button>
-  ),
-);
-
-function HintText({ children, fontSize = 'sm' }: { children: React.ReactNode; fontSize?: string }) {
-  return <p className={`text-${fontSize} text-white/50`}>{children}</p>;
-}
-
-const NOTE_BASE_CLASS = `pointer-events-none absolute z-20 text-[0.6rem] text-white/30`;
-const TOUCH_QUERIES = ['(pointer: coarse)', '(any-pointer: coarse)'];
 
 function hasTouchInput(): boolean {
   return (
@@ -78,264 +58,99 @@ function useHasTouchInput(): boolean {
   return enabled;
 }
 
-function TouchButton({
-  label,
-  onClick,
-  disabled = false,
-}: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="pointer-events-auto rounded-sm border-2 border-white/70 bg-black/10 px-2.5 py-1 text-sm text-white/90 transition-colors hover:bg-black/20 active:bg-black/30 disabled:opacity-35"
-    >
-      {label}
-    </button>
-  );
-}
-
-function SettingsInfo({
-  guideVolume,
-  guideAvailable,
-  micUserEnabled,
-  micName,
-  micMonitorUserEnabled,
-  multiplayer,
-  theme,
-  videoFlavor,
-  showShortcuts,
-}: {
-  guideVolume: number;
-  guideAvailable: boolean;
-  micUserEnabled: boolean;
-  micName: string;
-  micMonitorUserEnabled: boolean;
-  multiplayer: boolean;
-  theme: PlaybackTheme;
-  videoFlavor: VideoFlavor;
-  showShortcuts: boolean;
-}) {
-  return (
-    <div className="flex flex-col items-end">
-      {guideAvailable && (
-        <HintText>
-          {showShortcuts
-            ? formatGuideText(guideVolume)
-            : `Guide: ${Math.round(guideVolume * 100)}%`}
-        </HintText>
-      )}
-      {!multiplayer && (
-        <HintText>
-          Mic: {micUserEnabled ? micName : 'OFF'}
-          {showShortcuts ? ' [M/N]' : ''}
-        </HintText>
-      )}
-      <HintText>
-        Monitor: {micMonitorUserEnabled ? 'ON' : 'OFF'}
-        {showShortcuts ? ' [R]' : ''}
-      </HintText>
-      <HintText>
-        {showShortcuts
-          ? formatThemeText(theme, videoFlavor)
-          : `Theme: ${themeName(theme, videoFlavor)}`}
-      </HintText>
-      {showShortcuts && <HintText>[ESC] Back</HintText>}
-    </div>
-  );
-}
-
-function TouchControls({
-  config,
-  hasTouch,
-  position,
-}: {
-  config: AppConfig | null;
-  hasTouch: boolean;
-  position: PlaybackHudPosition;
-}) {
-  const [open, setOpen] = useState(false);
-  const { guideVolume, guideAvailable } = usePlaybackTransportState();
-  const { setGuideVolume, handlePause } = usePlaybackTransportActions();
-  const { micUserEnabled, micName, micMonitorUserEnabled, multiplayer } = usePlaybackMicState();
-  const { handleToggleMic, handleCycleMic, handleToggleMicMonitor } = usePlaybackMicActions();
-  const { theme, videoFlavor } = usePlaybackThemeState();
-  const { cycleTheme, cycleFlavor } = usePlaybackThemeActions();
-  const persistConfig = usePlaybackConfigPersist(config);
-
-  const setPersistedGuideVolume = useCallback(
-    (volume: number) => {
-      const next = Math.max(0, Math.min(1, volume));
-      setGuideVolume(next);
-      persistConfig({ guide_volume: next });
-    },
-    [persistConfig, setGuideVolume],
-  );
-
-  if (!hasTouch) {
-    return null;
-  }
-
-  const touchLayoutClass = position === 'bottom' ? 'mb-2 flex-col-reverse' : 'mt-2 flex-col';
-
-  return (
-    <div className={`flex w-[min(18rem,80vw)] items-end gap-2 ${touchLayoutClass}`}>
-      <div className="sm:hidden">
-        <SettingsInfo
-          guideVolume={guideVolume}
-          guideAvailable={guideAvailable}
-          micUserEnabled={micUserEnabled}
-          micName={micName}
-          micMonitorUserEnabled={micMonitorUserEnabled}
-          multiplayer={multiplayer}
-          theme={theme}
-          videoFlavor={videoFlavor}
-          showShortcuts={false}
-        />
-      </div>
-
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((prev) => !prev)}
-        className="pointer-events-auto rounded-sm border-2 border-white/70 bg-black/10 px-2.5 py-1 text-sm text-white/90 transition-colors hover:bg-black/20 active:bg-black/30"
-      >
-        {open ? 'Hide controls' : 'Playback controls'}
-      </button>
-
-      {open && (
-        <div className="grid w-full grid-cols-3 gap-2 text-center">
-          <TouchButton label="Pause" onClick={handlePause} />
-          {guideAvailable && (
-            <>
-              <TouchButton
-                label={guideVolume === 0 ? 'Guide On' : 'Guide Off'}
-                onClick={() => setPersistedGuideVolume(guideVolume > 0 ? 0 : 0.3)}
-              />
-              <TouchButton
-                label="Guide +"
-                onClick={() => setPersistedGuideVolume(guideVolume + 0.1)}
-              />
-              <TouchButton
-                label="Guide -"
-                onClick={() => setPersistedGuideVolume(guideVolume - 0.1)}
-              />
-            </>
-          )}
-          {!multiplayer && (
-            <>
-              <TouchButton
-                label={micUserEnabled ? 'Mic Off' : 'Mic On'}
-                onClick={handleToggleMic}
-              />
-              <TouchButton label="Mic Select" onClick={handleCycleMic} />
-            </>
-          )}
-          <TouchButton
-            label={micMonitorUserEnabled ? 'Monitor Off' : 'Monitor On'}
-            onClick={handleToggleMicMonitor}
-          />
-          <TouchButton label="Theme" onClick={cycleTheme} />
-          <TouchButton label="Flavor" onClick={cycleFlavor} disabled={!isPixabayTheme(theme)} />
-        </div>
-      )}
-    </div>
-  );
-}
-
 type PlaybackHudPosition = 'top' | 'bottom';
 
-function Disclaimer({
-  source,
-  position,
-  noStems,
-  micActive,
-}: {
-  source: string;
-  position: PlaybackHudPosition;
-  noStems: boolean;
-  micActive: boolean;
-}) {
+type PlaybackDisclaimer = 'original-mix' | 'ai-timing' | 'ai-lyrics' | null;
+
+function playbackDisclaimer(
+  source: string,
+  noStems: boolean,
+  micActive: boolean,
+): PlaybackDisclaimer {
   // No stems means we score against the original mix, so pitch scoring suffers.
   if (noStems && micActive) {
-    return (
-      <DisclaimerNote position={position}>
-        Original mix is used, so pitch scoring will likely be inaccurate
-      </DisclaimerNote>
-    );
+    return 'original-mix';
   }
-
   // USDX and provided LRC timings are authored, not AI-generated.
   if (source === 'usdx' || source === 'lrc') {
     return null;
   }
-
-  const text =
-    source === 'lyrics'
-      ? 'Timing is AI-generated and may not be perfectly accurate'
-      : 'Lyrics and timing are AI-generated and may not be perfectly accurate';
-
-  return <DisclaimerNote position={position}>{text}</DisclaimerNote>;
+  return source === 'lyrics' ? 'ai-timing' : 'ai-lyrics';
 }
 
-function DisclaimerNote({
-  position,
-  children,
-}: {
-  position: PlaybackHudPosition;
-  children: ReactNode;
-}) {
+function useDisclaimerText(disclaimer: PlaybackDisclaimer): string | null {
+  const { t } = useI18n();
+  if (disclaimer === 'original-mix') {
+    return t('playback.disclaimer.originalMix');
+  }
+  if (disclaimer === 'ai-timing') {
+    return t('playback.disclaimer.aiTiming');
+  }
+  if (disclaimer === 'ai-lyrics') {
+    return t('playback.disclaimer.aiLyrics');
+  }
+  return null;
+}
+
+function TimedDisclaimer({ position }: { position: PlaybackHudPosition }) {
+  const { subscribe, getCurrentTime } = usePlaybackTransportActions();
+  const { guideAvailable } = usePlaybackTransportState();
+  const { transcriptSource, segments } = usePlaybackTranscriptState();
+  const { micUserEnabled } = usePlaybackMicState();
+  const { t } = useI18n();
+  const text = useDisclaimerText(
+    playbackDisclaimer(transcriptSource, !guideAvailable, micUserEnabled),
+  );
+  const hasEstimatedWords = useMemo(
+    () => segments.some((segment) => segment.words.some((word) => word.estimated === true)),
+    [segments],
+  );
+  const [visible, setVisible] = useState(() => getCurrentTime() < DISCLAIMER_VISIBLE_SEC);
+
+  useEffect(() => subscribe((time) => setVisible(time < DISCLAIMER_VISIBLE_SEC)), [subscribe]);
+
+  if ((text === null && !hasEstimatedWords) || !visible) {
+    return null;
+  }
+
   return (
-    <p
-      className={`${NOTE_BASE_CLASS} ${notePositionClass(position)} left-1/2 -translate-x-1/2 whitespace-nowrap text-center`}
+    <div
+      className={cn(
+        'pointer-events-none absolute left-1/2 z-20 flex max-w-[90%] -translate-x-1/2 flex-col items-center gap-0.5 rounded-md bg-black/50 px-3 py-1 text-center text-sm text-white/80',
+        position === 'bottom' ? 'top-2' : 'bottom-6',
+      )}
     >
-      {children}
-    </p>
+      {text !== null && <p>{text}</p>}
+      {hasEstimatedWords && (
+        <p className="text-[rgb(255,200,100)]">{t('playback.disclaimer.estimatedWords')}</p>
+      )}
+    </div>
   );
 }
 
-function notePositionClass(hudPosition: PlaybackHudPosition): string {
-  return hudPosition === 'bottom' ? 'top-2' : 'bottom-2';
-}
-
-function hudPositionClass(position: PlaybackHudPosition): string {
-  return position === 'bottom'
-    ? 'bottom-[calc(2rem+env(safe-area-inset-bottom))] items-end md:bottom-3'
-    : 'top-[4.25rem] items-start md:top-3';
-}
-
-function windowControlsOffsetClass(position: PlaybackHudPosition, windowControls: boolean): string {
-  return windowControls && position === 'top' ? 'md:pt-9' : '';
-}
-
-function creditPositionClass(position: PlaybackHudPosition, windowControls: boolean): string {
-  return windowControls && position === 'bottom' ? 'top-12' : notePositionClass(position);
-}
-
 const scoreTextClass = (score: number | null): string =>
-  `text-base md:text-lg ${score !== null && score !== 0 ? 'text-white' : 'text-white/50'}`;
+  `text-lg tabular-nums md:text-2xl ${score !== null && score !== 0 ? 'text-white' : 'text-white/50'}`;
 
 function MultiplayerScores({ players }: { players: PlaybackPlayerMicState[] }) {
+  const { t } = useI18n();
+
   return (
-    <div className="grid justify-items-end gap-0.5" aria-label="Player scores">
+    <div className="grid justify-items-end gap-0.5" aria-label={t('playback.playerScores')}>
       {players.map((player, index) => (
         <div
           key={player.id}
           className={`flex items-center justify-end gap-2 ${scoreTextClass(player.pitchScore)}`}
         >
           <span className="whitespace-nowrap">
-            {player.profile ?? `Guest ${index + 1}`}: {player.pitchScore ?? '--'}
+            {player.profile ?? t('playback.guestNumber', { number: index + 1 })}:{' '}
+            {player.pitchScore ?? '--'}
           </span>
           <span
-            className={`size-2 rounded-full ${playerColorOption(player.color).className}`}
+            className={`size-2.5 rounded-full ${playerColorOption(player.color).className}`}
             aria-hidden="true"
           />
           <span className="sr-only">
-            {player.micReady ? 'Microphone ready' : 'Microphone unavailable'}
+            {player.micReady ? t('playback.micReady') : t('playback.micUnavailable')}
           </span>
         </div>
       ))}
@@ -343,10 +158,177 @@ function MultiplayerScores({ players }: { players: PlaybackPlayerMicState[] }) {
   );
 }
 
+function SkipButton({ position }: { position: PlaybackHudPosition }) {
+  const { t } = useI18n();
+  const { subscribe, getCurrentTime } = usePlaybackTransportActions();
+  const { segments, firstSegmentStart, lastSegmentEnd, introSkipLeadSec } =
+    usePlaybackTranscriptState();
+  const { handleSkipIntro, handleSkipOutro } = usePlaybackTranscriptActions();
+  const bounds = useMemo(
+    () => ({ segmentCount: segments.length, firstSegmentStart, lastSegmentEnd, introSkipLeadSec }),
+    [firstSegmentStart, introSkipLeadSec, lastSegmentEnd, segments.length],
+  );
+  const [target, setTarget] = useState(() => skipTarget(getCurrentTime(), bounds));
+
+  useEffect(() => subscribe((time) => setTarget(skipTarget(time, bounds))), [bounds, subscribe]);
+
+  if (target === null) {
+    return null;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={target === 'intro' ? handleSkipIntro : handleSkipOutro}
+      className={cn(
+        'pointer-events-auto flex w-fit items-center gap-2 rounded-md border-2 border-white/80 bg-black/40 px-3 py-1.5 text-base font-medium text-white transition-colors hover:bg-black/60',
+        position === 'bottom' ? 'mb-2' : 'mt-2',
+      )}
+    >
+      <Kbd className="h-6 bg-white/20 px-1.5 text-xs text-white">OK</Kbd>
+      {target === 'intro' ? t('playback.skipIntro') : t('playback.skipOutro')}
+    </button>
+  );
+}
+
+function GapCaption() {
+  const { t } = useI18n();
+  const { subscribe, getCurrentTime } = usePlaybackTransportActions();
+  const { segments } = usePlaybackTranscriptState();
+  const [seconds, setSeconds] = useState<number | null>(null);
+  const hintRef = useRef(0);
+
+  useEffect(() => {
+    hintRef.current = 0;
+    const update = (time: number) => {
+      if (segments.length === 0) {
+        setSeconds(null);
+        return;
+      }
+      const index = findCurrentSegment(segments, time, hintRef.current);
+      hintRef.current = index;
+      setSeconds(computeLyricGapSeconds(segments, time, index));
+    };
+    update(getCurrentTime());
+    return subscribe(update);
+  }, [getCurrentTime, segments, subscribe]);
+
+  return (
+    <output aria-live="polite" className="text-sm font-medium text-white/80 md:text-base">
+      {seconds === null ? '' : t('playback.nextLyricsIn', { seconds })}
+    </output>
+  );
+}
+
+function PlaybackClock() {
+  const { duration } = usePlaybackTransportState();
+  const { subscribe, getCurrentTime } = usePlaybackTransportActions();
+  const timerRef = useRef<HTMLParagraphElement>(null);
+  const lastSecondRef = useRef(-1);
+
+  // Update the clock text without triggering React renders every frame.
+  useEffect(() => {
+    const update = (time: number) => {
+      const second = Math.floor(time);
+      if (second !== lastSecondRef.current && timerRef.current) {
+        lastSecondRef.current = second;
+        timerRef.current.textContent = `${formatPlaybackTime(time)} / ${formatPlaybackTime(duration)}`;
+      }
+    };
+    lastSecondRef.current = -1;
+    update(getCurrentTime());
+    return subscribe(update);
+  }, [duration, getCurrentTime, subscribe]);
+
+  return (
+    <p ref={timerRef} className="text-sm tabular-nums text-white/70 md:text-base">
+      0:00 / {formatPlaybackTime(duration)}
+    </p>
+  );
+}
+
+function TouchPauseButton() {
+  const { t } = useI18n();
+  const { handlePause } = usePlaybackTransportActions();
+
+  return (
+    <button
+      type="button"
+      onClick={handlePause}
+      aria-label={t('playback.pause')}
+      className="pointer-events-auto flex size-11 items-center justify-center rounded-full border-2 border-white/70 bg-black/30 text-white active:bg-black/50"
+    >
+      <PauseIcon className="size-5" />
+    </button>
+  );
+}
+
+function FadeGroup({ visible, children }: { visible: boolean; children: ReactNode }) {
+  return (
+    <div
+      aria-hidden={!visible}
+      className={cn(
+        'transition-opacity duration-500 motion-reduce:transition-none',
+        visible ? 'opacity-100' : 'opacity-0',
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+function PixabayCredit({
+  position,
+  windowControls,
+}: {
+  position: PlaybackHudPosition;
+  windowControls: boolean;
+}) {
+  const { t } = useI18n();
+  const { theme } = usePlaybackThemeState();
+  if (!isPixabayTheme(theme)) {
+    return null;
+  }
+  let placement = position === 'bottom' ? 'top-2' : 'bottom-6';
+  if (windowControls && position === 'bottom') {
+    placement = 'top-12';
+  }
+
+  return (
+    <p
+      className={cn(
+        'pointer-events-none absolute right-4 z-20 text-[0.6rem] text-white/30',
+        placement,
+      )}
+    >
+      {t('playback.pixabayCredit')}
+    </p>
+  );
+}
+
+function ScoreDisplay() {
+  const { t } = useI18n();
+  const { pitchScore, multiplayer, players } = usePlaybackMicState();
+
+  if (multiplayer) {
+    return <MultiplayerScores players={players} />;
+  }
+  return (
+    <div className={scoreTextClass(pitchScore)}>
+      {t('playback.score', { score: pitchScore ?? '--' })}
+    </div>
+  );
+}
+
+function hudPositionClass(position: PlaybackHudPosition): string {
+  return position === 'bottom'
+    ? 'bottom-[calc(2rem+env(safe-area-inset-bottom))] md:bottom-6'
+    : 'top-[4.25rem] md:top-3';
+}
+
 type PlaybackHudProps = {
   title: string;
   artist: string;
-  config: AppConfig | null;
   position?: PlaybackHudPosition;
   windowControls?: boolean;
 };
@@ -354,157 +336,58 @@ type PlaybackHudProps = {
 function PlaybackHudImpl({
   title,
   artist,
-  config,
   position = 'top',
   windowControls = false,
 }: PlaybackHudProps) {
-  const { duration, guideVolume, guideAvailable } = usePlaybackTransportState();
-  const { subscribe, getCurrentTime } = usePlaybackTransportActions();
-  const { theme, videoFlavor } = usePlaybackThemeState();
-  const { firstSegmentStart, lastSegmentEnd, introSkipLeadSec, segments, transcriptSource } =
-    usePlaybackTranscriptState();
-  const { handleSkipIntro, handleSkipOutro } = usePlaybackTranscriptActions();
-  const { pitchScore, micUserEnabled, micName, micMonitorUserEnabled, multiplayer, players } =
-    usePlaybackMicState();
-
-  const lastSecondRef = useRef(-1);
-  const timerRef = useRef<HTMLParagraphElement>(null);
-  const skipIntroRef = useRef<HTMLButtonElement>(null);
-  const skipOutroRef = useRef<HTMLButtonElement>(null);
-  const gapCaptionRef = useRef<HTMLOutputElement>(null);
-  const gapHintRef = useRef(0);
-
-  const showPixabayCredit = isPixabayTheme(theme);
+  const { paused } = usePlaybackTransportState();
   const hasTouch = useHasTouchInput();
-
-  // Update playback text without triggering React renders every frame.
-  useEffect(() => {
-    const updateGapCaption = (time: number) => {
-      const el = gapCaptionRef.current;
-      if (!el) {
-        return;
-      }
-      if (segments.length === 0) {
-        el.style.display = 'none';
-        return;
-      }
-      const idx = findCurrentSegment(segments, time, gapHintRef.current);
-      gapHintRef.current = idx;
-      const caption = computeLyricGapCaption(segments, time, idx);
-      if (typeof caption === 'string' && caption !== '') {
-        el.textContent = caption;
-        el.style.display = '';
-      } else {
-        el.style.display = 'none';
-      }
-    };
-
-    gapHintRef.current = 0;
-    if (timerRef.current) {
-      timerRef.current.textContent = `${formatTime(getCurrentTime())} / ${formatTime(duration)}`;
-    }
-    updateGapCaption(getCurrentTime());
-
-    return subscribe((time) => {
-      const sec = Math.floor(time);
-      if (sec !== lastSecondRef.current) {
-        lastSecondRef.current = sec;
-        if (timerRef.current) {
-          timerRef.current.textContent = `${formatTime(time)} / ${formatTime(duration)}`;
-        }
-      }
-
-      if (skipIntroRef.current) {
-        skipIntroRef.current.style.display =
-          time < firstSegmentStart - introSkipLeadSec ? '' : 'none';
-      }
-      if (skipOutroRef.current) {
-        skipOutroRef.current.style.display = time > lastSegmentEnd + 1 ? '' : 'none';
-      }
-      updateGapCaption(time);
-    });
-  }, [
-    subscribe,
-    getCurrentTime,
-    duration,
-    firstSegmentStart,
-    introSkipLeadSec,
-    lastSegmentEnd,
-    segments,
-  ]);
-
-  const hudPosition = hudPositionClass(position);
-  const rightHudOffset = windowControlsOffsetClass(position, windowControls);
-  const hudFlowClass = position === 'bottom' ? 'flex-col-reverse' : 'flex-col';
-  const skipButtonsClass = position === 'bottom' ? 'mb-2' : 'mt-2';
+  const active = useHudActivity(paused);
+  const flowClass = position === 'bottom' ? 'flex-col-reverse' : 'flex-col';
 
   return (
     <>
       <div
-        className={`pointer-events-auto absolute inset-x-0 z-20 flex justify-between gap-3 px-3 md:px-4 ${hudPosition}`}
+        className={cn(
+          'pointer-events-none absolute inset-x-0 z-20 flex gap-2 px-3 md:px-4',
+          flowClass,
+          hudPositionClass(position),
+        )}
       >
-        <div
-          className={`flex min-w-0 max-w-[58%] overflow-hidden sm:max-w-[34%] lg:max-w-[40%] ${hudFlowClass}`}
-        >
-          <h1 className="line-clamp-2 [overflow-wrap:anywhere] text-base leading-tight text-white md:text-[1.375rem]">
-            {title}
-          </h1>
-          <p className="line-clamp-1 [overflow-wrap:anywhere] text-sm text-white/70 md:text-base">
-            {artist}
-          </p>
-          <p ref={timerRef} className="text-sm text-white/70 md:text-base">
-            0:00 / {formatTime(duration)}
-          </p>
-          <output
-            ref={gapCaptionRef}
-            aria-live="polite"
-            className="truncate text-xs font-medium text-white/60 md:text-sm"
-            style={{ display: 'none' }}
-          />
-          <div className={`flex gap-2 ${skipButtonsClass}`}>
-            <SkipButton ref={skipIntroRef} label="Skip Intro" onClick={handleSkipIntro} />
-            <SkipButton ref={skipOutroRef} label="Skip Outro" onClick={handleSkipOutro} />
+        <div className={cn('flex justify-between gap-3', position === 'bottom' && 'items-end')}>
+          <div className={cn('flex min-w-0 max-w-[58%] sm:max-w-[40%]', flowClass)}>
+            <FadeGroup visible={active}>
+              <h1 className="line-clamp-2 [overflow-wrap:anywhere] text-base leading-tight text-white md:text-[1.375rem]">
+                {title}
+              </h1>
+              <p className="line-clamp-1 [overflow-wrap:anywhere] text-sm text-white/70 md:text-base">
+                {artist}
+              </p>
+              <PlaybackClock />
+            </FadeGroup>
+            <GapCaption />
+            <SkipButton position={position} />
           </div>
-        </div>
 
-        <div className={`flex min-w-0 items-end ${hudFlowClass} ${rightHudOffset}`}>
-          {multiplayer ? (
-            <MultiplayerScores players={players} />
-          ) : (
-            <div className={scoreTextClass(pitchScore)}>Score: {pitchScore ?? '--'}</div>
-          )}
-          <div className="my-1.5 hidden h-px w-full bg-white/20 sm:block" aria-hidden="true" />
-          <div className="hidden sm:block">
-            <SettingsInfo
-              guideVolume={guideVolume}
-              guideAvailable={guideAvailable}
-              micUserEnabled={micUserEnabled}
-              micName={micName}
-              micMonitorUserEnabled={micMonitorUserEnabled}
-              multiplayer={multiplayer}
-              theme={theme}
-              videoFlavor={videoFlavor}
-              showShortcuts={!hasTouch}
-            />
+          <div
+            className={cn(
+              'flex min-w-0 items-end gap-2',
+              flowClass,
+              windowControls && position === 'top' && 'md:pt-9',
+            )}
+          >
+            <ScoreDisplay />
+            {hasTouch && <TouchPauseButton />}
           </div>
-          <TouchControls config={config} hasTouch={hasTouch} position={position} />
         </div>
       </div>
 
-      {showPixabayCredit && (
-        <p
-          className={`${NOTE_BASE_CLASS} ${creditPositionClass(position, windowControls)} right-4`}
-        >
-          Videos by Pixabay
-        </p>
-      )}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:px-4">
+        <PlaybackProgress emphasized={active} />
+      </div>
 
-      <Disclaimer
-        source={transcriptSource}
-        position={position}
-        noStems={!guideAvailable}
-        micActive={micUserEnabled}
-      />
+      <PixabayCredit position={position} windowControls={windowControls} />
+
+      <TimedDisclaimer position={position} />
     </>
   );
 }

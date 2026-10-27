@@ -2,10 +2,12 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
 import { createProfile, deleteProfile, switchProfile } from '@/bridge/profile';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { PROFILES } from '@/shared/query-keys';
 
 export const useProfileMutations = () => {
   const queryClient = useQueryClient();
+  const { t } = useI18n();
 
   return useMutation({
     mutationFn: ({
@@ -30,7 +32,7 @@ export const useProfileMutations = () => {
       void queryClient.invalidateQueries({ queryKey: PROFILES });
     },
     onError: (error: Error) => {
-      toast.error(`Error updating profiles: ${error.message}`);
+      toast.error(t('profile.updateFailed', { detail: error.message }));
     },
   });
 };

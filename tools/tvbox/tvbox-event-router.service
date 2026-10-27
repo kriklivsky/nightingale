@@ -1,0 +1,10 @@
+[Unit]
+Description=Orange Pi event Ethernet role detection
+After=NetworkManager.service systemd-networkd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/libexec/tvbox-network/network_router.py
+TimeoutStartSec=15
+UMask=0077
+NoNewPrivileges=yes

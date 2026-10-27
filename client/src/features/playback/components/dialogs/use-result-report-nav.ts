@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react';
 
 import { useDialogNav } from '@/features/menu/hooks/use-dialog-nav';
+import type { Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 
 export const REPORT_PAGE_SIZE = 6;
 
@@ -17,18 +19,23 @@ type Options = {
 };
 
 function detailActions(
+  t: Translate,
   page: number,
   pages: number,
   setPage: (page: number | null) => void,
 ): ResultAction[] {
   const actions: ResultAction[] = [];
   if (page > 0) {
-    actions.push({ label: 'Previous lines', primary: false, onClick: () => setPage(page - 1) });
+    actions.push({
+      label: t('result.previousLines'),
+      primary: false,
+      onClick: () => setPage(page - 1),
+    });
   }
   if (page + 1 < pages) {
-    actions.push({ label: 'Next lines', primary: true, onClick: () => setPage(page + 1) });
+    actions.push({ label: t('result.nextLines'), primary: true, onClick: () => setPage(page + 1) });
   }
-  actions.push({ label: 'Overview', primary: false, onClick: () => setPage(null) });
+  actions.push({ label: t('result.overview'), primary: false, onClick: () => setPage(null) });
   return actions;
 }
 
@@ -41,6 +48,7 @@ export function useResultReportNav({
   onNext,
   extraActions = [],
 }: Options) {
+  const { t } = useI18n();
   const [page, setPage] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const pages = Math.ceil(phraseCount / REPORT_PAGE_SIZE);
@@ -51,18 +59,18 @@ export function useResultReportNav({
   };
 
   if (page !== null) {
-    actions.push(...detailActions(page, pages, changePage));
+    actions.push(...detailActions(t, page, pages, changePage));
   } else {
     if (onNext) {
       actions.push({
-        label: nextPending ? 'Preparing…' : 'Next Song',
+        label: nextPending ? t('result.preparing') : t('result.nextSong'),
         primary: true,
         onClick: onNext,
       });
     }
     if (phraseCount > 0) {
       actions.push({
-        label: 'Line-by-line report',
+        label: t('result.lineReport'),
         primary: !onNext,
         onClick: () => changePage(0),
       });

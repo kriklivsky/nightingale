@@ -17,8 +17,8 @@ use crate::error::NightingaleError;
 use crate::library_db;
 use crate::library_model::{LibraryMenuFilters, SongTarget};
 use crate::lyrics::{
-    TimedLyrics, fetch_lrclib_timed_lyrics, load_lyrics_file, lrclib_retry_delay,
-    write_lrclib_transcript, write_lyrics_file,
+    LineWindow, LyricsFile, TimedLyrics, fetch_lrclib_timed_lyrics, load_lyrics_file,
+    lrclib_retry_delay, write_lrclib_transcript, write_lyrics_file,
 };
 use crate::song::{
     Song, SongOrigin, TranscriptMetaInfo, TranscriptSource, compute_file_hash, read_transcript_meta,
@@ -876,6 +876,8 @@ fn materialize_lyrics_from_transcript(cache: &CacheDir, file_hash: &str) {
     struct Segment {
         #[serde(default)]
         text: String,
+        start: Option<f64>,
+        end: Option<f64>,
     }
 
     #[derive(Deserialize)]
@@ -888,18 +890,45 @@ fn materialize_lyrics_from_transcript(cache: &CacheDir, file_hash: &str) {
         return;
     };
 
-    let lines: Vec<String> = parsed
+    let segments: Vec<Segment> = parsed
         .segments
         .into_iter()
-        .map(|s| s.text.trim().to_string())
-        .filter(|l| !l.is_empty())
+        .filter(|s| !s.text.trim().is_empty())
         .collect();
 
-    if lines.is_empty() {
+    if segments.is_empty() {
         return;
     }
 
-    if let Err(e) = write_lyrics_file(cache, file_hash, &lines) {
+    // Keep the timed line spans as alignment windows so realignment stays
+    // anchored to each line instead of aligning the whole song as one text.
+    // Spans that run backwards come from a broken earlier alignment and are
+    // not usable as anchors.
+    let windows: Option<Vec<LineWindow>> = segments
+        .iter()
+        .map(|s| match (s.start, s.end) {
+            (Some(start), Some(end))
+                if start.is_finite() && end.is_finite() && 0.0 <= start && start < end =>
+            {
+                Some(LineWindow { start, end })
+            }
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+        .filter(|windows| {
+            windows
+                .windows(2)
+                .all(|pair| pair[0].start <= pair[1].start)
+        });
+    let lyrics = LyricsFile {
+        lines: segments
+            .into_iter()
+            .map(|s| s.text.trim().to_string())
+            .collect(),
+        windows,
+    };
+
+    if let Err(e) = write_lyrics_file(cache, file_hash, &lyrics) {
         warn!("[analyzer] Failed to materialize lyrics from transcript for {file_hash}: {e}");
     }
 }

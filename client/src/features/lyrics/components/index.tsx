@@ -26,6 +26,8 @@ import {
   DialogTitle,
 } from '@/shared/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs';
+import type { MessageKey, Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { LrclibCandidate } from '@/types/LrclibCandidate';
 import type { Song } from '@/types/Song';
 
@@ -79,13 +81,13 @@ type FooterMessageInput = {
   stemsSeparated: boolean;
 };
 
-const footerMessage = (input: FooterMessageInput): string | undefined => {
+const footerMessage = (t: Translate, input: FooterMessageInput): string | undefined => {
   const hints: string[] = [];
   if (input.useProvidedTiming && input.lrcLevel === 'line') {
-    hints.push('Line-level LRC highlights whole lines — no per-word timing.');
+    hints.push(t('lyrics.lineLevelHint'));
   }
   if (input.hasLrc && input.useProvidedTiming && !input.willSeparate && !input.stemsSeparated) {
-    hints.push('Original mix is used, so pitch scoring will likely be inaccurate.');
+    hints.push(`${t('playback.disclaimer.originalMix')}.`);
   }
 
   return hints.length > 0 ? hints.join(' ') : undefined;
@@ -138,14 +140,14 @@ const getSaveLabel = (
   useProvidedTiming: boolean,
   willSeparate: boolean,
   isAnalyzed: boolean,
-): string => {
+): MessageKey => {
   if (useProvidedTiming) {
     if (willSeparate) {
-      return 'Save & separate stems';
+      return 'lyrics.saveSeparate';
     }
-    return isAnalyzed ? 'Use timed lyrics' : 'Save timed lyrics';
+    return isAnalyzed ? 'lyrics.useTimed' : 'lyrics.saveTimed';
   }
-  return isAnalyzed ? 'Save & realign' : 'Save & analyze';
+  return isAnalyzed ? 'lyrics.saveRealign' : 'lyrics.saveAnalyze';
 };
 
 type NavLayout = {
@@ -252,6 +254,7 @@ type EditLyricsWorkspaceProps = {
 };
 
 const EditLyricsWorkspace = (props: EditLyricsWorkspaceProps) => {
+  const { t } = useI18n();
   if (!props.showMatches) {
     return <div className="flex min-h-0 flex-1 flex-col">{props.editorPane}</div>;
   }
@@ -279,10 +282,10 @@ const EditLyricsWorkspace = (props: EditLyricsWorkspaceProps) => {
                 props.headerSegment !== null && props.isFocused(props.headerSegment, slot),
               )}
             >
-              {tab === 'edit' ? 'Edit' : 'LRCLIB matches'}
+              {tab === 'edit' ? t('lyrics.tabEdit') : t('lyrics.tabMatches')}
               {tab === 'lrclib' &&
                 (props.matchesLoading ? (
-                  <Loader2Icon className="size-3 animate-spin" />
+                  <Loader2Icon className="size-3 animate-spin motion-reduce:animate-none" />
                 ) : (
                   `(${props.candidateCount})`
                 ))}
@@ -324,6 +327,7 @@ const EditLyricsWorkspace = (props: EditLyricsWorkspaceProps) => {
 };
 
 export const EditLyricsDialog = () => {
+  const { t } = useI18n();
   const { mode, close } = useDialog();
   const song = editedSong(mode);
   const open = song !== null;
@@ -383,9 +387,9 @@ export const EditLyricsDialog = () => {
     editor.text,
   );
 
-  const saveLabel = getSaveLabel(useProvidedTiming, willSeparate, isAnalyzed);
+  const saveLabel = t(getSaveLabel(useProvidedTiming, willSeparate, isAnalyzed));
 
-  const footerHint = footerMessage({
+  const footerHint = footerMessage(t, {
     hasLrc,
     useProvidedTiming,
     lrcLevel,
@@ -632,9 +636,9 @@ export const EditLyricsDialog = () => {
       <DialogContent className="flex h-[85vh] flex-col sm:max-w-2xl">
         <div ref={containerRef} className="contents">
           <DialogHeader>
-            <DialogTitle>Edit lyrics</DialogTitle>
+            <DialogTitle>{t('songAction.editLyrics')}</DialogTitle>
             <DialogDescription>
-              Type plain lyrics to run alignment, or paste{' '}
+              {t('lyrics.descriptionBefore')}{' '}
               <a
                 href={LRC_SPEC_URL}
                 rel="noreferrer"
@@ -646,7 +650,7 @@ export const EditLyricsDialog = () => {
               >
                 LRC / Enhanced LRC
               </a>{' '}
-              to set timing directly.
+              {t('lyrics.descriptionAfter')}
             </DialogDescription>
           </DialogHeader>
 

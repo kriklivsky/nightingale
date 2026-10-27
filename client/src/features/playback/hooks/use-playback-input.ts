@@ -10,6 +10,7 @@ import {
   usePlaybackTransportActions,
   usePlaybackTransportState,
 } from '@/features/playback/providers';
+import { skipTarget } from '@/features/playback/utils/lyrics-gap';
 import { useLatestRef } from '@/shared/hooks/use-latest-ref';
 import type { AppConfig } from '@/types/AppConfig';
 
@@ -58,6 +59,11 @@ function useDebouncedVolumePersist(
 
   return { schedule };
 }
+
+export type PlaybackVolumeControls = {
+  applyOutputVolume: (volume: number) => void;
+  applyGuideVolume: (volume: number) => void;
+};
 
 type KeyboardActions = {
   paused: boolean;
@@ -157,29 +163,6 @@ function handleGuideVolumeNav(
   return true;
 }
 
-type SkipNavContext = {
-  isReady: boolean;
-  getCurrentTime: () => number;
-  firstSegmentStart: number;
-  lastSegmentEnd: number;
-  introSkipLeadSec: number;
-  skipIntro: () => void;
-  skipOutro: () => void;
-};
-
-/** Confirm skips the intro before the first lyric and the outro after the last. */
-function handleSkipNav(action: NavAction, ctx: SkipNavContext): void {
-  if (!action.confirm || !ctx.isReady) {
-    return;
-  }
-  const t = ctx.getCurrentTime();
-  if (t < ctx.firstSegmentStart - ctx.introSkipLeadSec) {
-    ctx.skipIntro();
-  } else if (t > ctx.lastSegmentEnd + 1) {
-    ctx.skipOutro();
-  }
-}
-
 /**
  * Wires keyboard + gamepad input for the playback session. Reads everything it
  * needs from the playback contexts; only the app config is passed in so we can
@@ -191,16 +174,17 @@ function handleSkipNav(action: NavAction, ctx: SkipNavContext): void {
  * guide vocal volume while guide vocals are available. Both go through an
  * `apply*Volume` callback that clamps to [0, 1], updates the audio engine
  * immediately, and coalesces the config write so held keys or repeats don't
- * hit disk on every step.
+ * hit disk on every step. The same callbacks are returned for the pause menu.
  */
-export function usePlaybackInput(config: AppConfig | null) {
+export function usePlaybackInput(config: AppConfig | null): PlaybackVolumeControls {
   const { paused, isReady, isPlaying, guideVolume, guideAvailable, outputVolume } =
     usePlaybackTransportState();
-  const { getCurrentTime, setGuideVolume, setOutputVolume, handlePause, handleContinue } =
+  const { setGuideVolume, setOutputVolume, handlePause, handleContinue, getCurrentTime } =
     usePlaybackTransportActions();
-  const { cycleTheme, cycleFlavor } = usePlaybackThemeActions();
-  const { firstSegmentStart, lastSegmentEnd, introSkipLeadSec } = usePlaybackTranscriptState();
+  const { segments, firstSegmentStart, lastSegmentEnd, introSkipLeadSec } =
+    usePlaybackTranscriptState();
   const { handleSkipIntro, handleSkipOutro } = usePlaybackTranscriptActions();
+  const { cycleTheme, cycleFlavor } = usePlaybackThemeActions();
   const { handleToggleMic, handleCycleMic, handleToggleMicMonitor } = usePlaybackMicActions();
 
   const persistConfig = usePlaybackConfigPersist(config);
@@ -243,11 +227,37 @@ export function usePlaybackInput(config: AppConfig | null) {
     [guideVolumeRef, setGuideVolume, guidePersist],
   );
 
+  const handleConfirm = useCallback(() => {
+    const skip = skipTarget(getCurrentTime(), {
+      segmentCount: segments.length,
+      firstSegmentStart,
+      lastSegmentEnd,
+      introSkipLeadSec,
+    });
+    if (skip === 'intro') {
+      handleSkipIntro();
+    } else if (skip === 'outro') {
+      handleSkipOutro();
+    } else {
+      handleToggleMicMonitor();
+    }
+  }, [
+    firstSegmentStart,
+    getCurrentTime,
+    handleSkipIntro,
+    handleSkipOutro,
+    handleToggleMicMonitor,
+    introSkipLeadSec,
+    lastSegmentEnd,
+    segments.length,
+  ]);
+
   // Nav input (keyboard arrows + CEC remote + gamepad):
   // - back = pause/resume
   // - up/down = master output (speaker) volume while a song is actively playing
   // - left/right = guide vocal volume while a song plays with guide vocals
-  // - confirm = skip intro/outro
+  // - confirm = skip the intro/outro while that skip is offered, otherwise
+  //   toggle microphone monitoring without disabling scoring
   // Arrows are only consumed while `isPlaying && !paused`; otherwise they fall
   // through untouched (the paused dialog still navigates with them, and outside
   // this screen other nav consumers keep working as before).
@@ -255,14 +265,9 @@ export function usePlaybackInput(config: AppConfig | null) {
     useCallback(
       (action) => {
         if (action.back) {
-          if (pausedRef.current) {
-            handleContinue();
-          } else {
-            handlePause();
-          }
+          (pausedRef.current ? handleContinue : handlePause)();
           return;
         }
-
         if (pausedRef.current) {
           return;
         }
@@ -282,27 +287,16 @@ export function usePlaybackInput(config: AppConfig | null) {
           return;
         }
 
-        handleSkipNav(action, {
-          isReady,
-          getCurrentTime,
-          firstSegmentStart,
-          lastSegmentEnd,
-          introSkipLeadSec,
-          skipIntro: handleSkipIntro,
-          skipOutro: handleSkipOutro,
-        });
+        if (action.confirm && isReady && isPlaying) {
+          handleConfirm();
+        }
       },
       [
+        handleConfirm,
         handlePause,
         handleContinue,
         pausedRef,
         isReady,
-        getCurrentTime,
-        firstSegmentStart,
-        lastSegmentEnd,
-        introSkipLeadSec,
-        handleSkipIntro,
-        handleSkipOutro,
         isPlaying,
         guideAvailable,
         applyOutputVolume,
@@ -347,4 +341,6 @@ export function usePlaybackInput(config: AppConfig | null) {
     handleCycleMic,
     handleToggleMicMonitor,
   ]);
+
+  return { applyOutputVolume, applyGuideVolume };
 }

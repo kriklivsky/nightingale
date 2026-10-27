@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { TrophyIcon } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 import type { PlaybackPlayer } from '@/bridge/playback-session';
 import type { PlaybackPlayerResult } from '@/features/playback/hooks/use-playback-result';
@@ -22,6 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/shared/components/ui/table';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 import type { ScoreRecord } from '@/types/ScoreRecord';
 import type { Song } from '@/types/Song';
@@ -31,6 +33,7 @@ import { PitchReportLines, PitchReportOverview } from './pitch-report';
 import { useResultReportNav } from './use-result-report-nav';
 
 const TOP_LIMIT = 5;
+const COUNT_UP_MS = 1200;
 
 const RING = 'ring-2 ring-primary';
 const NO_FOCUS_RING = 'focus-visible:ring-0 focus-visible:border-transparent';
@@ -50,12 +53,42 @@ type Props = {
   onNext?: (players?: readonly PlaybackPlayer[]) => void;
 };
 
+function prefersReducedMotion(): boolean {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/** Counts the shown score up from zero once the dialog opens. */
+function useCountUp(target: number, active: boolean): number {
+  const [value, setValue] = useState(0);
+  const [animate] = useState(() => !prefersReducedMotion());
+
+  useEffect(() => {
+    if (!active || !animate) {
+      return undefined;
+    }
+    const startedAt = performance.now();
+    let frame = 0;
+    const step = () => {
+      const progress = Math.min(1, (performance.now() - startedAt) / COUNT_UP_MS);
+      setValue(Math.round(target * (1 - (1 - progress) ** 3)));
+      if (progress < 1) {
+        frame = requestAnimationFrame(step);
+      }
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [active, animate, target]);
+
+  return animate ? value : target;
+}
+
 function useResultSelection(
   results: readonly PlaybackPlayerResult[],
   soloScore: number,
   soloReport: PitchReport | null,
   onNext: Props['onNext'],
 ) {
+  const { t } = useI18n();
   const [reportIndex, setReportIndex] = useState(0);
   const [setupOpen, setSetupOpen] = useState(false);
   const selectedResult = results.at(reportIndex);
@@ -65,13 +98,13 @@ function useResultSelection(
   const extraActions = [];
   if (multiplayer) {
     extraActions.push({
-      label: 'Next player report',
+      label: t('result.nextPlayerReport'),
       primary: false,
       onClick: () => setReportIndex((index) => (index + 1) % results.length),
     });
     if (onNext) {
       extraActions.push({
-        label: 'Change players',
+        label: t('result.changePlayers'),
         primary: false,
         onClick: () => setSetupOpen(true),
       });
@@ -88,14 +121,16 @@ function MultiplayerResults({
   results: readonly PlaybackPlayerResult[];
   selectedResult: PlaybackPlayerResult | undefined;
 }) {
+  const { t } = useI18n();
+
   return (
     <div className="space-y-3">
-      <Table aria-label="Multiplayer results">
+      <Table aria-label={t('result.multiplayerResults')}>
         <TableHeader>
           <TableRow>
-            <TableHead>Rank</TableHead>
-            <TableHead>Player</TableHead>
-            <TableHead className="text-right">Score</TableHead>
+            <TableHead>{t('result.rank')}</TableHead>
+            <TableHead>{t('result.player')}</TableHead>
+            <TableHead className="text-right">{t('result.score')}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -105,15 +140,100 @@ function MultiplayerResults({
               className={cn(player.id === selectedResult?.id && 'bg-primary/10')}
             >
               <TableCell>{index + 1}</TableCell>
-              <TableCell>{player.profile ?? player.id}</TableCell>
+              <TableCell>
+                <span className="flex items-center gap-2">
+                  {player.profile ?? player.id}
+                  {player.personalBest && (
+                    <TrophyIcon
+                      className="size-4 text-amber-500"
+                      aria-label={t('result.newPersonalBest')}
+                    />
+                  )}
+                </span>
+              </TableCell>
               <TableCell className="text-right tabular-nums">{player.score}</TableCell>
             </TableRow>
           ))}
         </TableBody>
       </Table>
       <p className="text-sm text-muted-foreground">
-        Report: {selectedResult?.profile ?? selectedResult?.id}
+        {t('result.reportFor', { player: selectedResult?.profile ?? selectedResult?.id ?? '' })}
       </p>
+    </div>
+  );
+}
+
+type ScoreSummaryProps = {
+  score: number;
+  open: boolean;
+  personalBest: boolean;
+  board: readonly ScoreRecord[];
+  activeProfile: string | null;
+};
+
+function ScoreSummary({ score, open, personalBest, board, activeProfile }: ScoreSummaryProps) {
+  const { t } = useI18n();
+  const shownScore = useCountUp(score, open);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col items-center gap-1">
+        <p
+          className="text-6xl font-semibold text-primary tabular-nums"
+          aria-label={t('result.scoreValue', { score })}
+        >
+          {shownScore}
+        </p>
+        <Stars score={shownScore} size="lg" className="mt-1" />
+        {personalBest && (
+          <output className="mt-2 flex items-center gap-2 rounded-full bg-amber-500/15 px-3 py-1 text-sm font-semibold text-amber-600 dark:text-amber-400">
+            <TrophyIcon className="size-4" aria-hidden="true" />
+            {t('result.newPersonalBest')}
+          </output>
+        )}
+      </div>
+
+      {board.length > 0 ? (
+        <>
+          <div className="h-px w-full bg-border" />
+          <p className="text-center text-sm font-medium tracking-wide text-muted-foreground">
+            {t('result.bestScores')}
+          </p>
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="h-10 text-sm">#</TableHead>
+                <TableHead className="h-10 text-sm">{t('result.profile')}</TableHead>
+                <TableHead className="h-10 text-right text-sm">{t('result.score')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {board.map(({ profile, score: rowScore }, i) => {
+                const isCurrent = profile === activeProfile && rowScore === score;
+
+                return (
+                  <TableRow key={profile} className={cn(isCurrent && 'bg-primary/10')}>
+                    <TableCell className="py-2 text-sm tabular-nums">{i + 1}</TableCell>
+                    <TableCell
+                      className={cn('py-2 text-sm', isCurrent && 'font-medium text-primary')}
+                    >
+                      {profile}
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        'py-2 text-right text-sm tabular-nums',
+                        isCurrent && 'font-medium text-primary',
+                      )}
+                    >
+                      {rowScore}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -134,7 +254,9 @@ export const ResultDialog = ({
 }: Props) => {
   const { setupOpen, setSetupOpen, score, report, selectedResult, multiplayer, extraActions } =
     useResultSelection(results, soloScore, soloReport, onNext);
+  const { t } = useI18n();
   const board = topScoresForSong(scores, song.file_hash, TOP_LIMIT);
+  const personalBest = selectedResult?.personalBest === true;
 
   const { focusedIndex, page, pages, actions, containerRef } = useResultReportNav({
     open: open && !setupOpen,
@@ -167,62 +289,13 @@ export const ResultDialog = ({
             <PitchReportLines report={report} page={page} pages={pages} />
           ) : (
             <div className="grid gap-6 sm:grid-cols-3">
-              <div className="space-y-4">
-                <div className="flex flex-col items-center gap-1">
-                  <p
-                    className="text-6xl font-semibold text-primary tabular-nums"
-                    aria-label={`Score ${score}`}
-                  >
-                    {score}
-                  </p>
-                  <Stars score={score} size="lg" className="mt-1" />
-                </div>
-
-                {board.length > 0 ? (
-                  <>
-                    <div className="h-px w-full bg-border" />
-                    <p className="text-center text-sm font-medium tracking-wide text-muted-foreground">
-                      BEST SCORES
-                    </p>
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="hover:bg-transparent">
-                          <TableHead className="h-10 text-sm">#</TableHead>
-                          <TableHead className="h-10 text-sm">Profile</TableHead>
-                          <TableHead className="h-10 text-right text-sm">Score</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {board.map(({ profile, score: rowScore }, i) => {
-                          const isCurrent = profile === activeProfile && rowScore === score;
-
-                          return (
-                            <TableRow key={profile} className={cn(isCurrent && 'bg-primary/10')}>
-                              <TableCell className="py-2 text-sm tabular-nums">{i + 1}</TableCell>
-                              <TableCell
-                                className={cn(
-                                  'py-2 text-sm',
-                                  isCurrent && 'font-medium text-primary',
-                                )}
-                              >
-                                {profile}
-                              </TableCell>
-                              <TableCell
-                                className={cn(
-                                  'py-2 text-right text-sm tabular-nums',
-                                  isCurrent && 'font-medium text-primary',
-                                )}
-                              >
-                                {rowScore}
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })}
-                      </TableBody>
-                    </Table>
-                  </>
-                ) : null}
-              </div>
+              <ScoreSummary
+                score={score}
+                open={open}
+                personalBest={personalBest}
+                board={board}
+                activeProfile={activeProfile}
+              />
               <div className="sm:col-span-2">
                 <PitchReportOverview report={report} guideAvailable={guideAvailable} />
               </div>
@@ -255,7 +328,7 @@ export const ResultDialog = ({
           onOpenChange={setSetupOpen}
           onStart={onNext}
           queuePlayback
-          submitLabel="Start next song"
+          submitLabel={t('result.startNextSong')}
         />
       )}
     </Dialog>

@@ -8,6 +8,7 @@ import { SongRowActions } from './song-row-actions';
 
 type SongTableRowProps = {
   bestScore?: number;
+  hasYoutubeVideo: boolean;
   measure: (element: HTMLElement | null) => void;
 } & SongItemProps;
 
@@ -27,6 +28,7 @@ export const SongTableRow = memo(
     onPlay,
     onDelete,
     bestScore,
+    hasYoutubeVideo,
     measure,
   }: SongTableRowProps) => {
     const onKeyDown = (event: KeyboardEvent<HTMLTableRowElement>) => {
@@ -57,7 +59,7 @@ export const SongTableRow = memo(
       >
         {SONG_COLUMNS.map((column) => (
           <td key={column.id} className={column.tdClassName}>
-            {column.cell(song, queueStatus, bestScore)}
+            {column.cell(song, queueStatus, bestScore, hasYoutubeVideo)}
           </td>
         ))}
         <td className="song-table-actions px-2 py-1">

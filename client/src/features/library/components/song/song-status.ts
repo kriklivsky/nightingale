@@ -1,47 +1,58 @@
 import { ANALYSIS_STATUS_STYLES } from '@/features/library/lib/analysis-status-styles';
+import type { MessageKey, Translate } from '@/shared/i18n/translator';
 import type { QueuedStatus } from '@/types/QueuedStatus';
 import type { Song } from '@/types/Song';
 
 export type SongStatusInfo = {
-  label: string;
+  labelKey: MessageKey;
+  progress?: number;
   variant: 'default' | 'secondary' | 'destructive' | 'outline';
   className?: string;
   isAnalyzing?: boolean;
   isReady?: boolean;
 };
 
-export function formatTranscriptSource(source: Song['transcript_source']): string {
+export function transcriptSourceKey(source: Song['transcript_source']): MessageKey {
   if (source === 'Lyrics') {
-    return 'AI aligned';
+    return 'transcript.aligned';
   }
   if (source === 'Usdx') {
-    return 'USDX';
+    return 'transcript.usdx';
   }
   if (source === 'Lrc') {
-    return 'LRC';
+    return 'transcript.lrc';
   }
-  return 'AI transcribed';
+  return 'transcript.generated';
+}
+
+export function songStatusLabel(t: Translate, status: SongStatusInfo): string {
+  return t(status.labelKey, { progress: status.progress ?? 0 });
 }
 
 export function getSongStatusInfo(isAnalyzed: boolean, queueStatus?: QueuedStatus): SongStatusInfo {
   if (queueStatus === 'Queued') {
-    return { label: 'Queued', variant: 'secondary', className: ANALYSIS_STATUS_STYLES.queued };
+    return {
+      labelKey: 'status.queued',
+      variant: 'secondary',
+      className: ANALYSIS_STATUS_STYLES.queued,
+    };
   }
 
   if (typeof queueStatus === 'object') {
     if ('Analyzing' in queueStatus) {
       return {
-        label: `Analyzing ${queueStatus.Analyzing}%`,
+        labelKey: 'status.analyzingProgress',
+        progress: queueStatus.Analyzing,
         variant: 'default',
-        className: `${ANALYSIS_STATUS_STYLES.analysing} animate-pulse`,
+        className: `${ANALYSIS_STATUS_STYLES.analysing} animate-pulse motion-reduce:animate-none`,
         isAnalyzing: true,
       };
     }
     if ('Failed' in queueStatus) {
       return {
-        label: queueStatus.Failed.startsWith('No synchronized lyrics found')
-          ? 'No timed lyrics'
-          : 'Failed',
+        labelKey: queueStatus.Failed.startsWith('No synchronized lyrics found')
+          ? 'status.noTimedLyrics'
+          : 'status.failed',
         variant: 'destructive',
       };
     }
@@ -49,12 +60,12 @@ export function getSongStatusInfo(isAnalyzed: boolean, queueStatus?: QueuedStatu
 
   if (isAnalyzed) {
     return {
-      label: 'Ready',
+      labelKey: 'status.ready',
       variant: 'default',
       className: ANALYSIS_STATUS_STYLES.analysed,
       isReady: true,
     };
   }
 
-  return { label: 'Not analyzed', variant: 'outline' };
+  return { labelKey: 'status.notAnalyzed', variant: 'outline' };
 }

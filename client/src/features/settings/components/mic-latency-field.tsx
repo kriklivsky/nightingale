@@ -6,7 +6,8 @@ import { Button } from '@/shared/components/ui/button';
 import { Field } from '@/shared/components/ui/field';
 import { Label } from '@/shared/components/ui/label';
 import { Slider } from '@/shared/components/ui/slider';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/shared/components/ui/tooltip';
+import { useI18n } from '@/shared/i18n/use-i18n';
+import { cn } from '@/shared/utils/cn';
 
 import { Hint } from './settings-controls';
 
@@ -29,6 +30,7 @@ export function MicLatencyField({
   onMeasuringChange,
   onLatencyChange,
 }: MicLatencyFieldProps) {
+  const { t } = useI18n();
   const [measuring, setMeasuring] = useState(false);
   const latencyMs = Math.round(latencySec * 1000);
 
@@ -42,10 +44,10 @@ export function MicLatencyField({
     try {
       const measured = await measureMicLatencySec(selectedMicId);
       onLatencyChange(measured);
-      toast.success(`Mic latency measured: ${Math.round(measured * 1000)} ms`);
+      toast.success(t('settings.latency.measured', { value: Math.round(measured * 1000) }));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(`Mic latency test failed: ${message}`);
+      toast.error(t('settings.latency.failed', { detail: message }));
     } finally {
       setMeasuring(false);
       onMeasuringChange?.(false);
@@ -54,8 +56,8 @@ export function MicLatencyField({
 
   return (
     <Field>
-      <Label>Mic latency compensation</Label>
-      <Hint>Aligns mic pitch with guide vocals for scoring. Current value: {latencyMs} ms</Hint>
+      <Label>{t('settings.latency.label')}</Label>
+      <Hint>{t('settings.latency.hint', { value: latencyMs })}</Hint>
       <Slider
         min={0}
         max={500}
@@ -64,22 +66,15 @@ export function MicLatencyField({
         onValueChange={([ms]) => onLatencyChange(ms / 1000)}
         className={sliderClassName}
       />
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="outline"
-            onClick={() => void runTest()}
-            disabled={disabled || measuring}
-            className={buttonClassName}
-          >
-            {measuring ? 'Measuring...' : 'Measure latency'}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent align="end">
-          Plays a short beep, listens for it through the selected mic, then saves the delay used for
-          scoring. Use speakers, or hold one headphone close to the mic.
-        </TooltipContent>
-      </Tooltip>
+      <Button
+        variant="outline"
+        onClick={() => void runTest()}
+        disabled={disabled || measuring}
+        className={cn('w-fit', buttonClassName)}
+      >
+        {measuring ? t('settings.latency.measuring') : t('settings.latency.measure')}
+      </Button>
+      <Hint>{t('settings.latency.measureHint')}</Hint>
     </Field>
   );
 }

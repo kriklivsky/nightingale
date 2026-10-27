@@ -65,6 +65,16 @@ async fn dispatch(state: AppState, name: &str, payload: Value) -> CmdResult {
     let events = state.events.clone();
 
     match name {
+        "list_song_video_hashes" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Args {}
+            let _: Args = deserialize(payload)?;
+            let hashes = read_library(app_core::list_song_video_hashes)
+                .await?
+                .map_err(ApiError::bad_request)?;
+            serde_json::to_value(hashes).map_err(serde_err)
+        }
         // ── Init/window stubs ────────────────────────────────────────────
         "frontend_ready" | "window_immersive" | "minimize_window" => Ok(Value::Null),
 

@@ -2,6 +2,7 @@ mod analyzer;
 mod backgrounds;
 mod cache;
 mod config;
+mod keyboard;
 mod logging;
 mod lyrics;
 mod microphones;
@@ -26,13 +27,14 @@ use backgrounds::{
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use cache::{calculate_cache_stats, clear_all, clear_models_command, clear_videos_command};
 use config::{load_config, save_config};
+use keyboard::hardware_keyboard_available;
 use lyrics::{
     align_lrc_lyrics, apply_timed_lyrics, load_lyrics, load_sidecar_lrc, provide_lrc, save_lyrics,
     search_lrclib_lyrics,
 };
 use microphones::{
     list_microphones, set_monitor_gain, start_configured_monitor, start_mic_capture,
-    stop_mic_capture,
+    stop_mic_capture, update_mic_capture_options,
 };
 use playback::{
     ensure_mp3_stems, ensure_playable_source_video, fetch_pixabay_videos, get_audio_paths,
@@ -53,8 +55,8 @@ use scanner::{
     plex_poll_pin, reconcile_cache, set_library_source, set_song_favorite, trigger_scan,
 };
 use song_video::{
-    download_song_video, get_song_video, remove_song_video, search_song_videos,
-    set_song_video_offset,
+    download_song_video, get_song_video, list_song_video_hashes, remove_song_video,
+    search_song_videos, set_song_video_offset,
 };
 use tauri::{Manager, RunEvent, WebviewWindowBuilder};
 use vendor::{is_ready, trigger_setup};
@@ -105,10 +107,11 @@ fn minimize_window(window: tauri::WebviewWindow) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "linux")]
-    if std::env::var_os("TVBOX_STATUS").is_some()
-        && std::env::var_os("GST_PLUGIN_FEATURE_RANK").is_none()
-    {
-        std::env::set_var("GST_PLUGIN_FEATURE_RANK", "openh264dec:512");
+    if std::env::var_os("TVBOX_STATUS").is_some() {
+        std::env::set_var("GIO_USE_NETWORK_MONITOR", "netlink");
+        if std::env::var_os("GST_PLUGIN_FEATURE_RANK").is_none() {
+            std::env::set_var("GST_PLUGIN_FEATURE_RANK", "mppvideodec:768,openh264dec:512");
+        }
     }
 
     logging::init();
@@ -124,6 +127,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Init
             frontend_ready,
+            hardware_keyboard_available,
             window_immersive,
             minimize_window,
             load_window_state,
@@ -205,6 +209,7 @@ pub fn run() {
             fetch_pixabay_videos,
             get_media_endpoint,
             get_song_video,
+            list_song_video_hashes,
             search_song_videos,
             download_song_video,
             set_song_video_offset,
@@ -212,6 +217,7 @@ pub fn run() {
             list_microphones,
             start_mic_capture,
             stop_mic_capture,
+            update_mic_capture_options,
             // Vendor
             is_ready,
             trigger_setup

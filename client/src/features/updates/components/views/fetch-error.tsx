@@ -1,9 +1,9 @@
 import { WifiOffIcon } from 'lucide-react';
 
-import { GENERIC_DESCRIPTION, PairFooter, type FocusCtx, type ViewParts } from '../parts';
+import { PairFooter, type ViewCtx, type ViewParts } from '../parts';
 
 type Args = {
-  ctx: FocusCtx;
+  ctx: ViewCtx;
   error: Error;
   isOffline: boolean;
   onClose: () => void;
@@ -11,11 +11,12 @@ type Args = {
 };
 
 export const fetchErrorView = ({ ctx, error, isOffline, onClose, onRetry }: Args): ViewParts => {
-  const headline = isOffline ? "Couldn't reach the update server." : "Couldn't check for updates.";
-  const hint = isOffline ? 'Check your internet connection and try again.' : error.message;
+  const { t } = ctx;
+  const headline = isOffline ? t('update.offline') : t('update.checkFailed');
+  const hint = isOffline ? t('update.offlineHint') : error.message;
 
   return {
-    description: GENERIC_DESCRIPTION,
+    description: t('update.description'),
     body: (
       <div className="flex items-start gap-2 text-xs">
         {isOffline && <WifiOffIcon className="size-4 text-destructive shrink-0 mt-0.5" />}
@@ -25,6 +26,13 @@ export const fetchErrorView = ({ ctx, error, isOffline, onClose, onRetry }: Args
         </div>
       </div>
     ),
-    footer: <PairFooter ctx={ctx} onClose={onClose} primaryLabel="Retry" onPrimary={onRetry} />,
+    footer: (
+      <PairFooter
+        ctx={ctx}
+        onClose={onClose}
+        primaryLabel={t('common.retry')}
+        onPrimary={onRetry}
+      />
+    ),
   };
 };

@@ -15,15 +15,12 @@ import {
 } from '@/bridge/analysis';
 import { useLibraryFilter } from '@/features/menu/hooks/use-library-filter';
 import { useSearch } from '@/features/menu/hooks/use-search';
+import type { MessageKey } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { ANALYSIS_QUEUE, MENU, SONGS, SONGS_META } from '@/shared/query-keys';
 import type { LibraryMenuFilters } from '@/types/LibraryMenuFilters';
 import type { Song } from '@/types/Song';
 import type { SongsStore } from '@/types/SongsStore';
-
-enum BulkActionKind {
-  Queued,
-  Immediate,
-}
 
 const withoutAnalysisCache = (song: Song): Song => ({
   ...song,
@@ -39,6 +36,7 @@ const withoutAnalysisCache = (song: Song): Song => ({
 
 export const useAnalysis = () => {
   const queryClient = useQueryClient();
+  const { t } = useI18n();
   const { artist, album, playlist, folder, query, status, transcript_source } = useLibraryFilter();
   const { search } = useSearch();
 
@@ -86,7 +84,9 @@ export const useAnalysis = () => {
         return await handler();
       } catch (error: unknown) {
         toast.error(
-          `Error while running an analysis action: ${error instanceof Error ? error.message : 'unknown error'}`,
+          t('analysis.actionFailed', {
+            detail: error instanceof Error ? error.message : t('common.unknownError'),
+          }),
         );
         return undefined;
       } finally {
@@ -102,8 +102,7 @@ export const useAnalysis = () => {
 
     const wrapBulk =
       <A extends unknown[]>(
-        kind: BulkActionKind,
-        label: string,
+        successKey: MessageKey,
         handler: (...args: A) => Promise<number>,
         invalidate: () => void,
       ) =>
@@ -114,15 +113,9 @@ export const useAnalysis = () => {
         }
 
         if (count > 0) {
-          toast.success(
-            kind === BulkActionKind.Queued
-              ? `Queued ${count} song${count === 1 ? '' : 's'} for ${label}`
-              : `${label} for ${count} song${count === 1 ? '' : 's'}`,
-          );
+          toast.success(t(successKey, { count }));
         } else {
-          toast.info(
-            `No eligible songs for ${kind === BulkActionKind.Queued ? label : label.toLowerCase()} in the current filter`,
-          );
+          toast.info(t('analysis.noEligibleSongs'));
         }
       };
 
@@ -131,16 +124,10 @@ export const useAnalysis = () => {
 
     return {
       enqueueOne: wrap((fileHash: string) => enqueue(one(fileHash)), invalidateQueue),
-      enqueueAll: wrapBulk(
-        BulkActionKind.Queued,
-        'analysis',
-        () => enqueue(filtered()),
-        invalidateQueue,
-      ),
+      enqueueAll: wrapBulk('analysis.queuedAnalysis', () => enqueue(filtered()), invalidateQueue),
       cancelAnalysisOne: wrap((fileHash: string) => cancelAnalysis(one(fileHash)), invalidateSongs),
       cancelAnalysisAll: wrapBulk(
-        BulkActionKind.Immediate,
-        'Analysis cancelled',
+        'analysis.cancelled',
         () => cancelAnalysis(filtered()),
         invalidateSongs,
       ),
@@ -149,8 +136,7 @@ export const useAnalysis = () => {
         markSongCacheDeleted(fileHash);
       }, invalidateSongs),
       deleteSongCacheAll: wrapBulk(
-        BulkActionKind.Immediate,
-        'Cache deleted',
+        'analysis.cacheDeleted',
         () => deleteSongCache(filtered()),
         invalidateSongs,
       ),
@@ -163,32 +149,24 @@ export const useAnalysis = () => {
         (fileHash: string, language?: string) => realign(one(fileHash), language),
         invalidateSongs,
       ),
-      realignAll: wrapBulk(
-        BulkActionKind.Queued,
-        'realigning',
-        () => realign(filtered()),
-        invalidateSongs,
-      ),
+      realignAll: wrapBulk('analysis.queuedRealign', () => realign(filtered()), invalidateSongs),
       refreshMetadata: (fileHash: string) =>
         run(async () => (await refreshMetadata(one(fileHash))) > 0, invalidateSongs),
       refreshMetadataAll: wrapBulk(
-        BulkActionKind.Immediate,
-        'Metadata refreshed',
+        'analysis.metadataRefreshed',
         () => refreshMetadata(filtered()),
         invalidateSongs,
       ),
       reanalyzeAllFull: wrapBulk(
-        BulkActionKind.Queued,
-        'full reanalysis',
+        'analysis.queuedFull',
         () => reanalyzeFull(filtered()),
         invalidateSongs,
       ),
       reanalyzeAllTranscript: wrapBulk(
-        BulkActionKind.Queued,
-        'refetching lyrics & aligning',
+        'analysis.queuedTranscript',
         (language?: string) => reanalyzeTranscript(filtered(), language),
         invalidateSongs,
       ),
     };
-  }, [queryClient, artist, album, playlist, folder, query, status, transcript_source, search]);
+  }, [queryClient, artist, album, playlist, folder, query, status, transcript_source, search, t]);
 };

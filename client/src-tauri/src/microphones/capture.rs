@@ -277,6 +277,30 @@ pub(crate) fn start_mic_capture(
     result
 }
 
+#[tauri::command]
+pub(crate) fn update_mic_capture_options(
+    capture_id: String,
+    options: MicCaptureOptions,
+) -> Result<(), String> {
+    let _guard = OPERATIONS.lock().unwrap_or_else(|error| error.into_inner());
+    if capture_id.is_empty() || capture_id.len() > 128 || capture_id == CONFIGURED_MONITOR {
+        return Err("Invalid microphone capture ID".into());
+    }
+    let captures = CAPTURES.lock().unwrap_or_else(|error| error.into_inner());
+    for capture in captures.values() {
+        let mut targets = capture
+            .targets
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(target) = targets.get_mut(&capture_id) {
+            target.emit_audio = options.emit_audio;
+            update_monitor(capture, &targets);
+            return Ok(());
+        }
+    }
+    Err("Microphone capture is not active".into())
+}
+
 fn restore_monitor(config: &AppConfig) {
     if config.mic_monitoring != Some(true) {
         return;

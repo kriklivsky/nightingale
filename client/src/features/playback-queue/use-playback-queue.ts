@@ -17,6 +17,7 @@ import {
   preparePlayback,
   type PreparePlaybackInput,
 } from '@/features/playback/mutations/use-prepare-playback-mutation';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { PLAYBACK_QUEUE } from '@/shared/query-keys';
 import type { Song } from '@/types/Song';
 
@@ -50,17 +51,22 @@ export function usePlaybackQueueQuery() {
 
 export function useAddPlaybackQueueEntry() {
   const queryClient = useQueryClient();
+  const { t } = useI18n();
 
   return useMutation({
     mutationFn: ({ song, tempo, keyOffset }: PreparePlaybackInput) =>
       addPlaybackQueueEntry(song.file_hash, tempo, keyOffset),
-    onSuccess: (entries) => queryClient.setQueryData(PLAYBACK_QUEUE, entries),
-    onError: (error: Error) => toast.error(`Could not add song to queue: ${error.message}`),
+    onSuccess: (entries, { song }) => {
+      queryClient.setQueryData(PLAYBACK_QUEUE, entries);
+      toast.success(t('queue.added', { title: song.title }));
+    },
+    onError: (error: Error) => toast.error(t('queue.addFailed', { detail: error.message })),
   });
 }
 
 export function useMovePlaybackQueueEntry() {
   const queryClient = useQueryClient();
+  const { t } = useI18n();
 
   return useMutation({
     mutationFn: ({ id, targetIndex }: { id: string; targetIndex: number }) =>
@@ -84,28 +90,30 @@ export function useMovePlaybackQueueEntry() {
       if (context?.previous !== undefined) {
         queryClient.setQueryData(PLAYBACK_QUEUE, context.previous);
       }
-      toast.error(`Could not reorder queue: ${error.message}`);
+      toast.error(t('queue.reorderFailed', { detail: error.message }));
     },
   });
 }
 
 export function useRemovePlaybackQueueEntry() {
   const queryClient = useQueryClient();
+  const { t } = useI18n();
 
   return useMutation({
     mutationFn: removePlaybackQueueEntry,
     onSuccess: (entries) => queryClient.setQueryData(PLAYBACK_QUEUE, entries),
-    onError: (error: Error) => toast.error(`Could not remove song from queue: ${error.message}`),
+    onError: (error: Error) => toast.error(t('queue.removeFailed', { detail: error.message })),
   });
 }
 
 export function useClearPlaybackQueue() {
   const queryClient = useQueryClient();
+  const { t } = useI18n();
 
   return useMutation({
     mutationFn: clearPlaybackQueue,
     onSuccess: (entries) => queryClient.setQueryData(PLAYBACK_QUEUE, entries),
-    onError: (error: Error) => toast.error(`Could not clear queue: ${error.message}`),
+    onError: (error: Error) => toast.error(t('queue.clearFailed', { detail: error.message })),
   });
 }
 
@@ -125,6 +133,7 @@ type StartResult = {
 
 export function useStartNextPlaybackQueueSong(entries: PlaybackQueueEntry[]) {
   const queryClient = useQueryClient();
+  const { t } = useI18n();
   const { launch, reserveTarget } = usePlaybackLauncher();
   const { mutate, isLoading } = useMutation({
     mutationFn: async ({ entry, target, players }: StartInput): Promise<StartResult> => {
@@ -150,7 +159,7 @@ export function useStartNextPlaybackQueueSong(entries: PlaybackQueueEntry[]) {
     },
     onError: (error: Error, { target }) => {
       target?.close();
-      toast.error(`Could not start queued song: ${error.message}`);
+      toast.error(t('queue.startFailed', { detail: error.message }));
     },
   });
 

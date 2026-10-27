@@ -122,6 +122,7 @@ export const appConfigSchema: z.ZodType<AppConfig> = z.object({
   lyrics_horizontal_position: nullableString,
   lyrics_scale: nullableNumber,
   pitch_graph_scale: nullableNumber,
+  pitch_display: nullableString,
   lyrics_romanization_mode: nullableString,
   separator: nullableString,
   asr_engine: nullableString,
@@ -138,6 +139,7 @@ export const appConfigSchema: z.ZodType<AppConfig> = z.object({
     )
     .nullable(),
   language_overrides: z.record(z.string(), z.string()).nullable(),
+  ui_language: nullableString,
 });
 
 export const songsMetaSchema: z.ZodType<SongsMeta> = z.object({

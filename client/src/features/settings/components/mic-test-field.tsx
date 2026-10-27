@@ -6,6 +6,7 @@ import { Button } from '@/shared/components/ui/button';
 import { ButtonGroup } from '@/shared/components/ui/button-group';
 import { Field } from '@/shared/components/ui/field';
 import { Label } from '@/shared/components/ui/label';
+import { useI18n } from '@/shared/i18n/use-i18n';
 
 import { Hint } from './settings-controls';
 
@@ -41,6 +42,7 @@ export function MicTestField({
   onBusyChange,
   onCaptureStarted,
 }: MicTestFieldProps) {
+  const { t } = useI18n();
   const [recording, setRecording] = useState<MicRecording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
@@ -92,7 +94,7 @@ export function MicTestField({
     const sampleRate = sampleRateRef.current;
     const sampleCount = sampleCountRef.current;
     if (sampleRate === 0 || sampleCount === 0) {
-      toast.error('Microphone test did not receive any audio.');
+      toast.error(t('settings.micTest.noAudio'));
       return;
     }
 
@@ -103,7 +105,7 @@ export function MicTestField({
       offset += chunk.length;
     }
     setRecording({ samples, sampleRate });
-  }, []);
+  }, [t]);
 
   const startRecording = useCallback(async () => {
     stopPlayback();
@@ -154,9 +156,9 @@ export function MicTestField({
       stopListeningRef.current = null;
       await microphoneAdapter.stopCapture(CAPTURE_ID).catch(() => {});
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(`Microphone test failed: ${message}`);
+      toast.error(t('settings.micTest.failed', { detail: message }));
     }
-  }, [finishRecording, onCaptureStarted, selectedMicId, stopPlayback]);
+  }, [finishRecording, onCaptureStarted, selectedMicId, stopPlayback, t]);
 
   const playRecording = useCallback(async () => {
     if (!recording) {
@@ -186,10 +188,10 @@ export function MicTestField({
       source.start();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(`Could not play microphone test: ${message}`);
+      toast.error(t('settings.micTest.playFailed', { detail: message }));
       stopPlayback();
     }
-  }, [recording, stopPlayback]);
+  }, [recording, stopPlayback, t]);
 
   useEffect(() => {
     onBusyChange?.(isRecording || isPlaying);
@@ -225,11 +227,11 @@ export function MicTestField({
 
   return (
     <Field>
-      <Label>Microphone test</Label>
+      <Label>{t('settings.micTest.label')}</Label>
       <Hint>
         {isRecording
-          ? `Microphone recording for ${recordingSeconds} seconds…`
-          : 'Record the selected microphone for up to five seconds, then play it back.'}
+          ? t('settings.micTest.recording', { count: recordingSeconds })
+          : t('settings.micTest.hint')}
       </Hint>
       <ButtonGroup>
         <Button
@@ -238,7 +240,7 @@ export function MicTestField({
           onClick={() => void (isRecording ? finishRecording() : startRecording())}
           className={startButtonClassName}
         >
-          {isRecording ? 'Stop test' : 'Start test'}
+          {isRecording ? t('settings.micTest.stop') : t('settings.micTest.start')}
         </Button>
         <Button
           variant="outline"
@@ -246,7 +248,7 @@ export function MicTestField({
           onClick={() => void playRecording()}
           className={playButtonClassName}
         >
-          Play
+          {t('settings.micTest.play')}
         </Button>
       </ButtonGroup>
     </Field>

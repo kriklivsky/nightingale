@@ -1,6 +1,7 @@
-import { Grid2X2Icon, ListIcon, ListMusicIcon } from 'lucide-react';
+import { CheckCircle2Icon, Grid2X2Icon, ListIcon, ListMusicIcon } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 
+import { actionRing, READY_STATUS, TOOLBAR_ACTION } from '@/features/library/lib/toolbar-actions';
 import { useDialog } from '@/features/menu/hooks/use-dialog';
 import { useLibraryFilter } from '@/features/menu/hooks/use-library-filter';
 import { useSearch } from '@/features/menu/hooks/use-search';
@@ -17,77 +18,69 @@ import {
   SelectValue,
 } from '@/shared/components/ui/select';
 import { SidebarTrigger } from '@/shared/components/ui/sidebar';
+import type { MessageKey } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 import type { SongSort } from '@/types/SongSort';
 
 import { BulkActionsMenu } from './bulk-actions-menu';
+import { LibraryFiltersMenu } from './library-filters-menu';
 
 const DEBOUNCE_MS = 500;
-const SORT_OPTIONS: readonly { value: string; label: string; sort: SongSort }[] = [
+const SORT_OPTIONS: readonly { value: string; labelKey: MessageKey; sort: SongSort }[] = [
   {
     value: 'title:ascending',
-    label: 'Title A–Z',
+    labelKey: 'library.sort.titleAsc',
     sort: { column: 'title', direction: 'ascending' },
   },
   {
     value: 'title:descending',
-    label: 'Title Z–A',
+    labelKey: 'library.sort.titleDesc',
     sort: { column: 'title', direction: 'descending' },
   },
   {
     value: 'artist:ascending',
-    label: 'Artist A–Z',
+    labelKey: 'library.sort.artistAsc',
     sort: { column: 'artist', direction: 'ascending' },
   },
   {
     value: 'artist:descending',
-    label: 'Artist Z–A',
+    labelKey: 'library.sort.artistDesc',
     sort: { column: 'artist', direction: 'descending' },
   },
   {
     value: 'album:ascending',
-    label: 'Album A–Z',
+    labelKey: 'library.sort.albumAsc',
     sort: { column: 'album', direction: 'ascending' },
   },
   {
     value: 'album:descending',
-    label: 'Album Z–A',
+    labelKey: 'library.sort.albumDesc',
     sort: { column: 'album', direction: 'descending' },
   },
   {
     value: 'duration:ascending',
-    label: 'Shortest first',
+    labelKey: 'library.sort.shortest',
     sort: { column: 'duration', direction: 'ascending' },
   },
   {
     value: 'duration:descending',
-    label: 'Longest first',
+    labelKey: 'library.sort.longest',
     sort: { column: 'duration', direction: 'descending' },
   },
   {
     value: 'status:ascending',
-    label: 'Status A–Z',
+    labelKey: 'library.sort.statusAsc',
     sort: { column: 'status', direction: 'ascending' },
   },
   {
     value: 'status:descending',
-    label: 'Status Z–A',
+    labelKey: 'library.sort.statusDesc',
     sort: { column: 'status', direction: 'descending' },
   },
 ];
+
 export type SongListView = 'table' | 'grid';
-
-function isToolbarActionFocused(focus: MenuFocus, index: number): boolean {
-  return (
-    focus.active &&
-    focus.panel === 'songList' &&
-    focus.actionsFocused &&
-    focus.actionsIndex === index
-  );
-}
-
-const actionRing = (focus: MenuFocus, index: number): string | undefined =>
-  isToolbarActionFocused(focus, index) ? 'ring-2 ring-primary' : undefined;
 
 function selectedSortValue(sort: readonly SongSort[]): string {
   if (sort.length === 0) {
@@ -110,14 +103,6 @@ function changeSort(value: string, onSortChange: (sort: SongSort[] | null) => vo
   }
 }
 
-const viewVariant = (view: SongListView, buttonView: SongListView) =>
-  view === buttonView ? 'secondary' : 'ghost';
-
-const optionalFilter = (value: string): string | null => (value === 'all' ? null : value);
-
-const queueLabel = (count: number): string =>
-  `Open playback queue, ${count} ${count === 1 ? 'song' : 'songs'}`;
-
 function finishSearch(
   event: KeyboardEvent<HTMLInputElement>,
   timerRef: RefObject<ReturnType<typeof setTimeout> | undefined>,
@@ -130,6 +115,108 @@ function finishSearch(
   clearTimeout(timerRef.current);
   setSearch(event.currentTarget.value);
   event.currentTarget.blur();
+}
+
+function SearchField({ focus }: { focus: MenuFocus }) {
+  const { t } = useI18n();
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const { search, setSearch } = useSearch();
+  const { setMode } = useDialog();
+  const [pending, setPending] = useState<{ base: string; value: string } | null>(null);
+
+  const handleChange = (value: string) => {
+    setPending({ base: search, value });
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setSearch(value), DEBOUNCE_MS);
+  };
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const displayedSearch = pending?.base === search ? pending.value : search;
+
+  return (
+    <Input
+      data-actions-index={TOOLBAR_ACTION.search}
+      value={displayedSearch}
+      onChange={({ target: { value } }) => handleChange(value)}
+      onKeyDown={(event) => finishSearch(event, timerRef, setSearch)}
+      onClick={() => {
+        if (document.documentElement.classList.contains('tvbox-session')) {
+          clearTimeout(timerRef.current);
+          setPending(null);
+          setMode('song-search');
+        }
+      }}
+      className={cn('min-w-0 flex-1', actionRing(focus, TOOLBAR_ACTION.search))}
+      placeholder={t('library.searchPlaceholder')}
+      aria-label={t('library.searchPlaceholder')}
+    />
+  );
+}
+
+function ReadyToggle({ focus }: { focus: MenuFocus }) {
+  const { t } = useI18n();
+  const { status, setLibraryFilter } = useLibraryFilter();
+  const active = status === READY_STATUS;
+
+  return (
+    <Button
+      variant={active ? 'secondary' : 'outline'}
+      data-actions-index={TOOLBAR_ACTION.ready}
+      aria-pressed={active}
+      className={cn('min-w-0', actionRing(focus, TOOLBAR_ACTION.ready))}
+      onClick={() =>
+        setLibraryFilter((current) => ({ ...current, status: active ? null : READY_STATUS }))
+      }
+    >
+      <CheckCircle2Icon className={cn(active && 'text-primary')} />
+      <span className="truncate">{t('library.readyOnly')}</span>
+    </Button>
+  );
+}
+
+type SortSelectProps = {
+  focus: MenuFocus;
+  sort: readonly SongSort[];
+  disabled?: boolean;
+  onSortChange: (sort: SongSort[] | null) => void;
+};
+
+function SortSelect({ focus, sort, disabled, onSortChange }: SortSelectProps) {
+  const { t } = useI18n();
+  const currentSort = selectedSortValue(sort);
+
+  return (
+    <Select
+      value={currentSort}
+      onValueChange={(value) => changeSort(value, onSortChange)}
+      disabled={disabled}
+    >
+      <SelectTrigger
+        data-actions-index={TOOLBAR_ACTION.sort}
+        aria-label={t('library.sort.label')}
+        className={cn('w-full min-w-0 2xl:w-40', actionRing(focus, TOOLBAR_ACTION.sort))}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectGroup>
+          <SelectLabel>{t('library.sort.label')}</SelectLabel>
+          <SelectItem value="default">{t('library.sort.default')}</SelectItem>
+          {currentSort === 'custom' && (
+            <SelectItem value="custom" disabled>
+              {t('library.sort.custom')}
+            </SelectItem>
+          )}
+          {SORT_OPTIONS.map(({ value, labelKey }) => (
+            <SelectItem key={value} value={value}>
+              {t(labelKey)}
+            </SelectItem>
+          ))}
+        </SelectGroup>
+      </SelectContent>
+    </Select>
+  );
 }
 
 type LibraryToolbarProps = {
@@ -151,177 +238,48 @@ export const LibraryToolbar = ({
   onSortChange,
   isSavingView,
 }: LibraryToolbarProps) => {
-  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const { search, setSearch } = useSearch();
-  const { setMode } = useDialog();
-  const [pending, setPending] = useState<{ base: string; value: string } | null>(null);
-  const { status, transcript_source, setLibraryFilter } = useLibraryFilter();
+  const { t } = useI18n();
   const { focus } = useMenuFocus();
-
-  const handleChange = (value: string) => {
-    setPending({ base: search, value });
-    clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => setSearch(value), DEBOUNCE_MS);
-  };
-
-  useEffect(() => () => clearTimeout(timerRef.current), []);
-
-  const displayedSearch = pending?.base === search ? pending.value : search;
-  const currentSort = selectedSortValue(sort);
+  const nextView: SongListView = view === 'table' ? 'grid' : 'table';
 
   return (
-    <div className="grid w-full grid-cols-2 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] 2xl:grid-cols-[minmax(12rem,1fr)_auto_auto_auto_auto]">
-      <div className="col-span-2 flex min-w-0 items-center gap-2 sm:col-span-3 2xl:col-span-1">
+    <div className="grid w-full grid-cols-2 items-center gap-2 sm:grid-cols-[auto_auto_minmax(0,1fr)_auto] 2xl:grid-cols-[minmax(12rem,1fr)_auto_auto_auto_auto]">
+      <div className="col-span-2 flex min-w-0 items-center gap-2 sm:col-span-4 2xl:col-span-1">
         <SidebarTrigger variant="outline" size="icon" className="shrink-0 md:hidden" />
-        <Input
-          data-actions-index="0"
-          value={displayedSearch}
-          onChange={({ target: { value } }) => handleChange(value)}
-          onKeyDown={(event) => finishSearch(event, timerRef, setSearch)}
-          onClick={() => {
-            if (document.documentElement.classList.contains('tvbox-session')) {
-              clearTimeout(timerRef.current);
-              setPending(null);
-              setMode('song-search');
-            }
-          }}
-          className={cn('min-w-0 flex-1', actionRing(focus, 0))}
-          placeholder="Search songs"
-          aria-label="Search songs"
-        />
+        <SearchField focus={focus} />
       </div>
-      <Select
-        value={status ?? 'all'}
-        onValueChange={(value) =>
-          setLibraryFilter((current) => ({
-            ...current,
-            status: optionalFilter(value),
-          }))
-        }
-      >
-        <SelectTrigger
-          data-actions-index="1"
-          aria-label="Filter by analysis status"
-          className={cn('w-full min-w-0 2xl:w-32', actionRing(focus, 1))}
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            <SelectLabel>Status</SelectLabel>
-            <SelectItem value="all">All statuses</SelectItem>
-            <SelectItem value="not_analyzed">Not analyzed</SelectItem>
-            <SelectItem value="queued">Queued</SelectItem>
-            <SelectItem value="analyzing">Analyzing</SelectItem>
-            <SelectItem value="analyzed">Analyzed</SelectItem>
-            <SelectItem value="failed">Failed</SelectItem>
-          </SelectGroup>
-        </SelectContent>
-      </Select>
-      <Select
-        value={transcript_source ?? 'all'}
-        onValueChange={(value) =>
-          setLibraryFilter((current) => ({
-            ...current,
-            transcript_source: optionalFilter(value),
-          }))
-        }
-      >
-        <SelectTrigger
-          data-actions-index="2"
-          aria-label="Filter by transcript type"
-          className={cn('w-full min-w-0 2xl:w-32', actionRing(focus, 2))}
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            <SelectLabel>Type</SelectLabel>
-            <SelectItem value="all">All types</SelectItem>
-            <SelectItem value="generated">Generated</SelectItem>
-            <SelectItem value="lyrics">AI Aligned</SelectItem>
-            <SelectItem value="lrc">LRC</SelectItem>
-          </SelectGroup>
-        </SelectContent>
-      </Select>
-      <Select
-        value={currentSort}
-        onValueChange={(value) => changeSort(value, onSortChange)}
-        disabled={isSavingView}
-      >
-        <SelectTrigger
-          data-actions-index="3"
-          aria-label="Sort songs"
-          className={cn('w-full min-w-0 2xl:w-36', actionRing(focus, 3))}
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            <SelectLabel>Sort songs</SelectLabel>
-            <SelectItem value="default">Default order</SelectItem>
-            {currentSort === 'custom' && (
-              <SelectItem value="custom" disabled>
-                Custom sort
-              </SelectItem>
-            )}
-            {SORT_OPTIONS.map(({ value, label }) => (
-              <SelectItem key={value} value={value}>
-                {label}
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        </SelectContent>
-      </Select>
-      <div className="col-span-2 flex items-center justify-end gap-2 sm:col-span-1">
+      <ReadyToggle focus={focus} />
+      <LibraryFiltersMenu actionIndex={TOOLBAR_ACTION.filters} />
+      <SortSelect focus={focus} sort={sort} disabled={isSavingView} onSortChange={onSortChange} />
+      <div className="flex items-center justify-end gap-2">
         <Button
           variant="outline"
-          size="icon"
-          className={cn('relative', actionRing(focus, 4))}
-          data-actions-index="4"
+          className={cn('relative', actionRing(focus, TOOLBAR_ACTION.queue))}
+          data-actions-index={TOOLBAR_ACTION.queue}
           onClick={onOpenQueue}
-          aria-label={queueLabel(queueCount)}
-          title="Playback queue"
+          aria-label={t('library.queueLabel', { count: queueCount })}
         >
           <ListMusicIcon />
+          <span className="hidden lg:inline">{t('library.queue')}</span>
           {queueCount > 0 ? (
-            <span className="absolute -top-1 -right-1 flex size-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground">
+            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-xs text-primary-foreground">
               {queueCount}
             </span>
           ) : null}
         </Button>
-        <BulkActionsMenu actionIndex={5} />
-        <fieldset
-          className="flex shrink-0 rounded-md border bg-input/20 p-0.5"
-          aria-label="Song list view"
+        <BulkActionsMenu actionIndex={TOOLBAR_ACTION.bulk} />
+        <Button
+          variant="outline"
+          size="icon"
+          className={actionRing(focus, TOOLBAR_ACTION.view)}
+          data-actions-index={TOOLBAR_ACTION.view}
+          disabled={isSavingView}
+          onClick={() => onViewChange(nextView)}
+          aria-label={nextView === 'grid' ? t('library.showGrid') : t('library.showTable')}
+          title={nextView === 'grid' ? t('library.showGrid') : t('library.showTable')}
         >
-          <Button
-            variant={viewVariant(view, 'table')}
-            size="icon-sm"
-            className={actionRing(focus, 6)}
-            data-actions-index="6"
-            disabled={isSavingView}
-            onClick={() => onViewChange('table')}
-            aria-label="Table view"
-            aria-pressed={view === 'table'}
-            title="Table view"
-          >
-            <ListIcon />
-          </Button>
-          <Button
-            variant={viewVariant(view, 'grid')}
-            size="icon-sm"
-            className={actionRing(focus, 7)}
-            data-actions-index="7"
-            disabled={isSavingView}
-            onClick={() => onViewChange('grid')}
-            aria-label="Card grid view"
-            aria-pressed={view === 'grid'}
-            title="Card grid view"
-          >
-            <Grid2X2Icon />
-          </Button>
-        </fieldset>
+          {nextView === 'grid' ? <Grid2X2Icon /> : <ListIcon />}
+        </Button>
       </div>
     </div>
   );

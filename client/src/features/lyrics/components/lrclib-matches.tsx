@@ -2,6 +2,7 @@ import { Loader2Icon } from 'lucide-react';
 
 import { formatSeconds } from '@/features/lyrics/utils/edit-lyrics';
 import { Button } from '@/shared/components/ui/button';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { LrclibCandidate } from '@/types/LrclibCandidate';
 
 import { ringFor } from './parts';
@@ -22,6 +23,7 @@ type CandidateProps = Pick<LrclibMatchesProps, 'onSelect' | 'onUseLrc' | 'isFocu
 };
 
 const Candidate = ({ candidate, onSelect, onUseLrc, isFocused }: CandidateProps) => {
+  const { t } = useI18n();
   const hasLrc = candidate.synced_lyrics !== null;
 
   return (
@@ -31,9 +33,9 @@ const Candidate = ({ candidate, onSelect, onUseLrc, isFocused }: CandidateProps)
         <span className="truncate text-xs text-muted-foreground">
           {candidate.artist_name}
           {candidate.album_name ? ` • ${candidate.album_name}` : ''} •{' '}
-          {formatSeconds(candidate.duration_secs)} • {candidate.lines.length}{' '}
-          {candidate.lines.length === 1 ? 'line' : 'lines'}
-          {hasLrc && <span className="text-primary"> • LRC available</span>}
+          {formatSeconds(candidate.duration_secs)} •{' '}
+          {t('lyrics.lineCount', { count: candidate.lines.length })}
+          {hasLrc && <span className="text-primary"> • {t('lyrics.lrcAvailable')}</span>}
         </span>
         <div className="mt-1.5 flex items-center gap-2">
           {hasLrc && (
@@ -43,7 +45,7 @@ const Candidate = ({ candidate, onSelect, onUseLrc, isFocused }: CandidateProps)
               onClick={() => onUseLrc(candidate)}
               className={ringFor(isFocused(0))}
             >
-              Use LRC
+              {t('lyrics.useLrc')}
             </Button>
           )}
           <Button
@@ -52,7 +54,7 @@ const Candidate = ({ candidate, onSelect, onUseLrc, isFocused }: CandidateProps)
             onClick={() => onSelect(candidate)}
             className={ringFor(isFocused(hasLrc ? 1 : 0))}
           >
-            Use as plain text
+            {t('lyrics.usePlain')}
           </Button>
         </div>
       </div>
@@ -76,19 +78,20 @@ export const LrclibMatches = ({
   onUseLrc,
   isFocused,
 }: LrclibMatchesProps) => {
+  const { t } = useI18n();
   if (isLoading) {
     return (
       <div className="flex flex-1 items-center justify-center gap-2 text-muted-foreground">
-        <Loader2Icon className="size-4 animate-spin" />
-        <span>Searching LRCLIB…</span>
+        <Loader2Icon className="size-4 animate-spin motion-reduce:animate-none" />
+        <span>{t('lyrics.searchingLrclib')}</span>
       </div>
     );
   }
   if (isError) {
-    return <p className="text-destructive">{errorMessage ?? 'Failed to load LRCLIB matches'}</p>;
+    return <p className="text-destructive">{errorMessage ?? t('lyrics.matchesFailed')}</p>;
   }
   if (candidates.length === 0) {
-    return <p className="text-muted-foreground">No LRCLIB matches found for this song.</p>;
+    return <p className="text-muted-foreground">{t('lyrics.noMatches')}</p>;
   }
 
   const candidate = candidates[Math.min(index, candidates.length - 1)];

@@ -13,8 +13,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/shared/components/ui/dialog';
+import { useI18n } from '@/shared/i18n/use-i18n';
 
-import { RELEASES_URL, SELF_HOSTED_DOCS_URL, type FocusCtx, type ViewParts } from './parts';
+import { RELEASES_URL, SELF_HOSTED_DOCS_URL, type ViewCtx, type ViewParts } from './parts';
 import { availableView } from './views/available';
 import { checkingView } from './views/checking';
 import { downloadingView } from './views/downloading';
@@ -58,22 +59,23 @@ const isLocked = (install: InstallFlow): boolean =>
 const pickInstallView = (
   state: UpdateState,
   install: InstallFlow,
-  ctx: FocusCtx,
+  ctx: ViewCtx,
   actions: Actions,
 ): ViewParts | null => {
   switch (install.state.stage) {
     case 'downloading':
       return downloadingView({
+        ctx,
         downloaded: install.state.downloaded,
         contentLength: install.state.contentLength,
-        version: versionLabel(state, 'update'),
+        version: versionLabel(state, ctx.t('update.fallbackUpdate')),
       });
     case 'installing':
-      return installingView();
+      return installingView({ ctx });
     case 'finished':
       return installedView({
         ctx,
-        version: versionLabel(state, 'the new build'),
+        version: versionLabel(state, ctx.t('update.fallbackBuild')),
         onRestart: () => void install.restart(),
       });
     case 'error':
@@ -94,7 +96,7 @@ const pickInstallView = (
 const pickView = (
   state: UpdateState,
   install: InstallFlow,
-  ctx: FocusCtx,
+  ctx: ViewCtx,
   actions: Actions,
 ): ViewParts => {
   const installView = pickInstallView(state, install, ctx, actions);
@@ -136,6 +138,7 @@ const pickView = (
 };
 
 export const UpdateDialog = () => {
+  const { t, locale } = useI18n();
   const { mode, close } = useDialog();
   const open = mode === 'update';
 
@@ -176,17 +179,17 @@ export const UpdateDialog = () => {
 
   const openReleases = useCallback(() => {
     void openUrl(RELEASES_URL).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      toast.error(`Couldn't open releases page: ${message}`);
+      const message = error instanceof Error ? error.message : t('common.unknownError');
+      toast.error(t('update.openReleasesFailed', { detail: message }));
     });
-  }, []);
+  }, [t]);
 
   const openSelfHostedDocs = useCallback(() => {
     void openUrl(SELF_HOSTED_DOCS_URL).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      toast.error(`Couldn't open docs: ${message}`);
+      const message = error instanceof Error ? error.message : t('common.unknownError');
+      toast.error(t('update.openDocsFailed', { detail: message }));
     });
-  }, []);
+  }, [t]);
 
   const refetch = useCallback(() => {
     void refetchUpdate();
@@ -202,7 +205,7 @@ export const UpdateDialog = () => {
   const view = pickView(
     updateState,
     installFlow,
-    { open, focusedIndex },
+    { open, focusedIndex, t, locale },
     { close, refetch, openReleases, openSelfHostedDocs },
   );
 
@@ -222,7 +225,7 @@ export const UpdateDialog = () => {
       >
         <div ref={containerRef} className="contents">
           <DialogHeader>
-            <DialogTitle>Update</DialogTitle>
+            <DialogTitle>{t('menu.update')}</DialogTitle>
             <DialogDescription>{view.description}</DialogDescription>
           </DialogHeader>
           {view.body}

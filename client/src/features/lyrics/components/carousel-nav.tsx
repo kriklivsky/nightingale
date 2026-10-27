@@ -1,6 +1,7 @@
 import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
 
 import { Button } from '@/shared/components/ui/button';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 import { ARIA_DISABLED_CLASS, ringFor } from './parts';
@@ -13,6 +14,7 @@ type CarouselNavProps = {
 };
 
 export const CarouselNav = ({ index, total, onChange, isFocused }: CarouselNavProps) => {
+  const { t } = useI18n();
   if (total === 0) {
     return null;
   }
@@ -38,7 +40,7 @@ export const CarouselNav = ({ index, total, onChange, isFocused }: CarouselNavPr
           onChange(safeIndex - 1);
         }}
         aria-disabled={atStart}
-        aria-label="Previous match"
+        aria-label={t('lyrics.previousMatch')}
         className={cn(ARIA_DISABLED_CLASS, ringFor(prevFocused))}
       >
         <ChevronLeftIcon />
@@ -53,7 +55,7 @@ export const CarouselNav = ({ index, total, onChange, isFocused }: CarouselNavPr
           onChange(safeIndex + 1);
         }}
         aria-disabled={atEnd}
-        aria-label="Next match"
+        aria-label={t('lyrics.nextMatch')}
         className={cn(ARIA_DISABLED_CLASS, ringFor(nextFocused))}
       >
         <ChevronRightIcon />

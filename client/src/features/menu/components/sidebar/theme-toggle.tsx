@@ -6,6 +6,7 @@ import { useMenuFocus } from '@/features/menu/providers/menu-focus-context';
 import { Button } from '@/shared/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/shared/components/ui/tooltip';
 import { useConfigMutation } from '@/shared/config/use-config-mutation';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 type ThemeToggleProps = {
@@ -19,15 +20,16 @@ export const ThemeToggle = ({
   focusedSidebarIndex,
   registerCallback,
 }: ThemeToggleProps) => {
+  const { t } = useI18n();
   const { focus } = useMenuFocus();
   const { toggle, theme } = useTheme();
   const { mutate } = useConfigMutation();
 
   const { Icon, label } = useMemo(() => {
     return theme === 'dark'
-      ? { Icon: SunIcon, label: 'Light mode' }
-      : { Icon: MoonIcon, label: 'Dark mode' };
-  }, [theme]);
+      ? { Icon: SunIcon, label: t('menu.lightMode') }
+      : { Icon: MoonIcon, label: t('menu.darkMode') };
+  }, [t, theme]);
 
   const handleToggle = useCallback(() => {
     toggle();

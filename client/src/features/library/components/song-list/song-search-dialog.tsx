@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { NavAction } from '@/app/providers/nav-input-context';
 import { useDialog } from '@/features/menu/hooks/use-dialog';
@@ -12,6 +12,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/shared/components/ui/dialog';
+import { Input } from '@/shared/components/ui/input';
+import { useHardwareKeyboard } from '@/shared/hooks/use-hardware-keyboard';
+import type { MessageKey, Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 type Layout = 'ru' | 'en';
@@ -32,18 +36,20 @@ const LETTERS: Record<Layout, string[][]> = {
   ],
 };
 const CONTROLS: readonly Control[] = ['layout', 'backspace', 'space', 'clear', 'done'];
-const CONTROL_LABELS: Record<Exclude<Control, 'layout'>, string> = {
-  backspace: '⌫',
-  space: 'Space',
-  clear: 'Clear',
-  done: 'Done',
+const CONTROL_LABEL_KEYS: Record<Exclude<Control, 'layout' | 'backspace'>, MessageKey> = {
+  space: 'search.space',
+  clear: 'search.clear',
+  done: 'search.done',
 };
 
-function controlLabel(control: Control, layout: Layout): string {
+function controlLabel(t: Translate, control: Control, layout: Layout): string {
   if (control === 'layout') {
     return layout === 'ru' ? 'ABC' : 'АБВ';
   }
-  return CONTROL_LABELS[control];
+  if (control === 'backspace') {
+    return '⌫';
+  }
+  return t(CONTROL_LABEL_KEYS[control]);
 }
 
 function move(position: Position, action: NavAction, rowLengths: readonly number[]): Position {
@@ -62,12 +68,16 @@ function move(position: Position, action: NavAction, rowLengths: readonly number
 }
 
 export function SongSearchDialog() {
+  const { t } = useI18n();
   const { close } = useDialog();
   const { search, setSearch } = useSearch();
   const [draft, setDraft] = useState(search);
   const [layout, setLayout] = useState<Layout>('ru');
   const [position, setPosition] = useState<Position>({ row: 1, column: 0 });
+  const keyboard = useHardwareKeyboard(true);
+  const hardware = keyboard.data === true;
   const focusSelected = useCallback((button: HTMLButtonElement | null) => button?.focus(), []);
+  const focusInput = useCallback((input: HTMLInputElement | null) => input?.focus(), []);
   const rows = useMemo(() => [DIGITS, ...LETTERS[layout]], [layout]);
   const rowLengths = useMemo(() => [...rows.map((row) => row.length), CONTROLS.length], [rows]);
 
@@ -78,6 +88,28 @@ export function SongSearchDialog() {
     },
     [setSearch],
   );
+
+  useEffect(() => {
+    const typeCharacter = (event: KeyboardEvent) => {
+      if (
+        event.target instanceof HTMLInputElement ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.metaKey ||
+        event.isComposing
+      ) {
+        return;
+      }
+      if (event.key === 'Backspace' || Array.from(event.key).length === 1) {
+        event.preventDefault();
+        updateDraft(
+          event.key === 'Backspace' ? Array.from(draft).slice(0, -1).join('') : draft + event.key,
+        );
+      }
+    };
+    window.addEventListener('keydown', typeCharacter);
+    return () => window.removeEventListener('keydown', typeCharacter);
+  }, [draft, updateDraft]);
 
   const activateControl = useCallback(
     (control: Control) => {
@@ -105,6 +137,12 @@ export function SongSearchDialog() {
   useNavInput(
     useCallback(
       (action) => {
+        if (hardware) {
+          if (action.back || action.confirm) {
+            close();
+          }
+          return;
+        }
         if (action.back) {
           close();
         } else if (action.confirm) {
@@ -121,7 +159,7 @@ export function SongSearchDialog() {
           setPosition((current) => move(current, action, rowLengths));
         }
       },
-      [activateControl, close, draft, position, rowLengths, rows, updateDraft],
+      [activateControl, close, draft, hardware, position, rowLengths, rows, updateDraft],
     ),
   );
 
@@ -135,70 +173,92 @@ export function SongSearchDialog() {
         onEscapeKeyDown={(event) => event.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle className="text-xl">Search songs</DialogTitle>
-          <DialogDescription>
-            Results update as you type · Arrows choose a key · Back closes
-          </DialogDescription>
+          <DialogTitle className="text-xl">{t('search.title')}</DialogTitle>
+          <DialogDescription>{t('search.description')}</DialogDescription>
         </DialogHeader>
-        <output
-          className="min-h-14 rounded-lg border bg-muted/30 px-4 py-3 text-lg break-all"
-          aria-label="Search text"
-          aria-live="polite"
-        >
-          {draft || <span className="text-muted-foreground">Artist or song title</span>}
-        </output>
-        <div className="grid gap-1.5" aria-label="On-screen keyboard">
-          {rows.map((row, rowIndex) => (
-            <div
-              key={row.join('')}
-              className="grid gap-1.5"
-              style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}
-            >
-              {row.map((character, columnIndex) => {
-                const selected = position.row === rowIndex && position.column === columnIndex;
+        {hardware ? (
+          <Input
+            ref={focusInput}
+            value={draft}
+            aria-label={t('search.text')}
+            placeholder={t('search.placeholder')}
+            onChange={(event) => updateDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === 'Escape') {
+                event.preventDefault();
+                close();
+              }
+            }}
+          />
+        ) : (
+          <output
+            className="min-h-14 rounded-lg border bg-muted/30 px-4 py-3 text-lg break-all"
+            aria-label={t('search.text')}
+            aria-live="polite"
+          >
+            {draft || <span className="text-muted-foreground">{t('search.placeholder')}</span>}
+          </output>
+        )}
+        {keyboard.isError && (
+          <p role="alert" className="text-sm text-destructive">
+            {t('search.keyboardDetectionFailed')}
+          </p>
+        )}
+        {!hardware && (
+          <div className="grid gap-1.5" aria-label={t('search.onScreenKeyboard')}>
+            {rows.map((row, rowIndex) => (
+              <div
+                key={row.join('')}
+                className="grid gap-1.5"
+                style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}
+              >
+                {row.map((character, columnIndex) => {
+                  const selected = position.row === rowIndex && position.column === columnIndex;
+                  return (
+                    <Button
+                      key={character}
+                      ref={selected ? focusSelected : undefined}
+                      variant="outline"
+                      className={cn(
+                        'h-12 w-full min-w-0 p-0 text-lg',
+                        selected && 'ring-2 ring-primary',
+                      )}
+                      tabIndex={selected ? 0 : -1}
+                      onClick={() => {
+                        setPosition({ row: rowIndex, column: columnIndex });
+                        updateDraft(draft + character);
+                      }}
+                    >
+                      {character}
+                    </Button>
+                  );
+                })}
+              </div>
+            ))}
+            <div className="grid grid-cols-5 gap-2">
+              {CONTROLS.map((control, columnIndex) => {
+                const selected = position.row === rows.length && position.column === columnIndex;
                 return (
                   <Button
-                    key={character}
+                    key={control}
                     ref={selected ? focusSelected : undefined}
-                    variant="outline"
-                    className={cn(
-                      'h-12 w-full min-w-0 p-0 text-lg',
-                      selected && 'ring-2 ring-primary',
-                    )}
+                    variant={control === 'done' ? 'default' : 'outline'}
+                    className={cn('h-12 min-w-0 px-2 text-base', selected && 'ring-2 ring-primary')}
                     tabIndex={selected ? 0 : -1}
+                    aria-label={control === 'backspace' ? t('search.backspace') : undefined}
                     onClick={() => {
-                      setPosition({ row: rowIndex, column: columnIndex });
-                      updateDraft(draft + character);
+                      setPosition({ row: rows.length, column: columnIndex });
+                      activateControl(control);
                     }}
                   >
-                    {character}
+                    {controlLabel(t, control, layout)}
                   </Button>
                 );
               })}
             </div>
-          ))}
-          <div className="grid grid-cols-5 gap-2">
-            {CONTROLS.map((control, columnIndex) => {
-              const selected = position.row === rows.length && position.column === columnIndex;
-              return (
-                <Button
-                  key={control}
-                  ref={selected ? focusSelected : undefined}
-                  variant={control === 'done' ? 'default' : 'outline'}
-                  className={cn('h-12 min-w-0 px-2 text-base', selected && 'ring-2 ring-primary')}
-                  tabIndex={selected ? 0 : -1}
-                  aria-label={control === 'backspace' ? 'Backspace' : undefined}
-                  onClick={() => {
-                    setPosition({ row: rows.length, column: columnIndex });
-                    activateControl(control);
-                  }}
-                >
-                  {controlLabel(control, layout)}
-                </Button>
-              );
-            })}
           </div>
-        </div>
+        )}
+        {hardware && <Button onClick={close}>{t('search.done')}</Button>}
       </DialogContent>
     </Dialog>
   );

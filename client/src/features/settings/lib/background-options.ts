@@ -1,4 +1,9 @@
-import { BUILT_IN_BACKGROUND_OPTIONS, selectionKey } from '@/features/playback/components/theme';
+import {
+  BUILT_IN_BACKGROUND_OPTIONS,
+  backgroundOptionLabel,
+  selectionKey,
+} from '@/features/playback/components/theme';
+import type { Translate } from '@/shared/i18n/translator';
 import type { AppConfig } from '@/types/AppConfig';
 import type { BackgroundSelection } from '@/types/BackgroundSelection';
 import type { CustomBackground } from '@/types/CustomBackground';
@@ -11,13 +16,14 @@ type BackgroundOption = {
 };
 
 export function backgroundOptions(
+  t: Translate,
   customBackgrounds: readonly CustomBackground[],
 ): BackgroundOption[] {
   return [
     ...BUILT_IN_BACKGROUND_OPTIONS.map((option) => ({
       value: selectionKey(option.selection),
-      label: option.label,
-      description: 'Built in',
+      label: backgroundOptionLabel(t, option),
+      description: t('background.builtIn'),
       selection: option.selection,
     })),
     ...customBackgrounds.map((background) => {
@@ -25,7 +31,7 @@ export function backgroundOptions(
       return {
         value: selectionKey(selection),
         label: background.name,
-        description: `Custom ${background.background_type}`,
+        description: t('background.custom'),
         selection,
       };
     }),

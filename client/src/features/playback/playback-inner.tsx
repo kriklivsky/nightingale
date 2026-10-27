@@ -12,17 +12,17 @@ import { Background } from '@/features/playback/components/background';
 import { ResultDialog } from '@/features/playback/components/dialogs/result';
 import { LoadingScreen } from '@/features/playback/components/loading-screen';
 import { LyricsDisplay } from '@/features/playback/components/lyrics-display';
-import { PauseOverlay } from '@/features/playback/components/pause-overlay';
-import { PitchGraph } from '@/features/playback/components/pitch-graph';
+import { PauseMenu } from '@/features/playback/components/pause-menu';
+import { PitchDisplay } from '@/features/playback/components/pitch-display';
 import { PlaybackHud } from '@/features/playback/components/playback-hud';
+import { PlaybackOsd } from '@/features/playback/components/playback-osd';
 import { usePlaybackInput, usePlaybackResult } from '@/features/playback/hooks';
 import {
   PlaybackProviders,
-  usePlaybackMicState,
   usePlaybackTranscriptState,
-  usePlaybackTransportActions,
   usePlaybackTransportState,
 } from '@/features/playback/providers';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { AppConfig } from '@/types/AppConfig';
 import type { Song } from '@/types/Song';
 
@@ -53,10 +53,9 @@ function PlaybackLayout({
   sessionPlayback,
   players,
 }: PlaybackLayoutProps) {
+  const { t } = useI18n();
   const { isReady, paused, guideAvailable } = usePlaybackTransportState();
-  const { handleContinue, handleExit } = usePlaybackTransportActions();
   const { segments } = usePlaybackTranscriptState();
-  const { series, micReady, micUserEnabled, multiplayer } = usePlaybackMicState();
   const {
     lyricsVerticalPosition,
     lyricsHorizontalPosition,
@@ -67,7 +66,7 @@ function PlaybackLayout({
   const hudPosition = lyricsVerticalPosition === 'top' ? 'bottom' : 'top';
   const sessionWindowControls = sessionPlayback && isTauri;
 
-  usePlaybackInput(config);
+  const volume = usePlaybackInput(config);
   const result = usePlaybackResult(song, queuePlayback, players);
 
   return (
@@ -80,20 +79,14 @@ function PlaybackLayout({
           <PlaybackHud
             title={song.title}
             artist={song.artist}
-            config={config}
             position={hudPosition}
             windowControls={sessionWindowControls}
           />
-          {!multiplayer && (
-            <PitchGraph
-              series={series}
-              micReady={micReady}
-              micUserEnabled={micUserEnabled}
-              paused={paused}
-              position={hudPosition}
-              scale={pitchGraphScale}
-            />
-          )}
+          <PitchDisplay
+            mode={config?.pitch_display}
+            position={hudPosition}
+            scale={pitchGraphScale}
+          />
           <LyricsDisplay
             segments={segments}
             verticalPosition={lyricsVerticalPosition}
@@ -104,11 +97,12 @@ function PlaybackLayout({
         </div>
       )}
 
-      <PauseOverlay
+      {isReady && <PlaybackOsd />}
+
+      <PauseMenu
         open={paused && !result.open}
-        exitLabel={sessionPlayback ? 'Exit Playback' : 'Exit to Menu'}
-        onContinue={handleContinue}
-        onExit={handleExit}
+        exitLabel={sessionPlayback ? t('playback.exitPlayback') : t('playback.exitToMenu')}
+        volume={volume}
       />
 
       <ResultDialog
@@ -121,7 +115,7 @@ function PlaybackLayout({
         scores={result.scores}
         activeProfile={result.activeProfile}
         nextPending={result.nextPending}
-        exitLabel={sessionPlayback ? 'Exit Playback' : 'Back to Menu'}
+        exitLabel={sessionPlayback ? t('playback.exitPlayback') : t('playback.backToMenu')}
         onBack={result.onBack}
         onNext={result.onNext}
       />

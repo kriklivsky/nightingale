@@ -9,6 +9,7 @@ import {
   XCircleIcon,
 } from 'lucide-react';
 
+import type { Translate } from '@/shared/i18n/translator';
 import type { Song } from '@/types/Song';
 
 import type { SongStatusInfo } from '../song/song-status';
@@ -34,6 +35,7 @@ type BuildActionGroupsParams = {
   analysis: AnalysisHandlers;
   onEditLyrics: () => void;
   onChangeLanguage: () => void;
+  t: Translate;
   run: (
     message: string,
     action: () => void | boolean | undefined | Promise<void | boolean | undefined>,
@@ -49,6 +51,7 @@ export function buildActionGroups({
   analysis,
   onEditLyrics,
   onChangeLanguage,
+  t,
   run,
 }: BuildActionGroupsParams): ActionItemProps[][] {
   const groups: ActionItemProps[][] = [];
@@ -60,17 +63,17 @@ export function buildActionGroups({
       analysisBusy
         ? {
             icon: XCircleIcon,
-            title: 'Cancel analysis',
-            description: 'Stop analysis and remove this song from the queue.',
+            title: t('songAction.cancelAnalysis'),
+            description: t('songAction.cancelAnalysisDescription'),
             destructive: true,
-            onClick: run(`Cancelled analysis for "${song.title}"`, () =>
+            onClick: run(t('songAction.cancelledAnalysis', { title: song.title }), () =>
               analysis.cancelAnalysisOne(song.file_hash),
             ),
           }
         : {
             icon: AudioLinesIcon,
-            title: 'Analyze song',
-            description: 'Prepare lyrics, timing, key, tempo, and stems.',
+            title: t('songAction.analyze'),
+            description: t('songAction.analyzeDescription'),
             onClick: () => analysis.enqueueOne(song.file_hash),
           },
     ];
@@ -78,8 +81,8 @@ export function buildActionGroups({
     if (supportsProvideLyrics) {
       notReadyGroup.push({
         icon: PencilLineIcon,
-        title: 'Provide lyrics',
-        description: 'Paste timed LRC, or lyrics to align.',
+        title: t('songAction.provideLyrics'),
+        description: t('songAction.provideLyricsDescription'),
         disabled: analysisBusy,
         onClick: onEditLyrics,
       });
@@ -94,15 +97,15 @@ export function buildActionGroups({
       groups.push([
         {
           icon: PencilLineIcon,
-          title: 'Edit lyrics (LRC)',
-          description: 'Replace or re-time the provided LRC.',
+          title: t('songAction.editLrc'),
+          description: t('songAction.editLrcDescription'),
           onClick: onEditLyrics,
         },
         {
           icon: AudioLinesIcon,
-          title: 'Refresh LRCLIB lyrics',
-          description: 'Fetch timed lyrics from LRCLIB and rebuild stems and key.',
-          onClick: run(`Refreshing timed lyrics for "${song.title}"`, () =>
+          title: t('songAction.refreshLrclib'),
+          description: t('songAction.refreshLrclibDescription'),
+          onClick: run(t('songAction.refreshingLyrics', { title: song.title }), () =>
             analysis.reanalyzeFull(song.file_hash),
           ),
         },
@@ -111,23 +114,25 @@ export function buildActionGroups({
       groups.push([
         {
           icon: AlignLeftIcon,
-          title: 'Realign',
-          description: 'Rebuild timing from the current lyrics.',
-          onClick: run(`Realigning "${song.title}"`, () => analysis.realign(song.file_hash)),
+          title: t('songAction.realign'),
+          description: t('songAction.realignDescription'),
+          onClick: run(t('songAction.realigning', { title: song.title }), () =>
+            analysis.realign(song.file_hash),
+          ),
         },
         {
           icon: RefreshCwIcon,
-          title: 'Refetch timed lyrics',
-          description: 'Fetch synchronized lyrics from LRCLIB.',
-          onClick: run(`Refetching timed lyrics for "${song.title}"`, () =>
+          title: t('songAction.refetchLyrics'),
+          description: t('songAction.refetchLyricsDescription'),
+          onClick: run(t('songAction.refetchingLyrics', { title: song.title }), () =>
             analysis.reanalyzeTranscript(song.file_hash),
           ),
         },
         {
           icon: AudioLinesIcon,
-          title: 'Full reanalysis',
-          description: 'Recreate stems, lyrics, timing, key, and tempo.',
-          onClick: run(`Full reanalysis (w/ stems) for "${song.title}"`, () =>
+          title: t('songAction.fullReanalysis'),
+          description: t('songAction.fullReanalysisDescription'),
+          onClick: run(t('songAction.fullReanalysisStarted', { title: song.title }), () =>
             analysis.reanalyzeFull(song.file_hash),
           ),
         },
@@ -136,14 +141,14 @@ export function buildActionGroups({
       groups.push([
         {
           icon: PencilLineIcon,
-          title: 'Edit lyrics',
-          description: 'Correct the words and rebuild their timing.',
+          title: t('songAction.editLyrics'),
+          description: t('songAction.editLyricsDescription'),
           onClick: onEditLyrics,
         },
         {
           icon: LanguagesIcon,
-          title: 'Change language',
-          description: 'Set the language and choose how to reprocess.',
+          title: t('songAction.changeLanguage'),
+          description: t('songAction.changeLanguageDescription'),
           onClick: onChangeLanguage,
         },
       ]);
@@ -153,13 +158,12 @@ export function buildActionGroups({
       groups.push([
         {
           icon: ImageIcon,
-          title: 'Refresh metadata',
-          description:
-            'Reload title, artist, album, duration, and cover art from the library source.',
+          title: t('songAction.refreshMetadata'),
+          description: t('songAction.refreshMetadataDescription'),
           onClick: run(
-            `Refreshed metadata for "${song.title}"`,
+            t('songAction.refreshedMetadata', { title: song.title }),
             () => analysis.refreshMetadata(song.file_hash),
-            `Nothing to refresh for "${song.title}"`,
+            t('songAction.nothingToRefresh', { title: song.title }),
           ),
         },
       ]);
@@ -168,10 +172,10 @@ export function buildActionGroups({
     groups.push([
       {
         icon: Trash2Icon,
-        title: 'Delete cache',
-        description: 'Remove every generated file for this song.',
+        title: t('songAction.deleteCache'),
+        description: t('songAction.deleteCacheDescription'),
         destructive: true,
-        onClick: run(`Cache deleted for "${song.title}"`, () =>
+        onClick: run(t('songAction.cacheDeleted', { title: song.title }), () =>
           analysis.deleteSongCache(song.file_hash),
         ),
       },

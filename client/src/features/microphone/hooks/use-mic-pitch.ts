@@ -12,6 +12,7 @@ import {
   createMicPitchDetector,
   detectPitchFromSamplesMic,
 } from '@/features/playback/lib/pitch/detect';
+import { useLatestRef } from '@/shared/hooks/use-latest-ref';
 
 /** ~30 Hz pitch updates: more than enough for vocal pitch tracking. */
 const PITCH_TICK_MS = 33;
@@ -105,6 +106,7 @@ export function useMicCapture(
 ) {
   const [active, setActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const optionsRef = useLatestRef(options);
 
   useEffect(() => {
     if (!enabled) {
@@ -115,7 +117,7 @@ export function useMicCapture(
 
     const run = async () => {
       try {
-        await adapter.startCapture(captureId, deviceId, options);
+        await adapter.startCapture(captureId, deviceId, optionsRef.current);
 
         if (cancelled) {
           return;
@@ -139,7 +141,21 @@ export function useMicCapture(
       cancelled = true;
       void adapter.stopCapture(captureId).catch(() => {});
     };
-  }, [adapter, captureId, deviceId, enabled, options]);
+  }, [adapter, captureId, deviceId, enabled, optionsRef]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (enabled) {
+      void adapter.updateCaptureOptions(captureId, options).catch((failure: unknown) => {
+        if (!cancelled) {
+          setError(failure instanceof Error ? failure.message : String(failure));
+        }
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [adapter, captureId, enabled, options]);
 
   return { active: enabled && active, error: enabled ? error : null };
 }

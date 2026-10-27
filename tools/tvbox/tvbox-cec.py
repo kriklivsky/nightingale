@@ -130,6 +130,81 @@ def selected_route_matches(selected: str, physical: str, allow_parent: bool = Tr
     return selected.lower() == ".".join(parts)
 
 
+def reported_active_route(output: str) -> str | None:
+    route = None
+    pending = None
+    for raw in output.splitlines():
+        line = raw.strip()
+        if line.startswith("Received from "):
+            if "ACTIVE_SOURCE (0x82)" in line:
+                pending = "phys-addr"
+            elif line.startswith(("Received from TV ", "Received from Audio System ")):
+                if "ROUTING_CHANGE (0x80)" in line:
+                    pending = "new-phys-addr"
+                elif "ROUTING_INFORMATION (0x81)" in line or "SET_STREAM_PATH (0x86)" in line:
+                    pending = "phys-addr"
+                else:
+                    pending = None
+            else:
+                pending = None
+        elif pending and line.startswith(f"{pending}:"):
+            selected = line.partition(":")[2].strip()
+            if re.fullmatch(r"[0-9a-f](?:\.[0-9a-f]){3}", selected, re.I):
+                route = selected
+            pending = None
+    return route
+
+
+def recover_startup_source() -> None:
+    deadline = time.monotonic() + 60
+    env = {**os.environ, "DISPLAY": ":0", "XAUTHORITY": "/run/tvbox.Xauthority"}
+    while time.monotonic() < deadline:
+        try:
+            adapters = sorted(glob.glob("/dev/cec*"))
+            if not adapters:
+                time.sleep(2)
+                continue
+            adapter = adapters[0]
+            info = subprocess.run(["cec-ctl", "--device", adapter], capture_output=True,
+                                  text=True, timeout=3, check=False)
+            physical = re.search(r"Physical Address\s*:\s*([0-9a-fA-F.]+)", info.stdout)
+            mask = re.search(r"Logical Address Mask\s*:\s*0x([0-9a-fA-F]+)", info.stdout)
+            if not physical or physical.group(1).lower() == "f.f.f.f" or not mask or int(mask.group(1), 16) == 0:
+                time.sleep(2)
+                continue
+            display = subprocess.run(["xrandr", "--current"], env=env, capture_output=True,
+                                     text=True, timeout=3, check=False)
+            if display.returncode != 0 or not re.search(r"^\S+ connected.*\d+x\d+\+", display.stdout, re.MULTILINE):
+                time.sleep(2)
+                continue
+            power = subprocess.run(["cec-ctl", "--device", adapter, "--to", "0",
+                                    "--give-device-power-status"], capture_output=True,
+                                   text=True, timeout=5, check=False)
+            if re.search(r"pwr-state:\s*(?:standby|to-standby)\s+\(", power.stdout):
+                log("startup HDMI announcement skipped: TV is in standby")
+                return
+            if power.returncode != 0 or not re.search(r"pwr-state:\s*on\s+\(", power.stdout):
+                time.sleep(2)
+                continue
+            active = subprocess.run(["cec-ctl", "--device", adapter, "--request-active-source",
+                                     "--monitor", "--monitor-time", "3"], capture_output=True,
+                                    text=True, timeout=8, check=False)
+            if active.returncode != 0:
+                time.sleep(2)
+                continue
+            selected = reported_active_route(active.stdout)
+            if selected and not selected_route_matches(selected, physical.group(1)):
+                log(f"startup HDMI announcement skipped: another source is active ({selected})")
+                return
+            if request_selected_source_wake(True, retrain=False):
+                log("startup HDMI announcement requested without changing the video mode")
+            return
+        except (OSError, subprocess.TimeoutExpired) as error:
+            log(f"startup HDMI check not ready ({error})")
+            time.sleep(2)
+    log("startup HDMI announcement skipped: display/CEC/TV did not become ready within 60 seconds")
+
+
 def monitor_source_selection() -> None:
     while True:
         adapters = sorted(glob.glob("/dev/cec*"))
@@ -177,8 +252,8 @@ def monitor_source_selection() -> None:
         time.sleep(2)
 
 
-def request_selected_source_wake(wait_for_cec: bool = False) -> bool:
-    """Restore HDMI only after the TV or soundbar selects our CEC route."""
+def request_selected_source_wake(wait_for_cec: bool = False, *, retrain: bool = True) -> bool:
+    """Serialize startup and selected-route HDMI recovery."""
     global LAST_WAKE
     if not WAKE_LOCK.acquire(blocking=False):
         return False
@@ -198,7 +273,7 @@ def request_selected_source_wake(wait_for_cec: bool = False) -> bool:
                 else:
                     log("CEC address unavailable after TV selected soundbar route")
                     return
-            perform_display_wake(wait_for_cec)
+            perform_display_wake(wait_for_cec, retrain=retrain)
         finally:
             LAST_WAKE = time.monotonic()
             WAKE_LOCK.release()
@@ -207,8 +282,8 @@ def request_selected_source_wake(wait_for_cec: bool = False) -> bool:
     return True
 
 
-def perform_display_wake(activate_source: bool = False) -> None:
-    """Retrain HDMI after the TV selects our source."""
+def perform_display_wake(activate_source: bool = False, *, retrain: bool = True) -> None:
+    """Announce our source, optionally retraining HDMI for a routing event."""
     try:
         time.sleep(1)
         env = {**os.environ, "DISPLAY": ":0", "XAUTHORITY": "/run/tvbox.Xauthority"}
@@ -219,15 +294,15 @@ def perform_display_wake(activate_source: bool = False) -> None:
         match = re.search(r"^(\S+) connected", result.stdout, re.MULTILINE)
         current_4k60 = re.search(r"^\s*3840x2160\s+[^\n]*60\.00\*",
                                 result.stdout, re.MULTILINE)
-        if match and (current_4k60 or kind != "moonlight"):
+        if retrain and match and (current_4k60 or kind != "moonlight"):
             output = match.group(1)
             if current_4k60:
-                retrain = subprocess.run(["xrandr", "--output", output, "--mode", "3840x2160", "--rate", "59.94"],
-                                         env=env, capture_output=True, timeout=5, check=False)
-                if retrain.returncode == 0:
+                retrained = subprocess.run(["xrandr", "--output", output, "--mode", "3840x2160", "--rate", "59.94"],
+                                          env=env, capture_output=True, timeout=5, check=False)
+                if retrained.returncode == 0:
                     time.sleep(1)
                 else:
-                    log(f"HDMI retrain failed: {retrain.stderr.decode(errors='replace').strip()}")
+                    log(f"HDMI retrain failed: {retrained.stderr.decode(errors='replace').strip()}")
             mode = subprocess.run(["xrandr", "--output", output, "--mode", "3840x2160", "--rate", "60"],
                                   env=env, capture_output=True, timeout=5, check=False)
             if mode.returncode == 0:
@@ -247,13 +322,16 @@ def perform_display_wake(activate_source: bool = False) -> None:
                 continue
             physical = match.group(1)
             try:
-                command = ["cec-ctl", "--device", adapter]
                 if activate_source:
-                    command.extend(["--to", "0", "--image-view-on"])
-                else:
-                    command.extend(["--to", "15"])
-                command.extend(["--active-source", f"phys-addr={physical}"])
-                sent = subprocess.run(command, capture_output=True, timeout=5, check=False)
+                    wake = subprocess.run(["cec-ctl", "--device", adapter, "--to", "0", "--image-view-on"],
+                                          capture_output=True, timeout=5, check=False)
+                    if wake.returncode != 0:
+                        log(f"CEC image-view-on failed with exit code {wake.returncode}")
+                    else:
+                        time.sleep(1)
+                sent = subprocess.run(["cec-ctl", "--device", adapter, "--to", "15",
+                                       "--active-source", f"phys-addr={physical}"],
+                                      capture_output=True, timeout=5, check=False)
                 if sent.returncode != 0:
                     log(f"CEC active-source failed with exit code {sent.returncode}")
             except (OSError, subprocess.TimeoutExpired) as error:
@@ -371,6 +449,8 @@ def run() -> int:
         menu_thread.start()
         monitor_thread = threading.Thread(target=monitor_source_selection, daemon=True)
         monitor_thread.start()
+        startup_thread = threading.Thread(target=recover_startup_source, daemon=True)
+        startup_thread.start()
         while True:
             source = find_cec_input()
             if source is None:

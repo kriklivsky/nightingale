@@ -1,7 +1,9 @@
 import { useMutation } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { pairScreen, type ScreenPairing } from './api';
+import { pairScreen, type ScreenAudioState, type ScreenPairing } from './api';
+import { messages } from './messages';
+import { ScreenMicrophoneControls } from './microphone-controls';
 import { defaultScreenQuality, screenError, screenQualities } from './peer';
 import { SenderSession } from './sender-session';
 import { Button } from './ui';
@@ -18,9 +20,14 @@ function ShareControls({
   const session = useRef<SenderSession | null>(null);
   const [started, setStarted] = useState(false);
   const [quality, setQuality] = useState(defaultScreenQuality);
+  const [audio, setAudio] = useState<ScreenAudioState>({
+    monitoring: null,
+    microphone_available: false,
+    microphone_streaming: false,
+  });
 
   useEffect(() => {
-    const current = new SenderSession(pairing, report, ended);
+    const current = new SenderSession(pairing, report, ended, setAudio);
     session.current = current;
     current.heartbeat();
     return () => {
@@ -37,7 +44,7 @@ function ShareControls({
   return (
     <div className="flex flex-wrap gap-4">
       <label className="flex items-center gap-3">
-        <span>Качество</span>
+        <span>{messages.quality}</span>
         <select
           className="h-12 rounded-lg border border-input bg-background px-4"
           value={quality.id}
@@ -57,7 +64,7 @@ function ShareControls({
         </select>
       </label>
       <Button className="h-12 px-6 text-base" onClick={start} disabled={started}>
-        {started ? 'Трансляция запущена' : 'Выбрать экран или вкладку'}
+        {started ? messages.sharing : messages.chooseScreen}
       </Button>
       <Button
         className="h-12 px-6 text-base"
@@ -66,8 +73,9 @@ function ShareControls({
           void session.current?.stop().catch((error: unknown) => report(screenError(error)));
         }}
       >
-        Отключиться
+        {messages.disconnect}
       </Button>
+      <ScreenMicrophoneControls session={session} audio={audio} report={report} />
     </div>
   );
 }
@@ -81,7 +89,7 @@ export function ScreenSender() {
     mutationFn: pairScreen,
     onSuccess: (value) => {
       setPairing(value);
-      setMessage('Подключено. Выберите, что показать на телевизоре.');
+      setMessage(messages.paired);
     },
   });
   const supported =
@@ -90,16 +98,13 @@ export function ScreenSender() {
   return (
     <main className="mx-auto flex min-h-svh max-w-3xl flex-col justify-center gap-8 p-6 sm:p-12">
       <header className="space-y-3">
-        <p className="text-sm font-medium text-primary">ORANGE PI · ЛОКАЛЬНАЯ ТРАНСЛЯЦИЯ</p>
-        <h1 className="text-4xl font-semibold tracking-tight">Экран ноутбука на телевизоре</h1>
-        <p className="text-lg text-muted-foreground">
-          Видео и звук передаются по вашей сети. Микрофоны остаются подключёнными к Orange Pi.
-        </p>
+        <p className="text-sm font-medium text-primary">{messages.eyebrow}</p>
+        <h1 className="text-4xl font-semibold tracking-tight">{messages.heading}</h1>
+        <p className="text-lg text-muted-foreground">{messages.intro}</p>
       </header>
       {!supported && (
         <p role="alert" className="rounded-xl border border-destructive p-5">
-          Захват экрана недоступен. Откройте эту страницу в Chrome по HTTPS и доверьте сертификат
-          Orange Pi, сверив его отпечаток с телевизором. Не отключайте защиту браузера.
+          {messages.unsupported}
         </p>
       )}
       {pairing === null ? (
@@ -112,7 +117,7 @@ export function ScreenSender() {
           }}
         >
           <label className="block space-y-3" htmlFor="screen-code">
-            <span className="text-lg">Введите код с телевизора</span>
+            <span className="text-lg">{messages.codeLabel}</span>
             <input
               id="screen-code"
               className="block w-full rounded-lg border border-input bg-background p-4 text-3xl tracking-widest outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -127,7 +132,7 @@ export function ScreenSender() {
             />
           </label>
           <Button className="h-12 px-6 text-base" disabled={!supported || pair.isPending} submit>
-            {pair.isPending ? 'Подключаемся…' : 'Подключиться'}
+            {pair.isPending ? messages.connecting : messages.connect}
           </Button>
           {pair.isError && <p role="alert">{screenError(pair.error)}</p>}
         </form>
@@ -136,18 +141,9 @@ export function ScreenSender() {
       )}
       {message !== '' && <output className="text-lg">{message}</output>}
       <aside className="space-y-3 text-sm text-muted-foreground">
-        <p>
-          4K требует источника соответствующего разрешения. Частота кадров зависит от сети и
-          производительности устройств.
-        </p>
-        <p>
-          Для музыки и видео выбирайте вкладку Chrome и включайте «Передавать звук». При выборе
-          всего экрана наличие системного звука зависит от ОС и браузера.
-        </p>
-        <p>
-          Приёмник не запрашивает доступ к микрофону ноутбука, не записывает трансляцию и не
-          использует внешние STUN/TURN-серверы. Устройства должны быть в одной доступной сети.
-        </p>
+        <p>{messages.note4k}</p>
+        <p>{messages.noteAudio}</p>
+        <p>{messages.notePrivacy}</p>
       </aside>
     </main>
   );

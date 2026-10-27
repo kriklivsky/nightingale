@@ -207,6 +207,7 @@ def run_pipeline(
             pre_align_cleanup=pre_align_cleanup,
             timed_lines=timed_lines,
             lyrics_lines=lrc_lines,
+            mix_path=audio_path,
         )
         if not transcript.get("segments"):
             raise ValueError("Word alignment produced no timed lyrics; analysis stopped.")

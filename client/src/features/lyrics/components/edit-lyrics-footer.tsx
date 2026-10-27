@@ -1,5 +1,6 @@
 import { Button } from '@/shared/components/ui/button';
 import { DialogFooter } from '@/shared/components/ui/dialog';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 import { ARIA_DISABLED_CLASS, ringFor } from './parts';
@@ -23,6 +24,7 @@ export const EditLyricsFooter = ({
   hint,
   isFocused,
 }: EditLyricsFooterProps) => {
+  const { t } = useI18n();
   const cancelFocused = isFocused(0);
   const saveFocused = isFocused(1);
   return (
@@ -41,7 +43,7 @@ export const EditLyricsFooter = ({
         aria-disabled={saving}
         className={cn(ARIA_DISABLED_CLASS, ringFor(cancelFocused))}
       >
-        Cancel
+        {t('common.cancel')}
       </Button>
       <Button
         onClick={() => {
@@ -53,7 +55,7 @@ export const EditLyricsFooter = ({
         aria-disabled={!canSave}
         className={cn(ARIA_DISABLED_CLASS, ringFor(saveFocused))}
       >
-        {saving ? 'Saving…' : saveLabel}
+        {saving ? t('lyrics.saving') : saveLabel}
       </Button>
     </DialogFooter>
   );

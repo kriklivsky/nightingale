@@ -24,6 +24,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/shared/components/ui/table';
+import type { Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 import type { ScoreRecord } from '@/types/ScoreRecord';
 import type { Song } from '@/types/Song';
@@ -34,6 +36,7 @@ const NO_FOCUS_RING = 'focus-visible:ring-0 focus-visible:border-transparent';
 const EMPTY_SCORES: ScoreRecord[] = [];
 
 function AchievedAt({ playedAt }: { playedAt: bigint }) {
+  const { locale } = useI18n();
   const date = new Date(Number(playedAt) * 1000);
 
   return Number.isNaN(date.getTime()) ? (
@@ -43,7 +46,7 @@ function AchievedAt({ playedAt }: { playedAt: bigint }) {
       className="block truncate text-[10px] text-muted-foreground"
       dateTime={date.toISOString()}
     >
-      {date.toLocaleString()}
+      {date.toLocaleString(locale)}
     </time>
   );
 }
@@ -91,20 +94,23 @@ type LeaderboardSongNameProps = {
 };
 
 function LeaderboardSongName({ song, loading, songHash }: LeaderboardSongNameProps) {
+  const { t } = useI18n();
   if (song) {
     return (
       <div className="min-w-0">
         <div className="truncate font-medium">{song.title || songHash}</div>
-        <div className="truncate text-muted-foreground">{song.artist || 'Unknown artist'}</div>
+        <div className="truncate text-muted-foreground">
+          {song.artist || t('song.unknownArtist')}
+        </div>
       </div>
     );
   }
 
   if (loading) {
-    return 'Loading…';
+    return t('leaderboard.loading');
   }
 
-  return `Unknown song (${songHash.slice(0, 8)})`;
+  return t('leaderboard.unknownSong', { id: songHash.slice(0, 8) });
 }
 
 type LeaderboardBoardProps = {
@@ -124,8 +130,11 @@ const LeaderboardBoard = ({
   songs,
   loading,
 }: LeaderboardBoardProps) => {
+  const { t } = useI18n();
   if (empty) {
-    return <p className="py-10 text-center text-sm text-muted-foreground">No scores yet.</p>;
+    return (
+      <p className="py-10 text-center text-sm text-muted-foreground">{t('leaderboard.empty')}</p>
+    );
   }
   if (!global) {
     return (
@@ -133,8 +142,8 @@ const LeaderboardBoard = ({
         <TableHeader className="sticky top-0 z-10 bg-background">
           <TableRow className="hover:bg-transparent">
             <TableHead className="h-9 w-8 px-1 text-xs">#</TableHead>
-            <TableHead className="h-9 text-xs">Profile</TableHead>
-            <TableHead className="h-9 w-28 text-right text-xs">Score</TableHead>
+            <TableHead className="h-9 text-xs">{t('result.profile')}</TableHead>
+            <TableHead className="h-9 w-28 text-right text-xs">{t('result.score')}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -160,9 +169,9 @@ const LeaderboardBoard = ({
       <TableHeader className="sticky top-0 z-10 bg-background">
         <TableRow className="hover:bg-transparent">
           <TableHead className="h-9 w-8 px-1 text-xs">#</TableHead>
-          <TableHead className="h-9 text-xs">Song</TableHead>
-          <TableHead className="h-9 w-[28%] text-xs">Profile</TableHead>
-          <TableHead className="h-9 w-16 text-right text-xs">Score</TableHead>
+          <TableHead className="h-9 text-xs">{t('library.column.song')}</TableHead>
+          <TableHead className="h-9 w-[28%] text-xs">{t('result.profile')}</TableHead>
+          <TableHead className="h-9 w-16 text-right text-xs">{t('result.score')}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -201,31 +210,37 @@ const LeaderboardHeading = ({
   global: boolean;
   title: string | undefined;
   artist: string;
-}) => (
-  <DialogHeader className="shrink-0 gap-1 border-b p-4 pr-10">
-    <DialogTitle className="flex min-w-0 items-start gap-2 text-base">
-      <TrophyIcon className="size-4 shrink-0 self-center text-primary" />
-      <span className="min-w-0">
-        <span className="block truncate">{global ? 'Leaderboards' : title}</span>
-        {!global && (
-          <span className="block truncate text-xs font-normal text-muted-foreground">{artist}</span>
-        )}
-      </span>
-    </DialogTitle>
-    <DialogDescription className={cn(!global && 'sr-only')}>
-      {global ? 'Top score records across every profile and song.' : 'Song leaderboard.'}
-    </DialogDescription>
-  </DialogHeader>
-);
+}) => {
+  const { t } = useI18n();
+
+  return (
+    <DialogHeader className="shrink-0 gap-1 border-b p-4 pr-10">
+      <DialogTitle className="flex min-w-0 items-start gap-2 text-base">
+        <TrophyIcon className="size-4 shrink-0 self-center text-primary" />
+        <span className="min-w-0">
+          <span className="block truncate">{global ? t('menu.leaderboards') : title}</span>
+          {!global && (
+            <span className="block truncate text-xs font-normal text-muted-foreground">
+              {artist}
+            </span>
+          )}
+        </span>
+      </DialogTitle>
+      <DialogDescription className={cn(!global && 'sr-only')}>
+        {global ? t('leaderboard.description') : t('leaderboard.songDescription')}
+      </DialogDescription>
+    </DialogHeader>
+  );
+};
 
 const displayedLeaderboard = (mode: LeaderboardMode) => ({
   global: mode === 'leaderboards',
   songMode: typeof mode === 'object' ? mode : null,
 });
 
-const leaderboardSongCopy = (song: Song | undefined) => ({
+const leaderboardSongCopy = (t: Translate, song: Song | undefined) => ({
   title: song?.title,
-  artist: song === undefined || song.artist === '' ? 'Unknown artist' : song.artist,
+  artist: song === undefined || song.artist === '' ? t('song.unknownArtist') : song.artist,
 });
 
 const songLeaderboard = (scores: ScoreRecord[], songHash: string | undefined) =>
@@ -240,6 +255,7 @@ const leaderboardEmpty = (
 ): boolean => (global ? globalBoard : songBoard).length === 0;
 
 export const LeaderboardsDialog = () => {
+  const { t } = useI18n();
   const { mode, close } = useDialog();
   const { data: profiles } = useProfiles();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -279,7 +295,7 @@ export const LeaderboardsDialog = () => {
     },
   });
 
-  const { title: songTitle, artist: songArtist } = leaderboardSongCopy(songMode?.song);
+  const { title: songTitle, artist: songArtist } = leaderboardSongCopy(t, songMode?.song);
   const boardEmpty = leaderboardEmpty(globalOpen, globalBoard, songBoard);
 
   return (
@@ -315,7 +331,7 @@ export const LeaderboardsDialog = () => {
               onMouseEnter={() => focusSegment(0)}
               className={cn(NO_FOCUS_RING, open && focusedIndex === 0 && RING)}
             >
-              Close
+              {t('common.close')}
             </Button>
           </DialogFooter>
         </div>

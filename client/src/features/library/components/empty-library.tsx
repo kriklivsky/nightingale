@@ -15,10 +15,12 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@/shared/components/ui/empty';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 export const EmptyLibrary = () => {
   const { selectFolder, rescan, rescanDisabled, isPending, hasSource } = useLibrarySourceActions();
+  const { t } = useI18n();
   const { setMode } = useDialog();
   const { focus, setFocus, actionsRef } = useMenuFocus();
   const actionClass = (index: number) =>
@@ -55,11 +57,8 @@ export const EmptyLibrary = () => {
           <EmptyMedia variant="icon">
             <MusicIcon />
           </EmptyMedia>
-          <EmptyTitle>No songs found</EmptyTitle>
-          <EmptyDescription>
-            The configured music folder is empty or still being scanned. Add supported files to it,
-            then rescan the library.
-          </EmptyDescription>
+          <EmptyTitle>{t('library.noSongs')}</EmptyTitle>
+          <EmptyDescription>{t('empty.folderEmpty')}</EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
           <Button
@@ -69,11 +68,11 @@ export const EmptyLibrary = () => {
             onClick={rescan}
             disabled={rescanDisabled}
           >
-            <RefreshCwIcon /> Rescan library
+            <RefreshCwIcon /> {t('empty.rescan')}
           </Button>
         </EmptyContent>
         {focus.active && focus.source === 'nav' && (
-          <p className="text-xs text-muted-foreground">OK Rescan · ← Library controls</p>
+          <p className="text-sm text-muted-foreground">{t('empty.remoteRescan')}</p>
         )}
       </Empty>
     );
@@ -85,11 +84,8 @@ export const EmptyLibrary = () => {
         <EmptyMedia variant="icon">
           <MusicIcon />
         </EmptyMedia>
-        <EmptyTitle>No library yet</EmptyTitle>
-        <EmptyDescription>
-          Pick a folder on this machine or connect a Plex, Jellyfin, or Navidrome server to start
-          enjoying your karaoke!
-        </EmptyDescription>
+        <EmptyTitle>{t('empty.noLibrary')}</EmptyTitle>
+        <EmptyDescription>{t('empty.noLibraryDescription')}</EmptyDescription>
       </EmptyHeader>
       <EmptyContent className="max-w-lg flex-col justify-center gap-2 sm:flex-row sm:flex-wrap">
         <Button
@@ -99,7 +95,7 @@ export const EmptyLibrary = () => {
           onClick={() => setMode('plex-connect')}
           disabled={isPending}
         >
-          <PlexIcon /> Connect Plex
+          <PlexIcon /> {t('empty.connectPlex')}
         </Button>
         <Button
           variant="outline"
@@ -108,7 +104,7 @@ export const EmptyLibrary = () => {
           onClick={() => setMode('navidrome-connect')}
           disabled={isPending}
         >
-          <Disc3Icon /> Connect Navidrome
+          <Disc3Icon /> {t('empty.connectNavidrome')}
         </Button>
         <Button
           variant="outline"
@@ -117,7 +113,7 @@ export const EmptyLibrary = () => {
           onClick={() => setMode('jellyfin-connect')}
           disabled={isPending}
         >
-          <JellyfinIcon /> Connect Jellyfin
+          <JellyfinIcon /> {t('empty.connectJellyfin')}
         </Button>
         <Button
           variant="outline"
@@ -126,11 +122,11 @@ export const EmptyLibrary = () => {
           onClick={() => selectFolder()}
           disabled={isPending}
         >
-          <FolderIcon /> Select folder
+          <FolderIcon /> {t('empty.selectFolder')}
         </Button>
       </EmptyContent>
       {focus.active && focus.source === 'nav' && (
-        <p className="text-xs text-muted-foreground">←→ Choose source · OK Select</p>
+        <p className="text-sm text-muted-foreground">{t('empty.remoteSources')}</p>
       )}
     </Empty>
   );

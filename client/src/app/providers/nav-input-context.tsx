@@ -12,10 +12,13 @@ export type NavAction = {
 };
 
 type NavSubscriber = (action: NavAction) => void;
+/** Runs before subscribers; returning true consumes the action. */
+type NavInterceptor = (action: NavAction) => boolean;
 type Unsubscribe = () => void;
 
 export type NavInputContextValue = {
   subscribe: (fn: NavSubscriber) => Unsubscribe;
+  intercept: (fn: NavInterceptor) => Unsubscribe;
 };
 
 export const NavInputContext = createContext<NavInputContextValue | null>(null);
@@ -70,6 +73,7 @@ function keyToAction(key: string): Partial<NavAction> | null {
 
 export function NavInputProvider({ children }: { children: ReactNode }) {
   const subscribersRef = useRef(new Set<NavSubscriber>());
+  const interceptorsRef = useRef(new Set<NavInterceptor>());
 
   const fire = useCallback((partial: Partial<NavAction>) => {
     const action: NavAction = {
@@ -81,6 +85,11 @@ export function NavInputProvider({ children }: { children: ReactNode }) {
       back: false,
       ...partial,
     };
+    for (const interceptor of interceptorsRef.current) {
+      if (interceptor(action)) {
+        return;
+      }
+    }
     for (const fn of subscribersRef.current) {
       fn(action);
     }
@@ -102,6 +111,9 @@ export function NavInputProvider({ children }: { children: ReactNode }) {
 
       e.preventDefault();
       e.stopPropagation();
+      if (e.repeat && partial.confirm === true) {
+        return;
+      }
       if (!e.repeat) {
         blurActiveElement();
       }
@@ -142,7 +154,16 @@ export function NavInputProvider({ children }: { children: ReactNode }) {
       subscribersRef.current.delete(fn);
     };
   }, []);
-  const value = useMemo<NavInputContextValue>(() => ({ subscribe }), [subscribe]);
+  const intercept = useCallback((fn: NavInterceptor): Unsubscribe => {
+    interceptorsRef.current.add(fn);
+    return () => {
+      interceptorsRef.current.delete(fn);
+    };
+  }, []);
+  const value = useMemo<NavInputContextValue>(
+    () => ({ subscribe, intercept }),
+    [intercept, subscribe],
+  );
 
   return <NavInputContext.Provider value={value}>{children}</NavInputContext.Provider>;
 }

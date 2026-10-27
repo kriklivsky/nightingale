@@ -7,6 +7,7 @@ import { ButtonGroup } from '@/shared/components/ui/button-group';
 import { Field, FieldDescription, FieldGroup } from '@/shared/components/ui/field';
 import { Input } from '@/shared/components/ui/input';
 import { Label } from '@/shared/components/ui/label';
+import { useI18n } from '@/shared/i18n/use-i18n';
 
 import type { BackgroundDraft } from '../lib/background-draft';
 
@@ -24,6 +25,7 @@ export function BackgroundAddForm({
   fileInputRef: RefObject<HTMLInputElement | null>;
   getFocusClassName: (index: number) => string | undefined;
 }) {
+  const { t } = useI18n();
   const chooseNativeFile = async () => {
     try {
       const selected = await pickCustomBackgroundFile();
@@ -36,7 +38,7 @@ export function BackgroundAddForm({
         }));
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not choose background file');
+      toast.error(error instanceof Error ? error.message : t('background.chooseFileFailed'));
     }
   };
   const chooseFile = () => {
@@ -50,33 +52,35 @@ export function BackgroundAddForm({
   return (
     <FieldGroup>
       <Field>
-        <Label>Source</Label>
+        <Label>{t('background.source')}</Label>
         <ButtonGroup>
           <Button
             variant={draft.sourceType === 'upload' ? 'default' : 'outline'}
             className={getFocusClassName(0)}
             onClick={() => setDraft((current) => ({ ...current, sourceType: 'upload' }))}
           >
-            Upload
+            {t('background.upload')}
           </Button>
           <Button
             variant={draft.sourceType === 'url' ? 'default' : 'outline'}
             className={getFocusClassName(1)}
             onClick={() => setDraft((current) => ({ ...current, sourceType: 'url' }))}
           >
-            Link
+            {t('background.link')}
           </Button>
         </ButtonGroup>
-        <FieldDescription>Supported: {SUPPORTED_FORMATS}</FieldDescription>
+        <FieldDescription>
+          {t('background.supported', { formats: SUPPORTED_FORMATS })}
+        </FieldDescription>
       </Field>
 
       <Field>
-        <Label htmlFor="background-name">Name</Label>
+        <Label htmlFor="background-name">{t('background.name')}</Label>
         <Input
           id="background-name"
           value={draft.name}
           maxLength={80}
-          placeholder="My background"
+          placeholder={t('background.namePlaceholder')}
           className={getFocusClassName(2)}
           onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
         />
@@ -84,7 +88,7 @@ export function BackgroundAddForm({
 
       {draft.sourceType === 'url' ? (
         <Field>
-          <Label htmlFor="background-url">HTTPS link</Label>
+          <Label htmlFor="background-url">{t('background.httpsLink')}</Label>
           <Input
             id="background-url"
             type="url"
@@ -97,7 +101,7 @@ export function BackgroundAddForm({
         </Field>
       ) : (
         <Field>
-          <Label>File</Label>
+          <Label>{t('background.file')}</Label>
           <input
             ref={fileInputRef}
             id="background-file"
@@ -123,10 +127,10 @@ export function BackgroundAddForm({
               className={getFocusClassName(3)}
               onClick={chooseFile}
             >
-              Choose file
+              {t('background.chooseFile')}
             </Button>
             <span className="truncate text-sm text-muted-foreground" aria-live="polite">
-              {draft.nativeFileName ?? draft.file?.name ?? 'No file selected'}
+              {draft.nativeFileName ?? draft.file?.name ?? t('background.noFile')}
             </span>
           </div>
         </Field>

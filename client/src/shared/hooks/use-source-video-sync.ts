@@ -2,16 +2,21 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 
 import { useLatestRef } from '@/shared/hooks/use-latest-ref';
 
-const DRIFT_CORRECT_SEC = 0.5;
-const DRIFT_THROTTLE_MS = 500;
-
 const PLAYBACK_RATE_MIN = 0.25;
 const PLAYBACK_RATE_MAX = 4;
 
-const INITIAL_SEEK_SKIP_THRESHOLD_SEC = 0.01;
-const INITIAL_SEEK_TOLERANCE_SEC = 0.035;
-const INITIAL_SEEK_END_PADDING_SEC = 0.05;
-const INITIAL_SEEK_WATCHDOG_INTERVAL_MS = 120;
+/** Drift (seconds, source-video time) tolerated before a corrective seek. */
+const RESEEK_DRIFT_SEC = 0.35;
+/** Minimum spacing of corrective seeks while drift persists. */
+const RESEEK_INTERVAL_MS = 4000;
+/** A drift this large is a deliberate jump (skip, restart) and re-seeks at once. */
+const JUMP_DRIFT_SEC = 3;
+/** Initial estimate of how long a seek takes before the clip shows frames again. */
+const INITIAL_SEEK_LATENCY_SEC = 0.5;
+const MIN_SEEK_LATENCY_SEC = 0.1;
+const MAX_SEEK_LATENCY_SEC = 2;
+const SEEK_LATENCY_SMOOTHING = 0.6;
+const SEEK_END_PADDING_SEC = 0.05;
 
 type UseSourceVideoSyncOptions = {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -22,6 +27,26 @@ type UseSourceVideoSyncOptions = {
   subscribe: (fn: (time: number) => void) => () => void;
   getCurrentTime: () => number;
 };
+
+type SyncState = {
+  /** performance.now() of the seek in flight, or null. */
+  seekStartedAt: number | null;
+  lastSeekAt: number;
+  /** Smoothed measured seek duration (seconds), used as the seek lead. */
+  seekLatencySec: number;
+  /** False until the first seek lands, so the clip never flashes its opening frame. */
+  revealed: boolean;
+  /** The media element reported an error; the clip stays hidden. */
+  failed: boolean;
+};
+
+const initialSyncState = (): SyncState => ({
+  seekStartedAt: null,
+  lastSeekAt: 0,
+  seekLatencySec: INITIAL_SEEK_LATENCY_SEC,
+  revealed: false,
+  failed: false,
+});
 
 function safePlay(video: HTMLVideoElement): void {
   void video.play().catch(() => {});
@@ -43,145 +68,89 @@ function enforceSilent(video: HTMLVideoElement): void {
   video.volume = 0;
 }
 
-function applyPlaybackRate(video: HTMLVideoElement, ratio: number): void {
-  video.playbackRate = Math.min(PLAYBACK_RATE_MAX, Math.max(PLAYBACK_RATE_MIN, ratio));
-}
-
-function correctDrift(
-  video: HTMLVideoElement,
-  target: number,
-  lastSyncRef: { current: number },
-  mode: 'throttled' | 'aggressive',
-): void {
-  const now = performance.now();
-  if (video.seeking || (mode === 'throttled' && video.readyState < video.HAVE_CURRENT_DATA)) {
-    lastSyncRef.current = now;
-    return;
-  }
-
-  const drift = Math.abs(video.currentTime - target);
-  const tolerance = mode === 'aggressive' ? INITIAL_SEEK_TOLERANCE_SEC : DRIFT_CORRECT_SEC;
-  if (drift <= tolerance) {
-    return;
-  }
-
-  const shouldSnap = mode === 'aggressive' || now - lastSyncRef.current > DRIFT_THROTTLE_MS;
-
-  if (shouldSnap) {
-    lastSyncRef.current = now;
-    video.currentTime = target;
+function setRate(video: HTMLVideoElement, rate: number): void {
+  const clamped = Math.min(PLAYBACK_RATE_MAX, Math.max(PLAYBACK_RATE_MIN, rate));
+  if (Math.abs(video.playbackRate - clamped) > 1e-3) {
+    video.playbackRate = clamped;
   }
 }
 
-function clampSeekTarget(target: number, video: HTMLVideoElement): number {
+function clampToClip(target: number, video: HTMLVideoElement): number {
   if (Number.isFinite(video.duration) && video.duration > 0) {
-    return Math.max(
-      0,
-      Math.min(target, Math.max(0, video.duration - INITIAL_SEEK_END_PADDING_SEC)),
-    );
+    return Math.max(0, Math.min(target, Math.max(0, video.duration - SEEK_END_PADDING_SEC)));
   }
 
   return Math.max(0, target);
 }
 
+/** WebKit can drop seeks issued before preroll, so wait until the clip can play. */
+const clipCanStart = (video: HTMLVideoElement): boolean =>
+  Number.isFinite(video.duration) &&
+  video.duration > 0 &&
+  video.readyState >= video.HAVE_FUTURE_DATA;
+
 /**
- * Waits for preroll before seeking, then keeps the initial frame hidden until
- * the seek completes. The watchdog also handles missed media events.
+ * Seeks where the song will be once the seek completes. The clip keeps playing
+ * through the seek: pausing adds preroll latency on GStreamer-backed WebKit.
  */
-function runInitialSeek(
-  video: HTMLVideoElement,
-  computeTarget: () => number,
-  onReady: () => void,
-): () => void {
-  let finalized = false;
-  let cleanup: (() => void) | undefined;
-
-  const finalize = () => {
-    if (finalized) {
-      return;
-    }
-    finalized = true;
-    onReady();
-  };
-
-  const start = () => {
-    const target = computeTarget();
-
-    if (target <= INITIAL_SEEK_SKIP_THRESHOLD_SEC) {
-      finalize();
-      return;
-    }
-
-    const seekTarget = clampSeekTarget(target, video);
-    const isAligned = () => Math.abs(video.currentTime - seekTarget) <= INITIAL_SEEK_TOLERANCE_SEC;
-    const tryFinalize = () => {
-      const decoded = !video.seeking && video.readyState >= video.HAVE_CURRENT_DATA && isAligned();
-      if (decoded) {
-        finalize();
-      }
-      return decoded;
-    };
-
-    const watchdog = window.setInterval(() => {
-      if (finalized) {
-        return;
-      }
-
-      if (tryFinalize() || isAligned()) {
-        return;
-      }
-
-      if (!video.seeking && video.readyState >= video.HAVE_FUTURE_DATA) {
-        video.currentTime = seekTarget;
-      }
-    }, INITIAL_SEEK_WATCHDOG_INTERVAL_MS);
-
-    video.addEventListener('seeked', tryFinalize);
-    video.addEventListener('canplay', tryFinalize);
-    video.currentTime = seekTarget;
-
-    cleanup = () => {
-      window.clearInterval(watchdog);
-      video.removeEventListener('seeked', tryFinalize);
-      video.removeEventListener('canplay', tryFinalize);
-    };
-  };
-
-  const canStart = () =>
-    Number.isFinite(video.duration) &&
-    video.duration > 0 &&
-    video.readyState >= video.HAVE_FUTURE_DATA;
-
-  if (canStart()) {
-    start();
-  } else {
-    const events = ['loadedmetadata', 'durationchange', 'canplay'] as const;
-    const stopWaiting = () => {
-      for (const event of events) {
-        video.removeEventListener(event, onPreroll);
-      }
-    };
-    const onPreroll = () => {
-      if (!canStart()) {
-        return;
-      }
-
-      stopWaiting();
-      start();
-    };
-
-    for (const event of events) {
-      video.addEventListener(event, onPreroll);
-    }
-    cleanup = stopWaiting;
-  }
-
-  return () => {
-    finalized = true;
-    cleanup?.();
-  };
+function seekAhead(video: HTMLVideoElement, target: number, ratio: number, state: SyncState): void {
+  const lead = video.paused ? 0 : state.seekLatencySec * ratio;
+  state.seekStartedAt = performance.now();
+  state.lastSeekAt = state.seekStartedAt;
+  video.currentTime = clampToClip(target + lead, video);
 }
 
+function recordSeekLatency(state: SyncState): void {
+  if (state.seekStartedAt === null) {
+    return;
+  }
+  const sample = (performance.now() - state.seekStartedAt) / 1000;
+  state.seekStartedAt = null;
+  const bounded = Math.min(MAX_SEEK_LATENCY_SEC, Math.max(MIN_SEEK_LATENCY_SEC, sample));
+  state.seekLatencySec =
+    state.seekLatencySec * SEEK_LATENCY_SMOOTHING + bounded * (1 - SEEK_LATENCY_SMOOTHING);
+}
+
+/** Re-seeks a drifting clip; small drift is left alone because every correction costs a stall. */
+function correctDrift(video: HTMLVideoElement, target: number, ratio: number, state: SyncState) {
+  if (video.seeking || state.seekStartedAt !== null) {
+    return;
+  }
+  const drift = Math.abs(video.currentTime - target);
+  if (drift <= RESEEK_DRIFT_SEC) {
+    return;
+  }
+  if (drift > JUMP_DRIFT_SEC || performance.now() - state.lastSeekAt > RESEEK_INTERVAL_MS) {
+    seekAhead(video, target, ratio, state);
+  }
+}
+
+/** Outside the clip's span: stay paused, parked on the first frame before it starts. */
+function parkOutsideClip(video: HTMLVideoElement, target: number, ratio: number, state: SyncState) {
+  if (!video.paused) {
+    video.pause();
+  }
+  if (target < 0 && video.currentTime > 0 && !video.seeking) {
+    seekAhead(video, 0, ratio, state);
+  }
+}
+
+function followPlayState(video: HTMLVideoElement, playing: boolean) {
+  if (playing && video.paused) {
+    safePlay(video);
+  } else if (!playing && !video.paused) {
+    video.pause();
+  }
+}
+
+/**
+ * Keeps a muted clip locked to the song using a constant offset: the clip is
+ * never time-stretched to fit the song. Outside the clip's span, or after a
+ * media error, it is hidden (`visible: false`) so callers can show another
+ * background. The playback rate only follows the song tempo; drift is fixed by
+ * occasional seeks that lead by the measured seek latency, because rate changes
+ * and paused seeks stall GStreamer-backed WebKit.
+ */
 export function useSourceVideoSync({
   videoRef,
   src,
@@ -194,32 +163,34 @@ export function useSourceVideoSync({
   const [ready, setReady] = useState(false);
   const [visible, setVisible] = useState(false);
   const readyRef = useRef(false);
-  const lastSyncRef = useRef(0);
-
+  const stateRef = useRef<SyncState>(initialSyncState());
   const isPlayingRef = useLatestRef(isPlaying);
-  const inRangeRef = useRef(false);
 
-  const currentRatio = useCallback(() => normalizeRatio(tempoRatio), [tempoRatio]);
+  const ratio = normalizeRatio(tempoRatio);
   const toSourceTime = useCallback(
-    (audioTime: number) => audioTime * currentRatio() + offsetSec,
-    [currentRatio, offsetSec],
+    (audioTime: number) => audioTime * ratio + offsetSec,
+    [offsetSec, ratio],
   );
 
   const synchronize = useCallback(
-    (video: HTMLVideoElement, time: number, mode: 'throttled' | 'aggressive') => {
+    (video: HTMLVideoElement, time: number) => {
+      const state = stateRef.current;
       const target = toSourceTime(time);
-      const inRange = target >= 0 && (!Number.isFinite(video.duration) || target < video.duration);
-      const entered = inRange && !inRangeRef.current;
-      inRangeRef.current = inRange;
-      setVisible(inRange);
-      correctDrift(video, clampSeekTarget(target, video), lastSyncRef, mode);
-      if (!inRange) {
-        video.pause();
-      } else if (entered && isPlayingRef.current) {
-        safePlay(video);
+      const inClip = target >= 0 && target < video.duration;
+
+      setVisible(inClip && state.revealed && !state.failed);
+      if (state.failed) {
+        return;
       }
+      if (!inClip) {
+        parkOutsideClip(video, target, ratio, state);
+        return;
+      }
+
+      correctDrift(video, target, ratio, state);
+      followPlayState(video, isPlayingRef.current);
     },
-    [isPlayingRef, toSourceTime],
+    [isPlayingRef, ratio, toSourceTime],
   );
 
   useEffect(() => {
@@ -231,21 +202,54 @@ export function useSourceVideoSync({
     readyRef.current = false;
     setReady(false);
     setVisible(false);
-    inRangeRef.current = false;
+    stateRef.current = initialSyncState();
     enforceSilent(video);
-    applyPlaybackRate(video, currentRatio());
+    setRate(video, ratio);
 
-    return runInitialSeek(
-      video,
-      () => toSourceTime(getCurrentTime()),
-      () => {
-        readyRef.current = true;
-        setReady(true);
-        applyPlaybackRate(video, currentRatio());
-        synchronize(video, getCurrentTime(), 'aggressive');
-      },
-    );
-  }, [currentRatio, getCurrentTime, src, synchronize, toSourceTime, videoRef]);
+    const start = () => {
+      if (!clipCanStart(video) || readyRef.current) {
+        return;
+      }
+      const target = toSourceTime(getCurrentTime());
+      if (target > 0 && target < video.duration) {
+        // Seeking before the first play is the most reliable path; account for
+        // the song advancing while the seek completes.
+        seekAhead(video, target + stateRef.current.seekLatencySec * ratio, ratio, stateRef.current);
+      } else {
+        stateRef.current.revealed = true;
+      }
+      readyRef.current = true;
+      setReady(true);
+      synchronize(video, getCurrentTime());
+    };
+
+    const onSeeked = () => {
+      recordSeekLatency(stateRef.current);
+      if (!stateRef.current.revealed) {
+        stateRef.current.revealed = true;
+        synchronize(video, getCurrentTime());
+      }
+    };
+
+    const onError = () => {
+      stateRef.current.failed = true;
+      setVisible(false);
+    };
+
+    start();
+    video.addEventListener('loadedmetadata', start);
+    video.addEventListener('durationchange', start);
+    video.addEventListener('canplay', start);
+    video.addEventListener('seeked', onSeeked);
+    video.addEventListener('error', onError);
+    return () => {
+      video.removeEventListener('loadedmetadata', start);
+      video.removeEventListener('durationchange', start);
+      video.removeEventListener('canplay', start);
+      video.removeEventListener('seeked', onSeeked);
+      video.removeEventListener('error', onError);
+    };
+  }, [getCurrentTime, ratio, src, synchronize, toSourceTime, videoRef]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -254,28 +258,13 @@ export function useSourceVideoSync({
     }
 
     enforceSilent(video);
-    applyPlaybackRate(video, currentRatio());
-
-    if (isPlaying && inRangeRef.current) {
-      safePlay(video);
+    setRate(video, ratio);
+    if (isPlaying) {
+      synchronize(video, getCurrentTime());
     } else {
       video.pause();
     }
-  }, [currentRatio, isPlaying, videoRef]);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) {
-      return;
-    }
-
-    applyPlaybackRate(video, currentRatio());
-    if (!readyRef.current) {
-      return;
-    }
-
-    synchronize(video, getCurrentTime(), 'aggressive');
-  }, [currentRatio, getCurrentTime, synchronize, videoRef]);
+  }, [getCurrentTime, isPlaying, ratio, synchronize, videoRef]);
 
   useEffect(() => {
     return subscribe((time) => {
@@ -284,7 +273,7 @@ export function useSourceVideoSync({
         return;
       }
 
-      synchronize(video, time, 'throttled');
+      synchronize(video, time);
     });
   }, [subscribe, synchronize, videoRef]);
 

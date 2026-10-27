@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 import type { SettingsOption } from './constants';
@@ -55,13 +56,12 @@ export function SettingsSelect({
 }
 
 export function PageHeader() {
+  const { t } = useI18n();
+
   return (
     <div className="space-y-1">
-      <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Settings</h1>
-      <p className="text-sm text-muted-foreground">
-        Set how Nightingale looks and sounds during playback, and how it separates vocals after
-        finding synchronized lyrics.
-      </p>
+      <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">{t('menu.settings')}</h1>
+      <p className="text-sm text-muted-foreground">{t('settings.description')}</p>
     </div>
   );
 }

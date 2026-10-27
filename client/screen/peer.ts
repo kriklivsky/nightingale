@@ -1,5 +1,7 @@
+import { messages } from './messages';
+
 export function screenError(error: unknown): string {
-  return error instanceof Error ? error.message : 'Не удалось подключить экран ноутбука.';
+  return error instanceof Error ? error.message : messages.genericError;
 }
 
 export type ScreenQuality = {
@@ -13,7 +15,7 @@ export type ScreenQuality = {
 
 export const defaultScreenQuality: ScreenQuality = {
   id: '1080p30',
-  label: '1080p · 30 кадров/с',
+  label: messages.quality1080p30,
   width: 1920,
   height: 1080,
   fps: 30,
@@ -24,7 +26,7 @@ export const screenQualities: readonly ScreenQuality[] = [
   defaultScreenQuality,
   {
     id: '4k30',
-    label: '4K · 30 кадров/с',
+    label: messages.quality4k30,
     width: 3840,
     height: 2160,
     fps: 30,
@@ -32,7 +34,7 @@ export const screenQualities: readonly ScreenQuality[] = [
   },
   {
     id: '4k60',
-    label: '4K · до 60 кадров/с',
+    label: messages.quality4k60,
     width: 3840,
     height: 2160,
     fps: 60,
@@ -84,14 +86,14 @@ export function gatherIce(peer: RTCPeerConnection, signal: AbortSignal): Promise
       cleanup();
       const sdp = peer.localDescription?.sdp;
       if (sdp === undefined || sdp === '') {
-        reject(new Error('Браузер не подготовил параметры соединения.'));
+        reject(new Error(messages.noSdp));
       } else {
         resolve(sdp);
       }
     };
     const timer = window.setTimeout(() => {
       cleanup();
-      reject(new Error('Не удалось найти сетевой маршрут. Проверьте локальную сеть.'));
+      reject(new Error(messages.noRoute));
     }, 10_000);
     peer.addEventListener('icegatheringstatechange', changed);
     signal.addEventListener('abort', abort, { once: true });
@@ -105,7 +107,7 @@ export function gatherIce(peer: RTCPeerConnection, signal: AbortSignal): Promise
 
 export function createScreenPeer(): RTCPeerConnection {
   if (typeof RTCPeerConnection === 'undefined') {
-    throw new TypeError('В этом браузере нет WebRTC. Проверьте установку приёмника.');
+    throw new TypeError(messages.noWebrtc);
   }
   return new RTCPeerConnection({ iceServers: [], bundlePolicy: 'max-bundle' });
 }

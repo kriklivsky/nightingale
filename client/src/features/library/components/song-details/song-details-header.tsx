@@ -2,6 +2,7 @@ import { XIcon } from 'lucide-react';
 
 import { Stars } from '@/shared/components/shared/stars';
 import { Button } from '@/shared/components/ui/button';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { formatSeconds } from '@/shared/utils/format-duration';
 import type { QueuedStatus } from '@/types/QueuedStatus';
 import type { Song } from '@/types/Song';
@@ -22,50 +23,54 @@ export const SongDetailsHeader = ({
   queueStatus,
   bestScore,
   onClose,
-}: SongDetailsHeaderProps) => (
-  <header className="relative border-b px-4 pb-4 pt-3">
-    <Button
-      variant="ghost"
-      size="icon"
-      className="absolute right-2 top-2"
-      onClick={onClose}
-      aria-label="Close song details"
-    >
-      <XIcon />
-    </Button>
+}: SongDetailsHeaderProps) => {
+  const { t } = useI18n();
 
-    <div className="flex items-center gap-4 pr-10">
-      <AlbumArt
-        song={song}
-        className="size-20 rounded-lg"
-        fallbackIconClassName="size-8"
-        lazy={false}
-      />
+  return (
+    <header className="relative border-b px-4 pb-4 pt-3">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="absolute right-2 top-2"
+        onClick={onClose}
+        aria-label={t('songDetails.close')}
+      >
+        <XIcon />
+      </Button>
 
-      <div className="min-w-0 flex-1">
-        <h2 className="line-clamp-2 text-lg font-semibold leading-snug text-balance">
-          {song.title}
-        </h2>
-        <p className="mt-1 truncate text-sm text-muted-foreground">
-          {song.artist || 'Unknown band'}
-        </p>
-        <p className="mt-0.5 truncate text-sm text-muted-foreground">
-          {song.album || 'Unknown album'}
-        </p>
-        {bestScore === undefined ? null : <Stars score={bestScore} size="sm" className="mt-1" />}
+      <div className="flex items-center gap-4 pr-10">
+        <AlbumArt
+          song={song}
+          className="size-20 rounded-lg"
+          fallbackIconClassName="size-8"
+          lazy={false}
+        />
+
+        <div className="min-w-0 flex-1">
+          <h2 className="line-clamp-2 text-lg font-semibold leading-snug text-balance">
+            {song.title}
+          </h2>
+          <p className="mt-1 truncate text-sm text-muted-foreground">
+            {song.artist || t('song.unknownArtist')}
+          </p>
+          <p className="mt-0.5 truncate text-sm text-muted-foreground">
+            {song.album || t('song.unknownAlbum')}
+          </p>
+          {bestScore === undefined ? null : <Stars score={bestScore} size="sm" className="mt-1" />}
+        </div>
       </div>
-    </div>
 
-    <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-      <StatusBadge song={song} queueStatus={queueStatus} />
-      {isDisplayableLanguage(song.language) ? (
-        <>
-          <span aria-hidden="true">·</span>
-          <LanguageBadge language={song.language} />
-        </>
-      ) : null}
-      <span aria-hidden="true">·</span>
-      <span className="tabular-nums">{formatSeconds(song.duration_secs)}</span>
-    </div>
-  </header>
-);
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+        <StatusBadge song={song} queueStatus={queueStatus} />
+        {isDisplayableLanguage(song.language) ? (
+          <>
+            <span aria-hidden="true">·</span>
+            <LanguageBadge language={song.language} />
+          </>
+        ) : null}
+        <span aria-hidden="true">·</span>
+        <span className="tabular-nums">{formatSeconds(song.duration_secs)}</span>
+      </div>
+    </header>
+  );
+};

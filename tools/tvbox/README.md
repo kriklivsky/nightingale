@@ -1,5 +1,116 @@
 # Orange Pi TV applications
 
+## HDMI after cold startup
+
+The CEC bridge waits up to 60 seconds for a connected X11 output, a CEC address
+and an awake TV. It queries the active source and makes one startup announcement
+when the route matches Orange Pi/the soundbar, or when no device answers the
+active-source request. A reported different source or a standby TV is left alone.
+This repairs an input selected before the listener started; it does not change
+the video mode or restart the launcher/Nightingale. Image View On and the
+broadcast Active Source are separate commands. Startup and subsequent input
+selection share the same recovery lock/throttle; ordinary remote keys never
+request HDMI recovery. A silent active-source response cannot establish which
+input the TV selected, so the once-per-service-start fallback can select Orange Pi
+when the TV is awake but another source does not announce itself.
+
+Install just this bridge without restarting the graphics session or analysis:
+
+```sh
+sudo install -m 0755 tools/tvbox/tvbox-cec.py /usr/local/libexec/tvbox-cec.py
+sudo systemctl restart tvbox-cec.service
+sudo journalctl -u tvbox-cec.service -n 30 --no-pager
+```
+
+## Wi-Fi and event hotspot
+
+The launcher's bottom row includes **Wi-Fi / точка доступа**. Use arrows and OK
+to scan and select a network, enter its password, disconnect, or explicitly
+enable **karaorangePi**. USB/Bluetooth keyboards use a normal password field;
+without one, a fixed-row on-screen keyboard supports arrows, OK, case,
+punctuation, space and backspace. Back cancels without connecting. Saved client
+networks reconnect normally; the hotspot never autostarts after a reboot.
+Wi-Fi client and AP modes are mutually exclusive on this single adapter.
+WPA/WPA2/WPA3 personal and open networks are supported; enterprise/WEP and
+captive-portal login are not implemented in this screen.
+
+The event hotspot uses WPA2/AES on 5 GHz channel 36 and `10.77.0.1/24`.
+Configure its password locally as root during installation; it is kept only in
+the root-readable NetworkManager profile, not in this repository, a command
+argument, browser bundle or log. The UI does not reveal or change it.
+
+Ethernet remains managed by the existing systemd-networkd/Netplan configuration.
+While AP is enabled, an existing Ethernet IPv4 address is left alone and can
+provide internet upstream. Without an address/external DHCP response for about
+30 seconds after a cable is connected, a temporary networkd configuration makes
+`end1` a routed LAN at `10.77.1.1/24`, with DHCP and IPv4 masquerading for a wired
+laptop. The Wi-Fi and wired clients share access to the receiver, but are not
+an Ethernet bridge. Removing the cable, disabling AP or detecting an external
+DHCP server restores the original Ethernet configuration. The detector checks
+for external DHCP while LAN mode is active. This is a DHCP-based heuristic,
+not proof that an unknown wired network is isolated: do not connect it to an
+unadministered static-only network. Existing routes overlapping either event
+subnet prevent AP activation instead of being overwritten.
+
+Install NetworkManager **only for Wi-Fi**, before starting it, so it cannot
+take over the current Ethernet SSH connection:
+
+```sh
+sudo install -d -m 0755 /etc/NetworkManager/conf.d
+sudo install -m 0644 tools/tvbox/90-tvbox-wifi.conf /etc/NetworkManager/conf.d/
+sudo apt-get install --no-install-recommends network-manager dnsmasq-base nftables \
+  usb-modeswitch usb-modeswitch-data
+sudo systemctl start NetworkManager
+sudo install -d -m 0755 /usr/local/libexec/tvbox-network
+sudo install -m 0644 tools/tvbox/network_backend.py tools/tvbox/network_router.py \
+  tools/tvbox/network_app.py tools/tvbox/tv_keyboard.py /usr/local/libexec/tvbox-network/
+sudo install -m 0755 tools/tvbox/tvbox-network-helper /usr/local/libexec/
+sudo install -m 0755 tools/tvbox/tvbox-network /usr/local/bin/
+sudo visudo -cf tools/tvbox/tvbox-network.sudoers
+sudo install -m 0440 tools/tvbox/tvbox-network.sudoers /etc/sudoers.d/tvbox-network
+sudo install -m 0644 tools/tvbox/tvbox-event-router.service \
+  tools/tvbox/tvbox-event-router.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now tvbox-event-router.timer
+```
+
+The sudo rule deliberately grants `tvbox` only the no-argument helper, not a
+shell, Python interpreter, nmcli or networkctl. Its bounded JSON input allows
+only Wi-Fi status/scan/connect/disconnect and the preconfigured AP toggle.
+Profile paths, Ethernet interface and router subnets are fixed. Passwords go
+over stdin; the root-owned helper uses Python isolated mode and fixed commands.
+Installing this rule is a persistent privilege grant and requires administrator
+approval. Initial AP setup is denied when invoked through that TV-user rule.
+The TV karaoke adapter uses GIO's `netlink` network monitor: NetworkManager's
+own monitor reports offline when only networkd's unmanaged Ethernet is active,
+which must not disable WebKit's local IPC/media requests.
+At a root terminal, initialize it once without putting a password in history:
+
+```sh
+python3 -c 'import getpass,json; print(json.dumps({"action":"setup","password":getpass.getpass("AP password: ")}))' \
+  | /usr/local/libexec/tvbox-network-helper
+```
+
+Build/install the launcher as below. Realtek adapters exposing a virtual CD-ROM
+must first switch to their Wi-Fi identity. For the attached `0bda:1a2b` device,
+the standard `usb_modeswitch -K -v 0bda -p 1a2b` sequence exposes `0bda:c811`;
+the existing `rtl8821cu` driver supports managed/AP modes. The USB-mode database
+handles subsequent insertions. A failed switch must be diagnosed before any
+AP claim: a virtual CD-ROM is not a working Wi-Fi interface.
+
+Nightingale's TV search also detects a physical USB/Bluetooth keyboard and
+switches to normal text input; its on-screen keyboard remains available when
+none is present. Hotplug is rechecked while search is open, and direct character
+entry also works before detection completes. CEC's virtual keyboard is excluded.
+Install `91-tvbox-keyboard.conf` into `/etc/X11/xorg.conf.d/` for persistent
+US/Russian layouts and **Alt+Shift** switching. Apply them to an already running
+TV session without restarting HDMI:
+
+```sh
+DISPLAY=:0 XAUTHORITY=/run/tvbox.Xauthority \
+  setxkbmap -layout us,ru -option grp:alt_shift_toggle
+```
+
 ## Local screen sharing: independent application
 
 The launcher's **Экран ноутбука** tile opens a separate GTK/GStreamer WebRTC
@@ -14,6 +125,13 @@ and browser. The page never requests the laptop microphone. Quality choices are
 1080p30, 4K30 and up to 4K60; actual resolution cannot exceed the source and frame
 rate depends on encoding, decoding and the LAN. The receiver shows the incoming
 resolution. No cloud signaling, STUN/TURN relay or recording is used.
+
+With the Rockchip `mppvideodec` plugin installed (see YouTube song clips below),
+the receiver decodes H.264 in hardware: 1080p30 reaches the screen in about
+8 ms instead of 21 ms (95th percentile 12 ms instead of 70 ms). 4K is decoded in
+hardware too, but the upload of each 4K frame into OpenGL limits it to about
+22 fps (software decoding: about 10 fps): the plugin emits legacy DMABuf caps
+that GStreamer 1.26 `glupload` cannot import without a copy.
 
 Both devices need direct LAN connectivity, including WebRTC UDP traffic; guest
 Wi-Fi client isolation can prevent it. Only one laptop may pair at a time. TV
@@ -41,8 +159,9 @@ sudo apt-get install --no-install-recommends \
   gstreamer1.0-gtk3 gstreamer1.0-nice gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad gstreamer1.0-libav gstreamer1.0-gl gstreamer1.0-alsa
 sudo install -d -m 0755 /usr/local/libexec/tvbox-screen /usr/local/share/tvbox-screen
-sudo install -m 0644 tools/tvbox/screen_app.py tools/tvbox/screen_audio.py \
-  tools/tvbox/screen_receiver.py tools/tvbox/screen_server.py /usr/local/libexec/tvbox-screen/
+sudo install -m 0644 tools/tvbox/screen_app.py tools/tvbox/screen_audio.py tools/tvbox/screen_network.py \
+  tools/tvbox/screen_receiver.py tools/tvbox/screen_server.py \
+  tools/tvbox/microphone_client.py /usr/local/libexec/tvbox-screen/
 sudo install -m 0755 tools/tvbox/tvbox-screen tools/tvbox/tvbox-screen-service \
   tools/tvbox/tvbox-screen-setup /usr/local/bin/
 sudo cp -a client/screen-dist/. /usr/local/share/tvbox-screen/
@@ -51,7 +170,8 @@ sudo -u tvbox -H /usr/local/bin/tvbox-screen-setup 10.3.0.102
 
 Build/install `tvbox-launcher` as described below. Do not restart the display
 service: the new tile is available when the user next returns to the launcher.
-The HTTPS listener binds the selected LAN IPv4 address on TCP 8091 while the
+The HTTPS listener prefers the active Wi-Fi/AP IPv4 address, falling back to
+Ethernet when Wi-Fi has no address, and binds TCP 8091 while the
 application is open. The authenticated receiver API binds only 127.0.0.1:8092.
 The standalone server defaults to loopback unless explicitly passed `--bind`.
 
@@ -64,14 +184,21 @@ using its OS/Chrome certificate manager and compare its SHA-256 fingerprint with
 the one shown on the TV. Only this local certificate should be trusted; do not
 disable certificate verification or browser security. The public certificate is
 also available at the screen-sharing address's `/certificate` path. Never copy
-`server.key` to the laptop. Reserve the TV box's LAN address so its IP remains
-covered by the certificate. The server also accepts an administrator-provided
+`server.key` to the laptop. The local launcher signs a short-lived server
+certificate for current addresses and both fixed event-router addresses using
+that same private authority; the public certificate and its TV fingerprint
+remain unchanged when DHCP changes the IP. Reopen screen sharing after switching
+network modes. No internet route is required for the offline AP.
+The server also accepts an administrator-provided
 certificate through its CLI flags.
 
-The receiver owns a separate native UMC202HD monitor, mixing both input channels
-to both speaker channels via ALSA `default`. It uses the launcher's saved
-HDMI/Behringer route, not the WebRTC/laptop round trip. Microphone toggle controls
-are on the TV. Independent optional settings live only in
+The receiver owns one UMC202HD capture stream. Its independent monitor mixes
+both input channels to both speaker channels via ALSA `default`, using the
+launcher's saved HDMI/Behringer route, not the WebRTC/laptop round trip.
+**Мониторинг: вкл/выкл** on the TV and **Мониторинг в колонках** on the paired
+laptop toggle only speaker monitoring; they do not mute screen audio or the
+microphone feed to Python. The screen application's toggle lasts for this
+application session. Set its startup default in
 `/var/lib/tvbox/.config/tvbox-screen/settings.json`:
 
 ```json
@@ -84,6 +211,59 @@ end-to-end latency measurements. Missing/busy UMC202HD is reported without
 preventing screen sharing. For diagnostics, run `tvbox-screen --no-microphones`.
 Do not run the monitor concurrently with another application's exclusive USB
 capture. Keep microphones away from speakers and start at low speaker volume.
+
+With powered speakers connected to UMC202HD, enable its physical Direct Monitor
+switch and disable software monitoring in each application to avoid a delayed
+duplicate voice. Nightingale uses **OK / Enter / R** during active playback;
+microphone scoring stays enabled and karaoke remembers the monitor setting.
+Hardware direct monitoring does not send microphones to HDMI or back from the
+laptop. Its physical switch and monitor mix remain under the user's control.
+
+### Microphones on the laptop: Python / local processing
+
+Open **Экран ноутбука**, pair the browser with the TV code, then choose
+**Разрешить поток для Python** → **Скопировать временный ключ**. This does not
+start a recording or laptop speaker playback. Download `microphone_client.py`
+and the public certificate using the links in that section. Screen sharing is
+optional: the paired page must remain open to keep the session alive.
+
+Run on the laptop, using the HTTPS address shown on the TV:
+
+```sh
+python3 microphone_client.py \
+  --url https://10.3.0.102:8091 --certificate orangepi-screen.crt \
+  --channel 1 | your-local-audio-processor
+```
+
+Paste the temporary key at the hidden terminal prompt. Do not put it in a URL,
+command argument, shell history, or log. No Python packages are required by this
+client. Certificate verification stays enabled; verify the certificate's
+fingerprint against the TV before trusting it.
+
+Stdout is **raw signed 16-bit little-endian PCM at 48,000 Hz**, without a WAV
+header. `--channel stereo` (default) retains UMC inputs 1 and 2 as separate
+interleaved left/right channels; `--channel 1` or `--channel 2` extracts one mono
+input without mixing in screen audio or applying monitor gain. The local
+processor must consume that format. For an ASR engine needing mono 16 kHz:
+
+```sh
+python3 microphone_client.py \
+  --url https://10.3.0.102:8091 --certificate orangepi-screen.crt --channel 1 \
+  | ffmpeg -hide_banner -loglevel error -f s16le -ar 48000 -ac 1 -i pipe:0 \
+      -f s16le -ar 16000 -ac 1 pipe:1 \
+  | your-local-audio-processor
+```
+
+Audio uses a separate authenticated HTTPS PCM stream, so Python does not need
+to act as a WebRTC/video receiver and the original WebRTC screen path stays
+unchanged. Only one audio consumer is allowed. Slow consumers drop old frames
+from bounded queues rather than delaying microphone monitoring or growing RAM.
+Turning monitoring off leaves an active laptop feed captured; a failed speaker
+output does not stop this capture. **Отозвать доступ к микрофонам**, disconnect,
+session expiry, or closing the TV application revokes the key and ends the
+stream. A silent/stalled source ends the stream after five seconds. Nothing is
+recorded on the Orange Pi or made into a system microphone on the laptop;
+virtual-device integration, if needed, belongs to the laptop audio setup.
 
 ## Select speaker output
 
@@ -117,6 +297,50 @@ Connect active speakers to the UMC202HD's rear OUTPUTS 1(L) / 2(R) and initially
 turn down its OUTPUT knob and the speakers' gain. Hardware **DIRECT MONITOR** is
 separate from Nightingale monitoring: enabling both adds a second microphone
 path. This selector does not change that hardware switch or microphone gain.
+
+## Local library ownership
+
+Nightingale and `tvbox-songs-web.service` run as `tvbox:tvbox`. Local songs and
+their directories under `/var/lib/tvbox/songs` must be writable by that account.
+Reading a root-owned library can work while Delete fails with `Permission
+denied`: deletion first renames each source file inside its parent directory,
+which requires write and search access to that directory. Do not run
+Nightingale as root or grant world-writable permissions to work around this.
+
+Files may also be imported as root: install the recurring repair below to
+assign them to `tvbox` automatically. The existing web uploader already runs
+as `tvbox`; its uploads do not need a root-owned import step.
+
+```sh
+sudo install -m 0755 tools/tvbox/tvbox-fix-song-permissions /usr/local/bin/
+sudo install -m 0644 tools/tvbox/tvbox-song-permissions.cron \
+  /etc/cron.d/tvbox-song-permissions
+sudo /usr/local/bin/tvbox-fix-song-permissions
+```
+
+The root cron job runs **every minute**, with low CPU/I/O priority and a lock
+to prevent overlapping runs. Deleting a newly root-uploaded song may therefore
+require waiting up to a minute after its directory/file becomes visible to
+the scan, or running the helper manually. The helper changes only incorrect
+owners/groups of directories and singly linked regular files within this
+fixed library. Already-correct entries are left alone; symlinks, multiply
+linked files and other filesystems are skipped. It uses directory/file
+descriptors and no-follow opens rather than following imported paths, never
+runs `chmod`, and does not alter song contents. Root uploads using restrictive
+directory modes such as `0500` still need owner write access to allow deletion.
+Errors appear under `journalctl -t tvbox-song-permissions`; successful runs are
+silent. Cron must be running; no application or HDMI restart is needed.
+
+Run `sudo /usr/local/bin/tvbox-fix-song-permissions` to repair immediately
+without waiting for cron. Verify access as the actual application user (from
+a directory that account can enter):
+
+```sh
+cd /var/lib/tvbox
+sudo -u tvbox find /var/lib/tvbox/songs -xdev -type d ! -writable -print
+```
+
+No output means every scanned directory is writable by `tvbox`.
 
 ## Retry failed song analysis
 
@@ -234,12 +458,46 @@ Verify `gst-inspect-1.0 fakevideosink`, `gst-inspect-1.0 h264parse`,
 Nightingale. A successfully downloaded H.264/AAC clip can still fail in WebKit
 when these plugins are missing; downloading another clip does not repair this.
 
-The native Linux TV-box adapter prefers `openh264dec` for H.264 playback: the
-installed `avdec_h264` decoded the first frame but failed on seeking in WebKit.
-OpenH264 passed decoding, seeking and muted playback with the same downloaded
-clip. This selects a decoder, not a transcode; other codecs and the microphone
-monitor remain unchanged. An explicitly configured `GST_PLUGIN_FEATURE_RANK`
-is respected instead of overriding the administrator's decoder selection.
+The native Linux TV-box adapter prefers the Rockchip hardware decoder
+`mppvideodec` (H.264, H.265, VP8, VP9, AV1), then `openh264dec` for H.264: the
+installed `avdec_h264` decoded the first frame but failed on seeking in WebKit,
+and software OpenH264 decodes a 1080p60 clip at about 10 fps. With
+`mppvideodec` the same clip plays at 60 fps without dropped frames and seeks in
+about 0.4 s instead of 5 s. Debian does not package it for the RK3588 vendor
+kernel (`/dev/mpp_service`), so build Rockchip MPP and the GStreamer plugin into
+`/usr/local`:
+
+```sh
+sudo apt-get install --no-install-recommends cmake ninja-build meson pkg-config \
+  libdrm-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+git clone --depth 1 -b develop https://github.com/rockchip-linux/mpp.git
+cmake -S mpp -B mpp/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_TEST=OFF
+sudo ninja -C mpp/build install && sudo ldconfig
+git clone --depth 1 -b gstreamer-rockchip https://github.com/JeffyCN/mirrors.git gst-rockchip
+PKG_CONFIG_PATH=/usr/local/lib/pkgconfig meson setup gst-rockchip/build gst-rockchip \
+  --prefix=/usr/local --buildtype=release -Drockchipmpp=enabled -Drga=disabled \
+  -Dkmssrc=disabled -Dvpxalphadec=disabled -Drkximage=disabled
+sudo ninja -C gst-rockchip/build install
+```
+
+The TV session adds `/usr/local/lib/aarch64-linux-gnu/gstreamer-1.0` to
+`GST_PLUGIN_PATH`. MPP allocates frame buffers from `/dev/dma_heap`, which is
+root-only by default; give the `video` group (which includes `tvbox`) access to
+the decoder and the system heaps in `/etc/udev/rules.d/99-tvbox.rules`:
+
+```udev
+KERNEL=="mpp_service", SUBSYSTEM=="mpp_class", GROUP="video", MODE="0660"
+SUBSYSTEM=="dma_heap", KERNEL=="system|system-uncached", GROUP="video", MODE="0660"
+```
+
+Without heap access WebKit selects `mppvideodec` but every buffer allocation
+fails and the clip stalls. Verify with
+`GST_PLUGIN_PATH=/usr/local/lib/aarch64-linux-gnu/gstreamer-1.0 gst-inspect-1.0 mppvideodec`.
+Without the plugin playback falls back to OpenH264. This selects a decoder, not
+a transcode; the microphone monitor is unchanged. An explicitly configured
+`GST_PLUGIN_FEATURE_RANK` is respected instead of overriding the
+administrator's decoder selection.
 
 Song analysis runs at Linux background CPU priority (`nice=10`, or an existing
 lower priority). RKNN normally boosts its caller to `nice=-19` when initializing

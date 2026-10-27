@@ -6,6 +6,8 @@ import type { SongVideo } from '@/bridge/song-video';
 import { Button } from '@/shared/components/ui/button';
 import { useConfig } from '@/shared/config/use-config';
 import { useSourceVideoSync } from '@/shared/hooks/use-source-video-sync';
+import type { Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { Song } from '@/types/Song';
 
 import { usePreviewAudio } from './use-preview-audio';
@@ -13,6 +15,7 @@ import { usePreviewAudio } from './use-preview-audio';
 type VideoPreviewProps = { song: Song; video: SongVideo; offsetSec: number };
 
 function previewError(
+  t: Translate,
   audioError: string | null,
   videoError: string | null,
   urlError: unknown,
@@ -23,10 +26,11 @@ function previewError(
   if (videoError !== null) {
     return videoError;
   }
-  return urlError instanceof Error ? 'Cannot open preview media.' : null;
+  return urlError instanceof Error ? t('video.previewFailed') : null;
 }
 
 function useVideoPreview({ song, video, offsetSec }: VideoPreviewProps) {
+  const { t } = useI18n();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
   const { data: config } = useConfig();
@@ -51,12 +55,13 @@ function useVideoPreview({ song, video, offsetSec }: VideoPreviewProps) {
     getCurrentTime: audio.getCurrentTime,
     subscribe: audio.subscribe,
   });
-  const error = previewError(audio.error, videoError, urlError);
+  const error = previewError(t, audio.error, videoError, urlError);
 
   return { videoRef, src: urls?.video, audio, ready, visible, error, setVideoError };
 }
 
 export function VideoPreview(props: VideoPreviewProps) {
+  const { t } = useI18n();
   const { videoRef, src, audio, ready, visible, error, setVideoError } = useVideoPreview(props);
 
   return (
@@ -70,11 +75,11 @@ export function VideoPreview(props: VideoPreviewProps) {
           playsInline
           className="size-full object-contain"
           style={{ visibility: ready && visible ? 'visible' : 'hidden' }}
-          onError={() => setVideoError('Cannot decode the downloaded video. Try another clip.')}
+          onError={() => setVideoError(t('video.decodeFailed'))}
         />
         {!visible && (
           <p className="absolute inset-0 grid place-items-center text-sm text-white">
-            Waiting for the synchronized video frame
+            {t('video.waitingFrame')}
           </p>
         )}
       </div>
@@ -85,17 +90,16 @@ export function VideoPreview(props: VideoPreviewProps) {
             void audio.toggle();
           }}
         >
-          {' '}
-          {audio.playing ? 'Pause preview' : 'Play preview'}{' '}
+          {audio.playing ? t('video.pausePreview') : t('video.playPreview')}
         </Button>
         <Button variant="outline" onClick={() => audio.seek(-10)}>
-          −10 s
+          {t('video.seconds', { value: '−10' })}
         </Button>
         <Button variant="outline" onClick={() => audio.seek(10)}>
-          +10 s
+          {t('video.seconds', { value: '+10' })}
         </Button>
         <span className="text-sm text-muted-foreground">
-          {audio.time.toFixed(1)} s · original song audio
+          {t('video.previewTime', { value: audio.time.toFixed(1) })}
         </span>
       </div>
       {error !== null && (

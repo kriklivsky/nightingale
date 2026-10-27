@@ -9,6 +9,11 @@ async fn blocking<T: Send + 'static>(
 }
 
 #[tauri::command]
+pub(crate) async fn list_song_video_hashes() -> Result<Vec<String>, String> {
+    blocking(app_core::list_song_video_hashes).await
+}
+
+#[tauri::command]
 pub(crate) async fn get_song_video(file_hash: String) -> Result<Option<SongVideo>, String> {
     blocking(move || app_core::get_song_video(&file_hash)).await
 }

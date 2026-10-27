@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 
 import { realign, reanalyzeTranscript, songsByHashes } from '@/bridge/analysis';
-import { LANGUAGES } from '@/features/lyrics/lib/languages';
+import { getLanguageName, LANGUAGES } from '@/features/lyrics/lib/languages';
 import type { DialogMode } from '@/features/menu/hooks/use-dialog';
 import { useDialog } from '@/features/menu/hooks/use-dialog';
 import { useDialogNav } from '@/features/menu/hooks/use-dialog-nav';
@@ -25,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 import type { Song } from '@/types/Song';
 
@@ -54,6 +55,7 @@ export function isLanguageDialogMode(mode: DialogMode): mode is { mode: 'languag
 }
 
 export const SelectLanguageDialog = () => {
+  const { t, locale } = useI18n();
   const { mode, close } = useDialog();
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -90,11 +92,11 @@ export const SelectLanguageDialog = () => {
       <DialogContent className="sm:max-w-sm">
         <div ref={containerRef} className="contents">
           <DialogHeader>
-            <DialogTitle>Select Language</DialogTitle>
+            <DialogTitle>{t('language.title')}</DialogTitle>
           </DialogHeader>
           <FieldGroup>
             <Field>
-              <Label htmlFor="language-select">Language</Label>
+              <Label htmlFor="language-select">{t('language.label')}</Label>
               <Select
                 value={language}
                 onValueChange={(nextLanguage) =>
@@ -102,14 +104,14 @@ export const SelectLanguageDialog = () => {
                 }
               >
                 <SelectTrigger id="language-select" className={focusRing(focusedIndex, 0)}>
-                  <SelectValue placeholder="Select language" />
+                  <SelectValue placeholder={t('language.placeholder')} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectLabel>Language</SelectLabel>
-                    {LANGUAGES.map(([value, label]) => (
+                    <SelectLabel>{t('language.label')}</SelectLabel>
+                    {LANGUAGES.map(([value]) => (
                       <SelectItem key={value} value={value}>
-                        {label}
+                        {getLanguageName(value, locale)}
                       </SelectItem>
                     ))}
                   </SelectGroup>
@@ -117,7 +119,7 @@ export const SelectLanguageDialog = () => {
               </Select>
             </Field>
             <Field>
-              <Label htmlFor="analysis-mode-select">Mode</Label>
+              <Label htmlFor="analysis-mode-select">{t('language.mode')}</Label>
               <Select
                 value={analysisMode}
                 onValueChange={(nextMode) => {
@@ -131,9 +133,9 @@ export const SelectLanguageDialog = () => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectLabel>Mode</SelectLabel>
-                    <SelectItem value="force">Force transcript</SelectItem>
-                    <SelectItem value="realign">Realign saved lyrics</SelectItem>
+                    <SelectLabel>{t('language.mode')}</SelectLabel>
+                    <SelectItem value="force">{t('language.force')}</SelectItem>
+                    <SelectItem value="realign">{t('language.realign')}</SelectItem>
                   </SelectGroup>
                 </SelectContent>
               </Select>
@@ -142,7 +144,7 @@ export const SelectLanguageDialog = () => {
           <DialogFooter>
             <DialogClose asChild>
               <Button variant="outline" onClick={close} className={focusRing(focusedIndex, 2)}>
-                Cancel
+                {t('common.cancel')}
               </Button>
             </DialogClose>
             <Button
@@ -165,7 +167,7 @@ export const SelectLanguageDialog = () => {
               }}
               className={focusRing(focusedIndex, 3)}
             >
-              Select
+              {t('profile.select')}
             </Button>
           </DialogFooter>
         </div>

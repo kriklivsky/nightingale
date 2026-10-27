@@ -739,16 +739,9 @@ pub fn apply_timed_lyrics(file_hash: &str, lrc_text: &str) -> Result<(), String>
 pub(crate) fn write_lyrics_file(
     cache: &CacheDir,
     file_hash: &str,
-    lines: &[String],
+    lyrics: &LyricsFile,
 ) -> std::io::Result<PathBuf> {
-    write_lyrics_json(
-        cache,
-        file_hash,
-        &LyricsFile {
-            lines: lines.to_vec(),
-            windows: None,
-        },
-    )
+    write_lyrics_json(cache, file_hash, lyrics)
 }
 
 fn write_lyrics_json(

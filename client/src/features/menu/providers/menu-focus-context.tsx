@@ -35,7 +35,8 @@ export type MenuFocusActions = {
     | ((index: number, direction: 'up' | 'down' | 'left' | 'right') => number | null)
     | null;
   onConfirmSidebar: ((index: number) => void) | null;
-  onConfirmActions: ((index: number) => boolean) | null;
+  /** Toolbar controls that open their own menu on confirm, keyed by `data-actions-index`. */
+  actionConfirmHandlers: Map<number, () => void>;
   onSidebarBack: (() => boolean) | null;
   isSidebarBusy: (() => boolean) | null;
   hasSongDetails: boolean;
@@ -77,7 +78,7 @@ const INITIAL_ACTIONS: MenuFocusActions = {
   scrollToSong: null,
   songGridTarget: null,
   onConfirmSidebar: null,
-  onConfirmActions: null,
+  actionConfirmHandlers: new Map(),
   onSidebarBack: null,
   isSidebarBusy: null,
   hasSongDetails: false,
@@ -88,7 +89,10 @@ const INITIAL_ACTIONS: MenuFocusActions = {
 
 export function MenuFocusProvider({ children }: { children: ReactNode }) {
   const [focus, setFocusState] = useState<MenuFocus>(INITIAL_FOCUS);
-  const actionsRef = useRef<MenuFocusActions>({ ...INITIAL_ACTIONS });
+  const actionsRef = useRef<MenuFocusActions>({
+    ...INITIAL_ACTIONS,
+    actionConfirmHandlers: new Map(),
+  });
   const scrollRef = useRef<HTMLElement | null>(null);
   const scrollTopRef = useRef<number>(0);
   const sidebarScrollRef = useRef<HTMLElement | null>(null);

@@ -1,6 +1,8 @@
 import type { RefObject } from 'react';
 
+import { useSongVideoHashes } from '@/features/song-video/queries';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/shared/components/ui/empty';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { Song } from '@/types/Song';
 import type { SongSort } from '@/types/SongSort';
 import type { SongSortColumn } from '@/types/SongSortColumn';
@@ -24,18 +26,22 @@ type SongListProps = {
   onSort: (column: SongSortColumn) => void;
 };
 
-const EmptySongs = ({ filtered }: { filtered: boolean }) => (
-  <Empty className="px-4">
-    <EmptyHeader>
-      <EmptyTitle>{filtered ? 'No results' : 'No songs found'}</EmptyTitle>
-      <EmptyDescription>
-        {filtered
-          ? 'No songs match your search or filters. Try adjusting them.'
-          : 'This library is empty or still being scanned.'}
-      </EmptyDescription>
-    </EmptyHeader>
-  </Empty>
-);
+const EMPTY_VIDEO_HASHES: ReadonlySet<string> = new Set();
+
+const EmptySongs = ({ filtered }: { filtered: boolean }) => {
+  const { t } = useI18n();
+
+  return (
+    <Empty className="px-4">
+      <EmptyHeader>
+        <EmptyTitle>{filtered ? t('library.noResults') : t('library.noSongs')}</EmptyTitle>
+        <EmptyDescription>
+          {filtered ? t('library.noResultsDescription') : t('library.noSongsDescription')}
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  );
+};
 
 export const SongList = ({
   songs,
@@ -50,6 +56,8 @@ export const SongList = ({
   sentinelRef,
   onSort,
 }: SongListProps) => {
+  const { t } = useI18n();
+  const videos = useSongVideoHashes(songs.length > 0);
   if (songs.length === 0 && failed) {
     return null;
   }
@@ -58,23 +66,35 @@ export const SongList = ({
   }
 
   return (
-    <div
-      ref={setScrollContainer}
-      data-song-layout={view}
-      className="themed-scrollbar song-table-shell min-h-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto pb-[max(0.75rem,env(safe-area-inset-bottom))]"
-    >
-      {view === 'table' ? (
-        <SongTable
-          songs={songs}
-          sort={sort}
-          sortingDisabled={sortingDisabled}
-          onSort={onSort}
-          getItemProps={getItemProps}
-        />
-      ) : (
-        <SongGrid songs={songs} getItemProps={getItemProps} />
+    <>
+      {videos.isError && (
+        <p role="alert" className="px-4 text-sm text-destructive">
+          {t('library.videoTagsFailed')}
+        </p>
       )}
-      <div ref={sentinelRef} className="h-1" aria-hidden="true" />
-    </div>
+      <div
+        ref={setScrollContainer}
+        data-song-layout={view}
+        className="themed-scrollbar song-table-shell min-h-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+      >
+        {view === 'table' ? (
+          <SongTable
+            songs={songs}
+            videoHashes={videos.data ?? EMPTY_VIDEO_HASHES}
+            sort={sort}
+            sortingDisabled={sortingDisabled}
+            onSort={onSort}
+            getItemProps={getItemProps}
+          />
+        ) : (
+          <SongGrid
+            songs={songs}
+            videoHashes={videos.data ?? EMPTY_VIDEO_HASHES}
+            getItemProps={getItemProps}
+          />
+        )}
+        <div ref={sentinelRef} className="h-1" aria-hidden="true" />
+      </div>
+    </>
   );
 };

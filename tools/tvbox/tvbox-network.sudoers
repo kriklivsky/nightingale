@@ -1,0 +1,1 @@
+tvbox ALL=(root) NOPASSWD: /usr/local/libexec/tvbox-network-helper ""

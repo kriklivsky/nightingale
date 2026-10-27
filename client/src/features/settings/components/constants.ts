@@ -3,81 +3,105 @@ import {
   DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
   MAX_MIC_LATENCY_COMPENSATION_SEC,
 } from '@/features/playback/lib/pitch/constants';
+import type { MessageKey, Translate, UiLanguageSetting } from '@/shared/i18n/translator';
 import type { AppConfig } from '@/types/AppConfig';
 
 export { PLAYBACK_SCALE_MAX, PLAYBACK_SCALE_MIN } from '@/features/playback/lib/display-scale';
 
 export type SettingsTab = 'general' | 'playback' | 'analysis';
 export type SettingsOption = { value: string; label: string; description?: string };
+type SettingsOptionDefinition = {
+  value: string;
+  labelKey: MessageKey;
+  descriptionKey?: MessageKey;
+};
 
-export const SETTINGS_TABS: { value: SettingsTab; label: string }[] = [
-  { value: 'general', label: 'General' },
-  { value: 'playback', label: 'Playback' },
-  { value: 'analysis', label: 'Analysis' },
+export const localizeOptions = (
+  t: Translate,
+  options: readonly SettingsOptionDefinition[],
+): SettingsOption[] =>
+  options.map(({ value, labelKey, descriptionKey }) => ({
+    value,
+    label: t(labelKey),
+    ...(descriptionKey === undefined ? {} : { description: t(descriptionKey) }),
+  }));
+
+export const SETTINGS_TABS: { value: SettingsTab; labelKey: MessageKey }[] = [
+  { value: 'general', labelKey: 'settings.tab.general' },
+  { value: 'playback', labelKey: 'settings.tab.playback' },
+  { value: 'analysis', labelKey: 'settings.tab.analysis' },
 ];
 
-export const SEPARATORS: SettingsOption[] = [
+export const SEPARATORS: SettingsOptionDefinition[] = [
   {
     value: 'karaoke',
-    label: 'UVR Karaoke',
-    description: 'Usually separates more cleanly, but can occasionally slip on tricky parts.',
+    labelKey: 'settings.separator.karaoke',
+    descriptionKey: 'settings.separator.karaokeDescription',
   },
   {
     value: 'demucs',
-    label: 'Demucs',
-    description:
-      'Smoother and more consistent with fewer abrupt artifacts, though slightly less crisp overall.',
+    labelKey: 'settings.separator.demucs',
+    descriptionKey: 'settings.separator.demucsDescription',
   },
 ];
 
-export const ALIGN_BACKENDS: SettingsOption[] = [
+export const ALIGN_BACKENDS: SettingsOptionDefinition[] = [
   {
     value: 'whisperx',
-    label: 'WhisperX',
-    description: 'The reliable default, timing words with a proven decoder.',
+    labelKey: 'settings.align.whisperx',
+    descriptionKey: 'settings.align.whisperxDescription',
   },
   {
     value: 'ctc',
-    label: 'CTC Forced Alignment (Experimental)',
-    description:
-      'Calculates word start/end points with a different algorithm, and runs much faster on GPU and Apple Silicon. Falls back to WhisperX if a line trips it up.',
+    labelKey: 'settings.align.ctc',
+    descriptionKey: 'settings.align.ctcDescription',
   },
   {
     value: 'qwen',
-    label: 'Qwen Forced Alignment (Experimental)',
-    description:
-      'A fast AI model covering 11 languages. Timing quality varies song to song, but it can do better on Chinese, Japanese, and Korean. Falls back to WhisperX otherwise.',
+    labelKey: 'settings.align.qwen',
+    descriptionKey: 'settings.align.qwenDescription',
   },
 ];
 
-export const PLAYBACK_MODES: SettingsOption[] = [
+export const PLAYBACK_MODES: SettingsOptionDefinition[] = [
   {
     value: 'classic',
-    label: 'Classic mode',
-    description: 'Playback replaces the menu in the current window.',
+    labelKey: 'settings.mode.classic',
+    descriptionKey: 'settings.mode.classicDescription',
   },
   {
     value: 'session',
-    label: 'Session mode',
-    description: 'Playback uses a separate window while the menu manages the queue.',
+    labelKey: 'settings.mode.session',
+    descriptionKey: 'settings.mode.sessionDescription',
   },
 ];
 
-export const LYRICS_VERTICAL_POSITIONS: SettingsOption[] = [
-  { value: 'bottom', label: 'Bottom' },
-  { value: 'center', label: 'Center' },
-  { value: 'top', label: 'Top' },
+export const LYRICS_VERTICAL_POSITIONS: SettingsOptionDefinition[] = [
+  { value: 'bottom', labelKey: 'settings.position.bottom' },
+  { value: 'center', labelKey: 'settings.position.center' },
+  { value: 'top', labelKey: 'settings.position.top' },
 ];
 
-export const LYRICS_HORIZONTAL_POSITIONS: SettingsOption[] = [
-  { value: 'left', label: 'Left' },
-  { value: 'center', label: 'Center' },
-  { value: 'right', label: 'Right' },
+export const LYRICS_HORIZONTAL_POSITIONS: SettingsOptionDefinition[] = [
+  { value: 'left', labelKey: 'settings.position.left' },
+  { value: 'center', labelKey: 'settings.position.center' },
+  { value: 'right', labelKey: 'settings.position.right' },
 ];
 
-export const LYRICS_ROMANIZATION_MODES: SettingsOption[] = [
-  { value: 'enabled', label: 'Enabled' },
-  { value: 'disabled', label: 'Disabled' },
+export const LYRICS_ROMANIZATION_MODES: SettingsOptionDefinition[] = [
+  { value: 'enabled', labelKey: 'settings.enabled' },
+  { value: 'disabled', labelKey: 'settings.disabled' },
+];
+
+export const PITCH_DISPLAYS: SettingsOptionDefinition[] = [
+  { value: 'lane', labelKey: 'settings.pitchDisplay.lane' },
+  { value: 'meter', labelKey: 'settings.pitchDisplay.meter' },
+];
+
+export const UI_LANGUAGES: readonly { value: UiLanguageSetting; labelKey: MessageKey }[] = [
+  { value: 'system', labelKey: 'settings.language.system' },
+  { value: 'en', labelKey: 'settings.language.en' },
+  { value: 'ru', labelKey: 'settings.language.ru' },
 ];
 
 export const DEFAULTS = {
@@ -100,6 +124,7 @@ export const DEFAULTS = {
   lyrics_horizontal_position: 'center',
   lyrics_scale: DEFAULT_PLAYBACK_SCALE,
   pitch_graph_scale: DEFAULT_PLAYBACK_SCALE,
+  pitch_display: 'lane',
 } satisfies Pick<
   AppConfig,
   | 'separator'
@@ -121,6 +146,7 @@ export const DEFAULTS = {
   | 'lyrics_horizontal_position'
   | 'lyrics_scale'
   | 'pitch_graph_scale'
+  | 'pitch_display'
 >;
 
 export const MIC_MONITOR_GAIN_STEP = 0.01;
@@ -138,11 +164,12 @@ export const NAV = {
   tabSegment: 0,
   general: {
     window: 1,
-    microphone: 2,
-    micMonitorGain: 3,
-    micLatency: 4,
-    micLatencyTest: 5,
-    micTest: 6,
+    language: 2,
+    microphone: 3,
+    micMonitorGain: 4,
+    micLatency: 5,
+    micLatencyTest: 6,
+    micTest: 7,
   },
   playback: {
     background: 1,
@@ -151,8 +178,9 @@ export const NAV = {
     lyricsVerticalPosition: 4,
     lyricsHorizontalPosition: 5,
     lyricsScale: 6,
-    pitchGraphScale: 7,
-    lyricsRomanizationMode: 8,
+    pitchDisplay: 7,
+    pitchGraphScale: 8,
+    lyricsRomanizationMode: 9,
   },
 } as const;
 
@@ -167,10 +195,10 @@ export function getAnalysisNav() {
 
 export function getSettingsStops(tab: SettingsTab, hasMultiChannelInput: boolean) {
   if (tab === 'general') {
-    return [3, 2, hasMultiChannelInput ? 2 : 1, 1, 1, 1, 2, 2];
+    return [3, 2, 3, hasMultiChannelInput ? 2 : 1, 1, 1, 1, 2, 2];
   }
   if (tab === 'playback') {
-    return [3, 2, 1, 1, 1, 1, 1, 1, 2, 2];
+    return [3, 2, 1, 1, 1, 1, 1, 2, 1, 2, 2];
   }
 
   return [3, 1, 1, 2, 1, 2];

@@ -25,9 +25,12 @@ import { isSessionPlayback } from '@/bridge/playback-session';
 import { closePlaybackWindow } from '@/bridge/window';
 import {
   type AudioPlayer,
+  type AudioPlayerError,
   type TimeSubscriber,
   useAudioPlayer,
 } from '@/features/playback/hooks/use-audio-player';
+import type { ReferenceContour } from '@/features/playback/lib/pitch/state';
+import { useI18n } from '@/shared/i18n/use-i18n';
 
 export type PlaybackTransportState = {
   isReady: boolean;
@@ -36,10 +39,11 @@ export type PlaybackTransportState = {
   paused: boolean;
   duration: number;
   singableDuration: number;
+  referenceContour: ReferenceContour | null;
   guideVolume: number;
   guideAvailable: boolean;
   outputVolume: number;
-  error: string | null;
+  error: AudioPlayerError | null;
 };
 
 export type PlaybackTransportActions = {
@@ -55,6 +59,9 @@ export type PlaybackTransportActions = {
   pauseAudio: () => void;
   handlePause: () => void;
   handleContinue: () => void;
+  handleRestart: () => void;
+  /** Subscribe to "start over" so per-attempt state (scoring, reports) can reset. */
+  onRestart: (fn: () => void) => () => void;
   handleExit: () => void;
 };
 
@@ -75,6 +82,7 @@ export function PlaybackTransportProvider({
   children,
 }: PlaybackTransportProviderProps) {
   const navigate = useNavigate();
+  const { t } = useI18n();
   // Snapshot the initial guide/output volumes so changing config later doesn't
   // re-instantiate the audio engine via useAudioPlayer's effect deps.
   const [initialGuideVolumeSnapshot] = useState(initialGuideVolume);
@@ -82,6 +90,7 @@ export function PlaybackTransportProvider({
 
   const [stemsReady, setStemsReady] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [restartListeners] = useState(() => new Set<() => void>());
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -99,7 +108,7 @@ export function PlaybackTransportProvider({
         return;
       }
       if (typeof event.error === 'string' && event.error !== '') {
-        toast.error(`Stem conversion failed: ${event.error}`);
+        toast.error(t('playback.stemConversionFailed', { detail: event.error }));
         void navigate('/', { replace: true });
       } else {
         setStemsReady(true);
@@ -118,7 +127,7 @@ export function PlaybackTransportProvider({
       cancelled = true;
       unlisten?.();
     };
-  }, [fileHash, navigate]);
+  }, [fileHash, navigate, t]);
 
   const audio = useAudioPlayer({
     fileHash,
@@ -128,11 +137,16 @@ export function PlaybackTransportProvider({
   });
 
   useEffect(() => {
-    if (typeof audio.error === 'string' && audio.error !== '') {
-      toast.error(audio.error);
-      void navigate('/', { replace: true });
+    if (audio.error === null) {
+      return;
     }
-  }, [audio.error, navigate]);
+    toast.error(
+      audio.error.kind === 'reference'
+        ? t('playback.referenceFailed')
+        : t('playback.audioLoadFailed', { detail: audio.error.detail }),
+    );
+    void navigate('/', { replace: true });
+  }, [audio.error, navigate, t]);
 
   const handlePause = useCallback(() => {
     audio.pause();
@@ -143,6 +157,25 @@ export function PlaybackTransportProvider({
     setPaused(false);
     audio.resume();
   }, [audio]);
+
+  const handleRestart = useCallback(() => {
+    setPaused(false);
+    audio.seek(0);
+    audio.resume();
+    for (const listener of restartListeners) {
+      listener();
+    }
+  }, [audio, restartListeners]);
+
+  const onRestart = useCallback(
+    (fn: () => void) => {
+      restartListeners.add(fn);
+      return () => {
+        restartListeners.delete(fn);
+      };
+    },
+    [restartListeners],
+  );
 
   const handleExit = useCallback(() => {
     audio.cleanup();
@@ -161,6 +194,7 @@ export function PlaybackTransportProvider({
       paused,
       duration: audio.duration,
       singableDuration: audio.singableDuration,
+      referenceContour: audio.referenceContour,
       guideVolume: audio.guideVolume,
       guideAvailable: audio.guideAvailable,
       outputVolume: audio.outputVolume,
@@ -172,6 +206,7 @@ export function PlaybackTransportProvider({
       audio.isFinished,
       audio.duration,
       audio.singableDuration,
+      audio.referenceContour,
       audio.guideVolume,
       audio.guideAvailable,
       audio.outputVolume,
@@ -193,6 +228,8 @@ export function PlaybackTransportProvider({
       pauseAudio: audio.pause,
       handlePause,
       handleContinue,
+      handleRestart,
+      onRestart,
       handleExit,
     }),
     [
@@ -207,6 +244,8 @@ export function PlaybackTransportProvider({
       audio.pause,
       handlePause,
       handleContinue,
+      handleRestart,
+      onRestart,
       handleExit,
     ],
   );

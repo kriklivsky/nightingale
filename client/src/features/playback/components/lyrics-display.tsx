@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 
 import { clampPlaybackScale } from '@/features/playback/lib/display-scale';
 import {
@@ -22,61 +22,37 @@ type WordStyle = {
   opacity: number;
 };
 
-const STYLES = {
-  unsung: { rgb: 'rgb(255,255,255)', opacity: 0.5 },
-  unsungEstimated: { rgb: 'rgb(255,200,100)', opacity: 0.4 },
-  sung: { rgb: 'rgb(255,255,255)', opacity: 1.0 },
-  nextLine: { rgb: 'rgb(255,255,255)', opacity: 0.35 },
-  nextLineEstimated: { rgb: 'rgb(255,200,100)', opacity: 0.25 },
+const SUNG_RGB = 'rgb(103,232,249)';
+const UNSUNG_RGB = 'rgba(255,255,255,0.6)';
+const UNSUNG_ESTIMATED_RGB = 'rgba(255,200,100,0.55)';
+
+const NEXT_LINE_STYLES = {
+  plain: { rgb: 'rgb(255,255,255)', opacity: 0.35 },
+  estimated: { rgb: 'rgb(255,200,100)', opacity: 0.25 },
 } as const;
 
-const unsungStyle = (word: Word): WordStyle =>
-  word.estimated === true ? STYLES.unsungEstimated : STYLES.unsung;
-
 const nextLineStyle = (word: Word): WordStyle =>
-  word.estimated === true ? STYLES.nextLineEstimated : STYLES.nextLine;
+  word.estimated === true ? NEXT_LINE_STYLES.estimated : NEXT_LINE_STYLES.plain;
 
-function lerp(a: number, b: number, t: number) {
-  return a + (b - a) * t;
-}
-
-function interpolateStyle(from: WordStyle, to: WordStyle, t: number): WordStyle {
-  const p = Math.max(0, Math.min(1, t));
-  if (from.rgb === to.rgb) {
-    return { rgb: to.rgb, opacity: lerp(from.opacity, to.opacity, p) };
-  }
-  const fm = from.rgb.match(/\d+/g);
-  const tm = to.rgb.match(/\d+/g);
-  if (fm === null || tm === null) {
-    return to;
-  }
-  const r = Math.round(lerp(+fm[0], +tm[0], p));
-  const g = Math.round(lerp(+fm[1], +tm[1], p));
-  const b = Math.round(lerp(+fm[2], +tm[2], p));
-  return {
-    rgb: `rgb(${r},${g},${b})`,
-    opacity: lerp(from.opacity, to.opacity, p),
-  };
-}
+/** Fill the active line left to right; the boundary moves through each word as it is sung. */
+const WIPE_CLASS =
+  'bg-clip-text text-transparent [background-image:linear-gradient(90deg,var(--lyric-sung)_var(--lyric-fill),var(--lyric-unsung)_var(--lyric-fill))]';
 
 // --- Per-frame DOM updates (called via rAF subscriber, no React re-renders) ---
 
-function computeWordStyle(word: Word, time: number, isActive: boolean): WordStyle {
-  const base = unsungStyle(word);
+function wordFill(word: Word, time: number, isActive: boolean): number {
   if (!isActive) {
-    return base;
+    return 0;
   }
-
-  const wStart = word.start - WORD_HIGHLIGHT_LEAD;
-  const wEnd = word.end - WORD_HIGHLIGHT_LEAD;
-
-  if (time >= wEnd) {
-    return STYLES.sung;
+  const start = word.start - WORD_HIGHLIGHT_LEAD;
+  const end = word.end - WORD_HIGHLIGHT_LEAD;
+  if (time >= end) {
+    return 1;
   }
-  if (time >= wStart) {
-    return interpolateStyle(base, STYLES.sung, (time - wStart) / (wEnd - wStart));
+  if (time <= start) {
+    return 0;
   }
-  return base;
+  return (time - start) / (end - start);
 }
 
 function updateWordSpans(
@@ -90,9 +66,10 @@ function updateWordSpans(
     if (!span) {
       continue;
     }
-    const s = computeWordStyle(words[i], time, isActive);
-    span.style.color = s.rgb;
-    span.style.opacity = String(s.opacity);
+    const fill = `${Math.round(wordFill(words[i], time, isActive) * 200) / 2}%`;
+    if (span.style.getPropertyValue('--lyric-fill') !== fill) {
+      span.style.setProperty('--lyric-fill', fill);
+    }
   }
 }
 
@@ -116,16 +93,40 @@ type WordTokenProps = {
   hasReading: boolean;
   isLast: boolean;
   readingClass: string;
-  refSetter?: (el: HTMLSpanElement | null) => void;
-  style: WordStyle;
+} & (
+  | { mode: 'wipe'; refSetter: (el: HTMLSpanElement | null) => void }
+  | { mode: 'static'; style: WordStyle }
+);
+
+function tokenStyle(props: WordTokenProps): CSSProperties {
+  if (props.mode === 'static') {
+    return { color: props.style.rgb, opacity: props.style.opacity };
+  }
+  const style: LyricWipeStyle = {
+    '--lyric-fill': '0%',
+    '--lyric-sung': SUNG_RGB,
+    '--lyric-unsung': props.word.estimated === true ? UNSUNG_ESTIMATED_RGB : UNSUNG_RGB,
+  };
+  return style;
+}
+
+type LyricWipeStyle = CSSProperties & {
+  '--lyric-fill': string;
+  '--lyric-sung': string;
+  '--lyric-unsung': string;
 };
 
-function WordToken({ word, hasReading, isLast, readingClass, refSetter, style }: WordTokenProps) {
+function WordToken(props: WordTokenProps) {
+  const { word, hasReading, isLast, readingClass } = props;
+
   return (
     <span
-      ref={refSetter}
-      className={hasReading ? 'inline-flex flex-col items-center leading-tight' : undefined}
-      style={{ color: style.rgb, opacity: style.opacity }}
+      ref={props.mode === 'wipe' ? props.refSetter : undefined}
+      className={cn(
+        hasReading && 'inline-flex flex-col items-center leading-tight',
+        props.mode === 'wipe' && WIPE_CLASS,
+      )}
+      style={tokenStyle(props)}
     >
       {hasReading && (
         <span className={`block leading-tight font-medium opacity-80 ${readingClass}`}>
@@ -386,10 +387,10 @@ function LyricsDisplayImpl(props: LyricsDisplayProps) {
                 hasReading={segHasReading}
                 isLast={wi === seg.words.length - 1}
                 readingClass="text-[0.4em]"
+                mode="wipe"
                 refSetter={(el) => {
                   wordRefs.current[wi] = el;
                 }}
-                style={STYLES.unsung}
               />
             ))}
           </p>
@@ -413,6 +414,7 @@ function LyricsDisplayImpl(props: LyricsDisplayProps) {
                 hasReading={nextHasReading}
                 isLast={wi === nextSeg.words.length - 1}
                 readingClass="text-[0.467em]"
+                mode="static"
                 style={nextLineStyle(word)}
               />
             ))}

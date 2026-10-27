@@ -28,6 +28,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select';
+import type { Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 import type { PlexPinStart } from '@/types/PlexPinStart';
 import type { PlexServer } from '@/types/PlexServer';
@@ -61,26 +63,21 @@ const plexCanConnect = (
   pending: boolean,
 ): boolean => Boolean(server) && sectionIds.length > 0 && !pending;
 
-const signInCopy = (phase: 'waiting' | 'discovering', pin: PlexPinStart) =>
+const signInCopy = (t: Translate, phase: 'waiting' | 'discovering', pin: PlexPinStart) =>
   phase === 'waiting'
-    ? {
-        title: 'Waiting for approval in Plex…',
-        detail: `Approve code ${pin.code} in the browser. You can keep using this window.`,
-      }
-    : {
-        title: 'Signed in. Looking for your Plex server…',
-        detail:
-          'Checking the addresses Plex advertised. Slow or unreachable addresses can take a moment.',
-      };
+    ? { title: t('plex.waiting'), detail: t('plex.waitingDetail', { code: pin.code }) }
+    : { title: t('plex.discovering'), detail: t('plex.discoveringDetail') };
 
 const manualCredentialsReady = (url: string, token: string): boolean =>
   url.trim() !== '' && token !== '';
 
 const BusyIcon = ({ active }: { active: boolean }) =>
-  active ? <Loader2Icon className="animate-spin" /> : null;
+  active ? <Loader2Icon className="animate-spin motion-reduce:animate-none" /> : null;
 
-const HostedSignInLabel = ({ pin }: { pin: PlexPinStart | null }) =>
-  pin ? 'Open Plex sign-in' : 'Sign in with Plex';
+const HostedSignInLabel = ({ pin }: { pin: PlexPinStart | null }) => {
+  const { t } = useI18n();
+  return pin ? t('plex.openSignIn') : t('plex.signIn');
+};
 
 const PlexSignInStatus = ({
   visible,
@@ -91,16 +88,17 @@ const PlexSignInStatus = ({
   pin: PlexPinStart | null;
   phase: 'waiting' | 'discovering';
 }) => {
+  const { t } = useI18n();
   if (!visible || pin === null) {
     return null;
   }
-  const copy = signInCopy(phase, pin);
+  const copy = signInCopy(t, phase, pin);
   return (
     <output
       className="-mt-2 flex items-start gap-2 rounded-md bg-muted px-3 py-2.5 text-xs"
       aria-live="polite"
     >
-      <Loader2Icon className="mt-0.5 size-3.5 shrink-0 animate-spin text-primary" />
+      <Loader2Icon className="mt-0.5 size-3.5 shrink-0 animate-spin text-primary motion-reduce:animate-none" />
       <div className="space-y-0.5">
         <p className="font-medium text-foreground">{copy.title}</p>
         <p className="text-muted-foreground">{copy.detail}</p>
@@ -110,6 +108,7 @@ const PlexSignInStatus = ({
 };
 
 export const PlexConnectDialog = () => {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const { mode, close } = useDialog();
   const open = mode === 'plex-connect';
@@ -170,12 +169,14 @@ export const PlexConnectDialog = () => {
         setServers(result.servers);
         setServerIndex(0);
         if (result.servers.length === 0) {
-          toast.error('Plex sign-in succeeded, but no reachable media servers were discovered.');
+          toast.error(t('plex.noServers'));
         }
       } catch (error) {
         if (!cancelled) {
           toast.error(
-            `Plex sign-in failed: ${error instanceof Error ? error.message : String(error)}`,
+            t('plex.signInFailed', {
+              detail: error instanceof Error ? error.message : String(error),
+            }),
           );
           setPin(null);
         }
@@ -191,7 +192,7 @@ export const PlexConnectDialog = () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [open, pin, servers.length]);
+  }, [open, pin, servers.length, t]);
 
   const selectedSummary = sections
     .filter((section) => sectionIds.includes(section.id))
@@ -205,7 +206,7 @@ export const PlexConnectDialog = () => {
       await openUrl(nextPin.auth_url);
     } catch (error) {
       toast.error(
-        `Could not start Plex sign-in: ${error instanceof Error ? error.message : String(error)}`,
+        t('plex.startFailed', { detail: error instanceof Error ? error.message : String(error) }),
       );
     } finally {
       setBusy(false);
@@ -227,7 +228,7 @@ export const PlexConnectDialog = () => {
       setManualToken('');
     } catch (error) {
       toast.error(
-        `Could not reach Plex: ${error instanceof Error ? error.message : String(error)}`,
+        t('plex.unreachable', { detail: error instanceof Error ? error.message : String(error) }),
       );
     } finally {
       setBusy(false);
@@ -243,11 +244,14 @@ export const PlexConnectDialog = () => {
       {
         onSuccess: () => {
           toast.success(
-            `Library now reads ${selectedSummary.join(', ')} from ${server.server_name}`,
+            t('plex.connected', {
+              libraries: selectedSummary.join(', '),
+              server: server.server_name,
+            }),
           );
           close();
         },
-        onError: (error) => toast.error(`Could not connect Plex: ${error.message}`),
+        onError: (error) => toast.error(t('plex.connectFailed', { detail: error.message })),
       },
     );
   };
@@ -256,10 +260,8 @@ export const PlexConnectDialog = () => {
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Connect to Plex</DialogTitle>
-          <DialogDescription>
-            Connect through Plex on the web, or use a server URL and API token.
-          </DialogDescription>
+          <DialogTitle>{t('source.connectTo', { source: 'Plex' })}</DialogTitle>
+          <DialogDescription>{t('plex.description')}</DialogDescription>
         </DialogHeader>
 
         <SourceChangeWarning />
@@ -269,7 +271,7 @@ export const PlexConnectDialog = () => {
         {view.manualForm && (
           <FieldGroup>
             <Field>
-              <Label htmlFor="plex-url">Plex Media Server URL</Label>
+              <Label htmlFor="plex-url">{t('plex.serverUrl')}</Label>
               <Input
                 id="plex-url"
                 placeholder="https://plex.example.com:32400"
@@ -279,7 +281,7 @@ export const PlexConnectDialog = () => {
               />
             </Field>
             <Field>
-              <Label htmlFor="plex-token">Plex token</Label>
+              <Label htmlFor="plex-token">{t('plex.token')}</Label>
               <Input
                 id="plex-token"
                 type="password"
@@ -295,7 +297,7 @@ export const PlexConnectDialog = () => {
         {view.serverForm && (
           <div className="space-y-4">
             <Field>
-              <Label htmlFor="plex-server">Server</Label>
+              <Label htmlFor="plex-server">{t('plex.server')}</Label>
               <Select
                 value={String(serverIndex)}
                 onValueChange={(value) => {
@@ -304,7 +306,7 @@ export const PlexConnectDialog = () => {
                 }}
               >
                 <SelectTrigger id="plex-server" className="w-full">
-                  <SelectValue placeholder="Select a server" />
+                  <SelectValue placeholder={t('plex.selectServer')} />
                 </SelectTrigger>
                 <SelectContent position="popper" className="w-[var(--radix-select-trigger-width)]">
                   {servers.map((candidate, index) => (
@@ -313,7 +315,7 @@ export const PlexConnectDialog = () => {
                       value={String(index)}
                     >
                       {candidate.server_name}
-                      {candidate.owned ? '' : ' (shared)'}
+                      {candidate.owned ? '' : ` (${t('plex.shared')})`}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -321,12 +323,9 @@ export const PlexConnectDialog = () => {
             </Field>
 
             <div className="space-y-2">
-              <Label>Music libraries</Label>
+              <Label>{t('plex.musicLibraries')}</Label>
               {sections.length === 0 ? (
-                <p className="text-sm text-destructive">
-                  This server did not expose any music libraries. Movie and TV libraries are not
-                  imported.
-                </p>
+                <p className="text-sm text-destructive">{t('plex.noMusicLibraries')}</p>
               ) : (
                 sections.map((section) => (
                   <label key={section.id} className="flex items-center gap-2 text-sm">
@@ -359,7 +358,7 @@ export const PlexConnectDialog = () => {
               disabled={busy || connect.isPending}
               className={navClass(0)}
             >
-              Cancel
+              {t('common.cancel')}
             </Button>
             {view.hostedActions && (
               <>
@@ -369,7 +368,7 @@ export const PlexConnectDialog = () => {
                   disabled={busy}
                   className={navClass(1)}
                 >
-                  Advanced
+                  {t('plex.advanced')}
                 </Button>
                 <Button
                   onClick={() => {
@@ -395,7 +394,7 @@ export const PlexConnectDialog = () => {
                   disabled={busy}
                   className={navClass(1)}
                 >
-                  Back
+                  {t('common.back')}
                 </Button>
                 <Button
                   onClick={() => void verifyManualServer()}
@@ -403,14 +402,14 @@ export const PlexConnectDialog = () => {
                   className={navClass(2)}
                 >
                   <BusyIcon active={busy} />
-                  Test server
+                  {t('plex.testServer')}
                 </Button>
               </>
             )}
             {view.connectAction && (
               <Button onClick={handleConnect} disabled={!canConnect} className={navClass(1)}>
                 <BusyIcon active={connect.isPending} />
-                Connect selected libraries
+                {t('plex.connectSelected')}
               </Button>
             )}
           </div>

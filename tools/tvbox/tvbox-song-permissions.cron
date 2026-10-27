@@ -1,0 +1,4 @@
+SHELL=/bin/sh
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+* * * * * root /usr/bin/nice -n 15 /usr/bin/ionice -c 3 /usr/local/bin/tvbox-fix-song-permissions 2>&1 | /usr/bin/logger -t tvbox-song-permissions

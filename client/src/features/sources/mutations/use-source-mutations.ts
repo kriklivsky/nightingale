@@ -14,6 +14,8 @@ import {
 import { EMPTY_LIBRARY_FILTER } from '@/features/library/lib/library-menu-filter';
 import { libraryFilterAtom } from '@/features/menu/hooks/use-library-filter';
 import { searchAtom } from '@/features/menu/hooks/use-search';
+import type { Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import {
   ANALYSIS_QUEUE,
   CONFIG,
@@ -63,6 +65,7 @@ const useResetLibraryNavigation = () => {
 
 /** Pick a folder, persist it as the active source, and kick off a scan. */
 export const useSelectFolderSource = () => {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const invalidateLibrary = useInvalidateLibrary();
   const resetNavigation = useResetLibraryNavigation();
@@ -84,24 +87,22 @@ export const useSelectFolderSource = () => {
       invalidateLibrary();
     },
     onError: (error: Error) => {
-      toast.error(`Failed to select folder: ${error.message}`);
+      toast.error(t('source.selectFolderFailed', { detail: error.message }));
     },
   });
 };
 
-const songs = (count: number) => `${count} song${count === 1 ? '' : 's'}`;
-
-const notifyReconcile = ({ updated, skipped }: CacheReconcileSummary) => {
+const notifyReconcile = (t: Translate, { updated, skipped }: CacheReconcileSummary) => {
   if (updated > 0) {
-    const detail = skipped > 0 ? `; ${songs(skipped)} still incomplete` : '';
-    toast.success(`Marked ${songs(updated)} ready from the cache${detail}`);
+    const detail = skipped > 0 ? t('source.reconcileIncomplete', { count: skipped }) : '';
+    toast.success(t('source.reconcileReady', { count: updated, detail }));
   } else if (skipped > 0) {
-    toast.warning(`${songs(skipped)} in the cache still incomplete; nothing marked ready`);
+    toast.warning(t('source.reconcileNothingReady', { count: skipped }));
   }
 };
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : 'unknown error';
+const errorMessage = (t: Translate, error: unknown): string =>
+  error instanceof Error ? error.message : t('common.unknownError');
 
 /**
  * Re-run the scan against the currently configured source, then pick up any
@@ -110,6 +111,7 @@ const errorMessage = (error: unknown): string =>
  * separately instead of failing the rescan.
  */
 export const useRescan = () => {
+  const { t } = useI18n();
   const invalidateLibrary = useInvalidateLibrary();
 
   return useMutation({
@@ -118,24 +120,25 @@ export const useRescan = () => {
       try {
         return await reconcileCache();
       } catch (error: unknown) {
-        toast.warning(`Rescan started, but the cache could not be checked: ${errorMessage(error)}`);
+        toast.warning(t('source.reconcileFailed', { detail: errorMessage(t, error) }));
         return null;
       }
     },
     onSuccess: (summary) => {
       invalidateLibrary();
       if (summary) {
-        notifyReconcile(summary);
+        notifyReconcile(t, summary);
       }
     },
     onError: (error: Error) => {
-      toast.error(`Rescan failed: ${error.message}`);
+      toast.error(t('source.rescanFailed', { detail: error.message }));
     },
   });
 };
 
 /** Disconnect from whatever source is currently configured. */
 export const useDisconnectSource = () => {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const invalidateLibrary = useInvalidateLibrary();
   const resetNavigation = useResetLibraryNavigation();
@@ -148,7 +151,7 @@ export const useDisconnectSource = () => {
       invalidateLibrary();
     },
     onError: (error: Error) => {
-      toast.error(`Could not clear source: ${error.message}`);
+      toast.error(t('source.clearFailed', { detail: error.message }));
     },
   });
 };
@@ -265,6 +268,7 @@ export const useConnectNavidrome = () => {
 
 /** Persist a discovered/verified Plex server and the user's selected music sections. */
 export const useConnectPlex = () => {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const invalidateLibrary = useInvalidateLibrary();
   const resetNavigation = useResetLibraryNavigation();
@@ -276,7 +280,7 @@ export const useConnectPlex = () => {
   >({
     mutationFn: async ({ server, sectionIds }) => {
       if (sectionIds.length === 0) {
-        throw new Error('Select at least one music library');
+        throw new Error(t('plex.selectLibrary'));
       }
       const config = await setLibrarySource({
         kind: 'plex',

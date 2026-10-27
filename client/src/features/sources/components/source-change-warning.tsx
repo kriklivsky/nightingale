@@ -15,12 +15,11 @@ import {
   AlertDialogTitle,
 } from '@/shared/components/ui/alert-dialog';
 import { useConfig } from '@/shared/config/use-config';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
-const warningCopy =
-  'Nightingale cannot preserve analysis when the data source changes. All songs in the current library — including analyzed songs and their analysis results — will be dropped from Nightingale. Your source files will not be deleted.';
-
 export const SourceChangeWarning = () => {
+  const { t } = useI18n();
   const { data: config } = useConfig();
 
   if (!config?.library_source) {
@@ -31,14 +30,15 @@ export const SourceChangeWarning = () => {
     <div className="grid grid-cols-[auto_1fr] gap-x-2 border-y py-2 text-left text-xs/relaxed">
       <TriangleAlertIcon className="mt-0.5 size-3.5 text-destructive" />
       <div>
-        <p className="font-bold">Current library will be cleared</p>
-        <p className="text-muted-foreground">{warningCopy}</p>
+        <p className="font-bold">{t('source.clearWarningTitle')}</p>
+        <p className="text-muted-foreground">{t('source.clearWarning')}</p>
       </div>
     </div>
   );
 };
 
 export const FolderSourceConfirmDialog = () => {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const { mode, close } = useDialog();
   const selectFolder = useSelectFolderSource();
@@ -59,12 +59,12 @@ export const FolderSourceConfirmDialog = () => {
     <AlertDialog open={open} onOpenChange={close}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Change data source?</AlertDialogTitle>
-          <AlertDialogDescription>{warningCopy}</AlertDialogDescription>
+          <AlertDialogTitle>{t('source.changeTitle')}</AlertDialogTitle>
+          <AlertDialogDescription>{t('source.clearWarning')}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter ref={containerRef}>
           <AlertDialogCancel onClick={close} className={focusClass(0)}>
-            Cancel
+            {t('common.cancel')}
           </AlertDialogCancel>
           <AlertDialogAction
             onClick={() => {
@@ -73,7 +73,7 @@ export const FolderSourceConfirmDialog = () => {
             }}
             className={focusClass(1)}
           >
-            Choose folder
+            {t('source.chooseFolder')}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -16,6 +16,7 @@ import {
   AlertDialogTitle,
 } from '@/shared/components/ui/alert-dialog';
 import { Button } from '@/shared/components/ui/button';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { ANALYSIS_QUEUE, FAVORITES, MENU, SONGS, SONGS_META } from '@/shared/query-keys';
 import { cn } from '@/shared/utils/cn';
 
@@ -26,6 +27,7 @@ const focusClass = (open: boolean, focusedIndex: number, index: number): string 
   );
 
 export function DeleteSongDialog() {
+  const { t } = useI18n();
   const { mode, close } = useDialog();
   const { selectedSong, setSelectedSong } = useMenuFocus();
   const queryClient = useQueryClient();
@@ -52,25 +54,27 @@ export function DeleteSongDialog() {
         setSelectedSong(null);
       }
       close();
-      toast.success(`Deleted ${song.title} from disk`);
+      toast.success(t('deleteSong.deleted', { title: song.title }));
       void Promise.all(
         [SONGS, SONGS_META, FAVORITES, ANALYSIS_QUEUE, MENU].map((queryKey) =>
           queryClient.invalidateQueries({ queryKey }),
         ),
       ).catch((error: unknown) => {
         toast.error(
-          `Files were deleted, but the library could not refresh: ${error instanceof Error ? error.message : String(error)}`,
+          t('deleteSong.refreshFailed', {
+            detail: error instanceof Error ? error.message : String(error),
+          }),
         );
       });
     } catch (error) {
       toast.error(
-        `Could not delete song: ${error instanceof Error ? error.message : String(error)}`,
+        t('deleteSong.failed', { detail: error instanceof Error ? error.message : String(error) }),
       );
     } finally {
       deletingRef.current = false;
       setDeleting(false);
     }
-  }, [close, queryClient, selectedSong, setSelectedSong, song]);
+  }, [close, queryClient, selectedSong, setSelectedSong, song, t]);
 
   const onConfirm = useCallback(
     (index: number) => {
@@ -94,11 +98,11 @@ export function DeleteSongDialog() {
     <AlertDialog open={open} onOpenChange={(nextOpen) => !nextOpen && cancel()}>
       <AlertDialogContent onEscapeKeyDown={(event) => event.preventDefault()}>
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete {song?.title ?? 'song'}?</AlertDialogTitle>
+          <AlertDialogTitle>
+            {t('deleteSong.title', { title: song?.title ?? t('deleteSong.song') })}
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            {song?.usdx
-              ? 'Permanently delete this UltraStar song file and its referenced audio, video, vocals, and cover files from disk? This cannot be undone.'
-              : 'Permanently delete this song file from disk? This cannot be undone.'}
+            {song?.usdx ? t('deleteSong.usdxDescription') : t('deleteSong.description')}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -107,7 +111,7 @@ export function DeleteSongDialog() {
             onClick={cancel}
             className={focusClass(open, focusedIndex, 0)}
           >
-            Cancel
+            {t('common.cancel')}
           </AlertDialogCancel>
           <Button
             type="button"
@@ -116,7 +120,7 @@ export function DeleteSongDialog() {
             onClick={() => void runDelete()}
             className={focusClass(open, focusedIndex, 1)}
           >
-            {deleting ? 'Deleting…' : 'Delete files'}
+            {deleting ? t('deleteSong.deleting') : t('deleteSong.confirm')}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>

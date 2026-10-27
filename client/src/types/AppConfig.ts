@@ -49,6 +49,7 @@ export type AppConfig = {
   lyrics_horizontal_position: string | null;
   lyrics_scale: number | null;
   pitch_graph_scale: number | null;
+  pitch_display: string | null;
   lyrics_romanization_mode: string | null;
   separator: string | null;
   asr_engine: string | null;
@@ -58,4 +59,5 @@ export type AppConfig = {
   song_list_view: string | null;
   song_list_sort: Array<SongSort> | null;
   language_overrides: { [key in string]: string } | null;
+  ui_language: string | null;
 };

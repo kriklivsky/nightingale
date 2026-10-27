@@ -4,6 +4,7 @@ import { clampPlaybackScale } from '@/features/playback/lib/display-scale';
 import { pitchDeviation } from '@/features/playback/lib/pitch/report';
 import type { PitchSeries } from '@/features/playback/lib/pitch/state';
 import { useLatestRef } from '@/shared/hooks/use-latest-ref';
+import { useI18n } from '@/shared/i18n/use-i18n';
 
 type PitchGraphProps = {
   series: PitchSeries;
@@ -68,9 +69,10 @@ export function PitchGraph({
   position = 'top',
   scale = 1,
 }: PitchGraphProps) {
+  const { t } = useI18n();
   const deviation = useCalmPitch(series, micReady && !paused);
-  const positionClass = position === 'bottom' ? 'bottom-32 sm:bottom-3' : 'top-36 sm:top-3';
-  const label = micUserEnabled ? 'Pitch · details after the song' : 'Microphone off';
+  const positionClass = position === 'bottom' ? 'bottom-32 sm:bottom-8' : 'top-36 sm:top-3';
+  const label = micUserEnabled ? t('playback.pitchMeterLabel') : t('playback.microphoneOff');
   const meterScale = clampPlaybackScale(scale);
   const style: MeterStyle = {
     '--pitch-scale': meterScale,
@@ -80,7 +82,7 @@ export function PitchGraph({
 
   return (
     <figure
-      aria-label="Pitch position relative to the melody"
+      aria-label={t('playback.pitchMeter')}
       className={`pointer-events-none absolute left-1/2 z-20 w-72 max-w-[calc(90%/var(--pitch-scale))] -translate-x-1/2 rounded-xl border border-white/20 bg-black/70 p-3 sm:max-w-[calc(40%/var(--pitch-scale))] ${positionClass}`}
       style={style}
     >
@@ -97,9 +99,9 @@ export function PitchGraph({
         />
       </div>
       <div className="mt-2 flex justify-between text-xs text-white/70">
-        <span>Low</span>
-        <span>Target</span>
-        <span>High</span>
+        <span>{t('playback.pitchLow')}</span>
+        <span>{t('playback.pitchTarget')}</span>
+        <span>{t('playback.pitchHigh')}</span>
       </div>
     </figure>
   );

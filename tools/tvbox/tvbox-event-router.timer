@@ -1,0 +1,10 @@
+[Unit]
+Description=Check event Ethernet role while the Wi-Fi hotspot is active
+
+[Timer]
+OnBootSec=25
+OnUnitInactiveSec=5
+AccuracySec=1
+
+[Install]
+WantedBy=timers.target

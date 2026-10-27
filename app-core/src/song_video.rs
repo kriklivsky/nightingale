@@ -166,6 +166,44 @@ pub fn get_song_video(file_hash: &str) -> Result<Option<SongVideo>, String> {
         .transpose()
 }
 
+pub fn list_song_video_hashes() -> Result<Vec<String>, String> {
+    let root = videos_dir().join("youtube");
+    let metadata = match std::fs::symlink_metadata(&root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err("Cannot inspect attached videos".into()),
+    };
+    if !metadata.is_dir() || metadata.is_symlink() {
+        return Err("Invalid attached video cache directory".into());
+    }
+    let root = root
+        .canonicalize()
+        .map_err(|_| "Cannot resolve attached video cache")?;
+    let entries = std::fs::read_dir(root).map_err(|_| "Cannot list attached videos")?;
+    let mut hashes = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|_| "Cannot inspect attached video entry")?;
+        let kind = entry
+            .file_type()
+            .map_err(|_| "Cannot inspect attached video entry")?;
+        let name = entry.file_name();
+        let Some(hash) = name.to_str().filter(|hash| valid_id(hash, 32, true)) else {
+            continue;
+        };
+        if !kind.is_dir() || kind.is_symlink() {
+            continue;
+        }
+        let directory = entry.path();
+        if let Some(selection) = read_selection(&directory)?
+            && as_video(&directory, selection).is_ok()
+        {
+            hashes.push(hash.to_string());
+        }
+    }
+    hashes.sort_unstable();
+    Ok(hashes)
+}
+
 pub fn search_song_videos(
     file_hash: &str,
     title_only: bool,

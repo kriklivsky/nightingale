@@ -14,6 +14,7 @@ import { Toaster } from '@/shared/components/ui/sonner';
 import { TooltipProvider } from '@/shared/components/ui/tooltip';
 import { TauriAppShell } from '@/shared/components/window/title-bar';
 import { useConfig } from '@/shared/config/use-config';
+import { I18nProvider } from '@/shared/i18n/i18n-provider';
 
 import { NavInputProvider } from './providers/nav-input-context';
 import { ThemeProvider } from './providers/theme-context';
@@ -48,13 +49,15 @@ const ThemeWrapper = () => {
   const { data: config } = useConfig();
 
   return (
-    <ThemeProvider defaultTheme={config?.dark_mode === false ? 'light' : 'dark'}>
-      <TooltipProvider>
-        <TauriAppShell>
-          <InnerWrapper />
-        </TauriAppShell>
-      </TooltipProvider>
-    </ThemeProvider>
+    <I18nProvider>
+      <ThemeProvider defaultTheme={config?.dark_mode === false ? 'light' : 'dark'}>
+        <TooltipProvider>
+          <TauriAppShell>
+            <InnerWrapper />
+          </TauriAppShell>
+        </TooltipProvider>
+      </ThemeProvider>
+    </I18nProvider>
   );
 };
 

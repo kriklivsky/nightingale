@@ -16,9 +16,11 @@ import {
 import { Field, FieldGroup } from '@/shared/components/ui/field';
 import { Input } from '@/shared/components/ui/input';
 import { Label } from '@/shared/components/ui/label';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 export const CreateProfileDialog = () => {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [name, setName] = useState<string | null>(null);
@@ -50,14 +52,12 @@ export const CreateProfileDialog = () => {
       <DialogContent className="sm:max-w-sm">
         <div className="contents">
           <DialogHeader>
-            <DialogTitle>Create Profile</DialogTitle>
-            <DialogDescription>
-              Just enter your profile name and you're ready to go
-            </DialogDescription>
+            <DialogTitle>{t('profile.createTitle')}</DialogTitle>
+            <DialogDescription>{t('profile.createDescription')}</DialogDescription>
           </DialogHeader>
           <FieldGroup>
             <Field>
-              <Label htmlFor="name-1">Name</Label>
+              <Label htmlFor="name-1">{t('background.name')}</Label>
               <Input
                 id="name-1"
                 name="name"
@@ -82,7 +82,7 @@ export const CreateProfileDialog = () => {
                     focusedIndex === 0 && 'ring-2 ring-primary',
                   )}
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </Button>
               </DialogClose>
               <Button
@@ -94,7 +94,7 @@ export const CreateProfileDialog = () => {
                   focusedIndex === 1 && 'ring-2 ring-primary',
                 )}
               >
-                Create
+                {t('profile.create')}
               </Button>
             </div>
           </DialogFooter>

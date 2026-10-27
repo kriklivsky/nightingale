@@ -1,4 +1,5 @@
 import { Button } from '@/shared/components/ui/button';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { SidecarLrcKind } from '@/types/SidecarLrcKind';
 
 type SidecarLrcNoticeProps = {
@@ -18,6 +19,7 @@ export const SidecarLrcNotice = ({
   canUse,
   onUse,
 }: SidecarLrcNoticeProps) => {
+  const { t } = useI18n();
   if (!showing && !canUse) {
     return null;
   }
@@ -25,18 +27,18 @@ export const SidecarLrcNotice = ({
   return (
     <output className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
       {showing ? (
-        `Loaded local sidecar ${ext} from disk`
+        t('lyrics.sidecarLoaded', { ext })
       ) : (
         <>
-          Local {ext} found next to the audio file.
+          {t('lyrics.sidecarFound', { ext })}
           <Button
             variant="outline"
             size="xs"
             onClick={onUse}
             title={fileName}
-            aria-label={`Use local ${ext} (${fileName})`}
+            aria-label={t('lyrics.sidecarUseLabel', { ext, file: fileName })}
           >
-            Use local {ext}
+            {t('lyrics.sidecarUse', { ext })}
           </Button>
         </>
       )}

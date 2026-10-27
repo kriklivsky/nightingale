@@ -150,3 +150,75 @@ explicitly marks those buffers as `nchw`; omitting this changes the data order.
 Inputs shorter than the static eight-second graph are zero-padded for inference and
 cropped back to their original length, which keeps audio-separator's short-track
 chunking functional.
+
+# RK3588 Qwen3 forced-aligner backend
+
+Lyrics alignment with the `qwen` alignment backend can run
+[Qwen3-ForcedAligner-0.6B](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B-hf)
+(Apache-2.0) on the NPU. The processor, token-embedding lookup, final RMS norm and
+timestamp classifier stay on the host; only the transformer layers are converted.
+
+## Pinned source model
+
+- Model: `Qwen/Qwen3-ForcedAligner-0.6B-hf`, revision
+  `c07281df297b9905d24a508279258cccf987a064`
+- Audio encoder: 24 layers, attention within 8 s windows (800 mel frames,
+  104 audio tokens); a key mask covers a shorter final window.
+- Text decoder: 28 causal Qwen3 layers over a static 1024-token sequence. Right
+  padding cannot change earlier positions, so one static length serves every chunk.
+- RKNN target/precision: `rk3588`, FP16 compute with FP32 API tensors.
+
+The export splits the encoder into three groups of eight layers and the decoder
+into seven groups of four layers, so a component never needs more than about
+2.3 GB of RAM to export on an 8 GB board. RMS norms are evaluated on the residual
+stream divided by 64: Qwen3 activations reach about 7,000, whose squares overflow
+FP16. RoPE angles and encoder sinusoids are computed in FP64/FP32 at export time
+instead of taking the BF16 checkpoint buffers.
+
+## Export and convert
+
+Export with the analyzer's Python environment (PyTorch and Transformers that
+support `Qwen3ASRForTokenClassification`), with the model in the Hugging Face cache:
+
+```bash
+python tools/rknn/export_qwen_aligner.py \
+  --revision c07281df297b9905d24a508279258cccf987a064 \
+  --output-dir /var/tmp/qwen-aligner-onnx
+```
+
+Convert in a separate environment containing `rknn-toolkit2==2.3.2` (and
+`setuptools<81`, which the toolkit still imports):
+
+```bash
+python tools/rknn/build_qwen_aligner.py \
+  --onnx-dir /var/tmp/qwen-aligner-onnx \
+  --output-dir /var/tmp/qwen-aligner-rknn
+```
+
+Each component is exported and converted in its own process. The manifest records
+the source model revision, static shapes, ONNX hashes and RKNN hashes.
+
+## Install on RK3588
+
+Copy the bundle into Nightingale's models directory, keeping the Hugging Face
+cache entry of the pinned revision (the host side reads its processor, embedding
+table and classifier):
+
+```text
+models/qwen_aligner/Qwen3-ForcedAligner-0.6B.rk3588.fp16/
+  manifest.json
+  encoder-00-08.rknn ... encoder-16-24.rknn
+  decoder-00-04.rknn ... decoder-24-28.rknn
+```
+
+`NIGHTINGALE_QWEN_RKNN_MODEL` may point to another bundle directory or manifest.
+With `align_backend` set to `qwen`, LRC-timed songs in the aligner's languages are
+aligned on the NPU; without a bundle the Transformers model runs on the host.
+Songs without line timings use wav2vec2 on boards with the bundle, because a
+whole-song Qwen pass does not fit the static sequence and needs over 5 GB on the CPU.
+
+Validated on an Orange Pi 5 (RKNPU driver 0.9.8, runtime 2.3.2): the split ONNX
+graph reproduces the Transformers model's timestamps exactly; on the NPU the
+encoder output has cosine similarity 0.99998 and decoder groups 0.9998 against
+ONNX. An 8 s encoder window takes about 0.18 s and a 1024-token decoder pass about
+3.4 s.

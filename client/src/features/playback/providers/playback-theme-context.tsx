@@ -21,11 +21,13 @@ import {
   nextThemeKey,
   selectionForTheme,
   themeKey,
+  type CycleStep,
   type PlaybackTheme,
 } from '@/features/playback/components/theme';
 import { usePlaybackConfigPersist } from '@/features/playback/hooks/use-playback-config-persist';
 import { FLAVORS, type VideoFlavor } from '@/features/playback/lib/video-flavor';
 import { useSongVideo } from '@/features/song-video/queries';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { AppConfig } from '@/types/AppConfig';
 import type { Song } from '@/types/Song';
 
@@ -38,8 +40,8 @@ export type PlaybackThemeState = {
 };
 
 export type PlaybackThemeActions = {
-  cycleTheme: () => void;
-  cycleFlavor: () => void;
+  cycleTheme: (step?: CycleStep) => void;
+  cycleFlavor: (step?: CycleStep) => void;
 };
 
 const ThemeStateContext = createContext<PlaybackThemeState | null>(null);
@@ -66,6 +68,7 @@ function resolveSourceVideoPath(
 }
 
 function useSourceVideo(song: Song) {
+  const { t } = useI18n();
   const fileHash = song.file_hash;
   const { data: attachedVideo, error: videoError } = useSongVideo(fileHash);
   const hasAuthoredVideo = song.is_video || typeof song.usdx?.video === 'string';
@@ -95,9 +98,9 @@ function useSourceVideo(song: Song) {
 
   useEffect(() => {
     if (videoError instanceof Error) {
-      toast.error(`Cannot load the song video: ${videoError.message}`);
+      toast.error(t('playback.songVideoFailed', { detail: videoError.message }));
     }
-  }, [videoError]);
+  }, [t, videoError]);
 
   return { sourceVideoPath, sourceVideoOffsetSec: attachedVideo?.offset_sec ?? 0 };
 }
@@ -128,25 +131,31 @@ export function PlaybackThemeProvider({ song, config, children }: PlaybackThemeP
   const theme = themes.find((candidate) => themeKey(candidate) === currentThemeKey) ?? themes[0];
   const persistConfig = usePlaybackConfigPersist(config);
 
-  const cycleTheme = useCallback(() => {
-    setCurrentThemeKey((current) => {
-      const nextKey = nextThemeKey(themes, current ?? currentThemeKey);
-      const next = themes.find((candidate) => themeKey(candidate) === nextKey);
-      const selection = next ? selectionForTheme(next) : null;
-      if (selection) {
-        persistConfig({ last_background: selection });
-      }
-      return nextKey;
-    });
-  }, [currentThemeKey, persistConfig, themes]);
+  const cycleTheme = useCallback(
+    (step: CycleStep = 1) => {
+      setCurrentThemeKey((current) => {
+        const nextKey = nextThemeKey(themes, current ?? currentThemeKey, step);
+        const next = themes.find((candidate) => themeKey(candidate) === nextKey);
+        const selection = next ? selectionForTheme(next) : null;
+        if (selection) {
+          persistConfig({ last_background: selection });
+        }
+        return nextKey;
+      });
+    },
+    [currentThemeKey, persistConfig, themes],
+  );
 
-  const cycleFlavor = useCallback(() => {
-    setFlavorIndex((current) => {
-      const next = nextFlavorIndex(current);
-      persistConfig({ last_video_flavor: next });
-      return next;
-    });
-  }, [persistConfig]);
+  const cycleFlavor = useCallback(
+    (step: CycleStep = 1) => {
+      setFlavorIndex((current) => {
+        const next = nextFlavorIndex(current, step);
+        persistConfig({ last_video_flavor: next });
+        return next;
+      });
+    },
+    [persistConfig],
+  );
 
   const stateValue = useMemo<PlaybackThemeState>(
     () => ({

@@ -10,19 +10,21 @@ import {
   type PlaybackTarget,
 } from '@/bridge/playback-session';
 import { useConfig } from '@/shared/config/use-config';
+import { useI18n } from '@/shared/i18n/use-i18n';
 
 export function usePlaybackLauncher() {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const { data: config } = useConfig();
   const sessionMode = config?.playback_mode === 'session';
 
   const reserveTarget = useCallback((): PlaybackTarget => {
     const target = sessionMode ? reservePlaybackTarget() : null;
     if (target === undefined) {
-      toast.error('Allow pop-ups to open the playback tab');
+      toast.error(t('playback.allowPopups'));
     }
     return target;
-  }, [sessionMode]);
+  }, [sessionMode, t]);
 
   const launch = useCallback(
     async (session: PlaybackSession, target: PlaybackTarget): Promise<void> => {
@@ -37,11 +39,13 @@ export function usePlaybackLauncher() {
       } catch (error) {
         target?.close();
         toast.error(
-          `Could not start playback: ${error instanceof Error ? error.message : String(error)}`,
+          t('playback.startFailed', {
+            detail: error instanceof Error ? error.message : String(error),
+          }),
         );
       }
     },
-    [navigate, sessionMode],
+    [navigate, sessionMode, t],
   );
 
   return { launch, reserveTarget, sessionMode };

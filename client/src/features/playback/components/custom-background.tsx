@@ -4,6 +4,7 @@ import { loadCustomShaderSource, resolveCustomBackgroundUrl } from '@/bridge/bac
 import type { MicReactiveRef } from '@/features/microphone/hooks/use-mic-reactive';
 import { customFragmentShader, validateCustomShader } from '@/features/playback/lib/custom-shader';
 import { useLatestRef } from '@/shared/hooks/use-latest-ref';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { CustomBackground as CustomBackgroundDefinition } from '@/types/CustomBackground';
 
 import { ShaderVisualizer } from './shader-visualizer';
@@ -159,6 +160,7 @@ export function CustomBackground({
   reactiveRef,
   onError,
 }: CustomBackgroundProps) {
+  const { t } = useI18n();
   const [assetUrl, setAssetUrl] = useState<string | null>(null);
   const [shader, setShader] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -180,7 +182,7 @@ export function CustomBackground({
         const source = await loadCustomShaderSource(background, controller.signal);
         const shaderError = validateCustomShader(source);
         if (shaderError !== undefined) {
-          throw new Error(`Shader did not compile: ${shaderError}`);
+          throw new Error(t('playback.shaderCompileFailed', { detail: shaderError }));
         }
         if (!controller.signal.aborted) {
           setShader(customFragmentShader(source));
@@ -195,17 +197,17 @@ export function CustomBackground({
 
     void load().catch((error: unknown) => {
       if (!controller.signal.aborted) {
-        const message = error instanceof Error ? error.message : 'Background could not be loaded';
+        const message = error instanceof Error ? error.message : t('playback.backgroundLoadFailed');
         fail(message);
       }
     });
 
     return () => controller.abort();
-  }, [background, fail]);
+  }, [background, fail, t]);
 
   const reportMediaError = useCallback(
-    () => fail(`${background.name} could not be loaded`),
-    [background.name, fail],
+    () => fail(t('playback.namedBackgroundLoadFailed', { name: background.name })),
+    [background.name, fail, t],
   );
 
   return (

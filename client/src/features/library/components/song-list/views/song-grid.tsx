@@ -8,10 +8,11 @@ import { SongGridCard } from './song-grid-card';
 
 type SongGridProps = {
   songs: Song[];
+  videoHashes: ReadonlySet<string>;
   getItemProps: (song: Song, index: number) => SongItemProps;
 };
 
-export const SongGrid = ({ songs, getItemProps }: SongGridProps) => {
+export const SongGrid = ({ songs, videoHashes, getItemProps }: SongGridProps) => {
   const bestScores = useBestScoresBySongForActiveProfile();
   const window = useSongWindow(songs, 'grid');
 
@@ -35,6 +36,7 @@ export const SongGrid = ({ songs, getItemProps }: SongGridProps) => {
                   <SongGridCard
                     {...getItemProps(song, row.index * window.columns + column)}
                     bestScore={bestScores.get(song.file_hash)}
+                    hasYoutubeVideo={videoHashes.has(song.file_hash)}
                   />
                 </li>
               ))}

@@ -94,7 +94,7 @@ def _read_compatible() -> str:
         return ""
 
 
-def _rknn_device_available() -> bool:
+def rknn_device_available() -> bool:
     return any(
         path.exists()
         for path in (
@@ -199,7 +199,7 @@ def _rknn_readiness(models_dir: str) -> tuple[bool, str]:
     compatible = _read_compatible().lower()
     if "rk3588" not in compatible:
         return False, f"device-tree is not RK3588 ({compatible or 'unavailable'})"
-    if not _rknn_device_available():
+    if not rknn_device_available():
         return False, "Rockchip NPU device is unavailable"
     if ctypes.util.find_library("rknnrt") is None:
         return False, "librknnrt is unavailable"

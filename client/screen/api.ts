@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { messages } from './messages';
+
 const generationSchema = z.number().int().nonnegative();
 const sdpSchema = z.string().max(100_000).nullable();
 
@@ -8,7 +10,20 @@ const pairingSchema = z.object({
   generation: generationSchema,
 });
 
-const senderStateSchema = z.object({ generation: generationSchema, answer: sdpSchema });
+const senderStateSchema = z.object({
+  generation: generationSchema,
+  answer: sdpSchema,
+  monitoring: z.boolean().nullable(),
+  microphone_available: z.boolean(),
+  microphone_streaming: z.boolean(),
+});
+
+const microphoneAccessSchema = z.object({
+  token: z
+    .string()
+    .regex(/^[\w-]{43}$/)
+    .nullable(),
+});
 
 export type ScreenPairing = z.infer<typeof pairingSchema>;
 
@@ -34,7 +49,7 @@ async function request(
   });
   if (!response.ok) {
     const message = (await response.text()).slice(0, 300);
-    throw new Error(message || `Ошибка подключения: HTTP ${response.status}`);
+    throw new Error(message || messages.httpError(response.status));
   }
   return response.json();
 }
@@ -62,4 +77,20 @@ export class ScreenSignaling {
   async disconnect(): Promise<void> {
     await request(this.endpoint, 'disconnect', { token: this.token, body: {} });
   }
+
+  async monitoring(enabled: boolean): Promise<void> {
+    await request(this.endpoint, 'monitoring', { token: this.token, body: { enabled } });
+  }
+
+  async microphoneAccess(enabled: boolean): Promise<string | null> {
+    const value = microphoneAccessSchema.parse(
+      await request(this.endpoint, 'microphone-access', { token: this.token, body: { enabled } }),
+    );
+    return value.token;
+  }
 }
+
+export type ScreenAudioState = Pick<
+  z.infer<typeof senderStateSchema>,
+  'monitoring' | 'microphone_available' | 'microphone_streaming'
+>;

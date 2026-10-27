@@ -13,6 +13,8 @@ import {
 } from '@/shared/components/ui/dialog';
 import { Separator } from '@/shared/components/ui/separator';
 import { Table, TableBody, TableCell, TableRow } from '@/shared/components/ui/table';
+import type { MessageKey } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 import { version } from '../../../../package.json';
@@ -29,19 +31,20 @@ const DiscordIcon = (props: React.SVGProps<SVGSVGElement>) => (
   </svg>
 );
 
-const attributions = [
-  { name: 'Video backgrounds', value: 'Pixabay (pixabay.com)' },
-  { name: 'Lyrics data', value: 'LRCLIB (lrclib.net)' },
+const attributions: readonly { nameKey: MessageKey; value: string }[] = [
+  { nameKey: 'about.videoBackgrounds', value: 'Pixabay (pixabay.com)' },
+  { nameKey: 'about.lyricsData', value: 'LRCLIB (lrclib.net)' },
   {
-    name: 'Stem separation',
+    nameKey: 'about.stemSeparation',
     value: 'UVR — MIT / Demucs by Meta Research — MIT',
   },
-  { name: 'Speech recognition', value: 'WhisperX / OpenAI Whisper, NVIDIA Parakeet' },
-  { name: 'Forced alignment', value: 'WhisperX, torchaudio, Qwen3-ForcedAligner' },
-  { name: 'CJK romanization', value: 'fugashi, pypinyin, hangul-romanize, ToJyutping' },
+  { nameKey: 'about.speechRecognition', value: 'WhisperX / OpenAI Whisper, NVIDIA Parakeet' },
+  { nameKey: 'about.forcedAlignment', value: 'WhisperX, torchaudio, Qwen3-ForcedAligner' },
+  { nameKey: 'about.cjkRomanization', value: 'fugashi, pypinyin, hangul-romanize, ToJyutping' },
 ];
 
 export const InfoDialog = () => {
+  const { t } = useI18n();
   const { mode, close } = useDialog();
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -61,12 +64,13 @@ export const InfoDialog = () => {
         <div ref={containerRef} className="contents">
           <DialogHeader>
             <DialogTitle className="text-2xl">Nightingale</DialogTitle>
-            <p className="text-sm text-muted-foreground">Karaoke from your music library.</p>
+            <p className="text-sm text-muted-foreground">{t('about.tagline')}</p>
             <div className="flex items-center gap-1">
               <Button
                 variant="ghost"
                 size="icon-sm"
                 onClick={() => void openUrl('https://github.com/rzru/nightingale')}
+                aria-label="GitHub"
                 className={cn(
                   'focus-visible:ring-0 focus-visible:border-transparent',
                   focusedIndex === 0 && 'outline-2 outline-primary outline-offset-2',
@@ -78,6 +82,7 @@ export const InfoDialog = () => {
                 variant="ghost"
                 size="icon-sm"
                 onClick={() => void openUrl('https://discord.gg/68Vgng9vYp')}
+                aria-label="Discord"
                 className={cn(
                   'focus-visible:ring-0 focus-visible:border-transparent',
                   focusedIndex === 1 && 'ring-2 ring-primary',
@@ -87,20 +92,20 @@ export const InfoDialog = () => {
               </Button>
             </div>
             <div className="text-sm text-muted-foreground">
-              <p>Version {version}</p>
-              <p>License: GPL-3.0-or-later</p>
+              <p>{t('about.version', { version })}</p>
+              <p>{t('about.license', { license: 'GPL-3.0-or-later' })}</p>
             </div>
           </DialogHeader>
           <Separator />
           <div className="space-y-2">
             <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Attributions
+              {t('about.attributions')}
             </h4>
             <Table>
               <TableBody>
                 {attributions.map((attr) => (
-                  <TableRow key={attr.name}>
-                    <TableCell className="text-muted-foreground">{attr.name}</TableCell>
+                  <TableRow key={attr.nameKey}>
+                    <TableCell className="text-muted-foreground">{t(attr.nameKey)}</TableCell>
                     <TableCell className="font-medium">{attr.value}</TableCell>
                   </TableRow>
                 ))}
@@ -116,7 +121,7 @@ export const InfoDialog = () => {
                 focusedIndex === 2 && 'ring-2 ring-primary',
               )}
             >
-              Close
+              {t('common.close')}
             </Button>
           </DialogFooter>
         </div>

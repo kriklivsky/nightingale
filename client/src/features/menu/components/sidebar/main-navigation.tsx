@@ -6,10 +6,11 @@ import {
   FileQuestionMark,
   FolderIcon,
   ListMusicIcon,
+  LoaderCircleIcon,
   UserIcon,
   type LucideIcon,
 } from 'lucide-react';
-import { Fragment, useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router';
 
 import { useFavoriteHashes } from '@/features/library/hooks/use-favorites';
@@ -54,6 +55,8 @@ import {
 import { useIsMobile } from '@/shared/hooks/use-is-mobile';
 import { useLatestRef } from '@/shared/hooks/use-latest-ref';
 import { usePersistentScroll } from '@/shared/hooks/use-persistent-scroll';
+import type { MessageKey, Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 import type { LibraryMenuFilters } from '@/types/LibraryMenuFilters';
 import type { LibraryMenuItem } from '@/types/LibraryMenuItem';
@@ -62,16 +65,16 @@ import { FolderActions } from './folder-actions';
 
 type NavSectionConfig = {
   section: LibraryMenuSection;
-  label: string;
+  labelKey: MessageKey;
   icon: LucideIcon;
 };
 
 const NAV_SECTIONS: NavSectionConfig[] = [
-  { section: 'hot', label: 'Quick Filters', icon: Flame },
-  { section: 'no_metadata', label: 'No Metadata', icon: FileQuestionMark },
-  { section: 'artists', label: 'Artists', icon: UserIcon },
-  { section: 'playlists', label: 'Playlists', icon: ListMusicIcon },
-  { section: 'folders', label: 'Folders', icon: FolderIcon },
+  { section: 'hot', labelKey: 'menu.section.hot', icon: Flame },
+  { section: 'artists', labelKey: 'menu.section.artists', icon: UserIcon },
+  { section: 'playlists', labelKey: 'menu.section.playlists', icon: ListMusicIcon },
+  { section: 'folders', labelKey: 'menu.section.folders', icon: FolderIcon },
+  { section: 'no_metadata', labelKey: 'menu.section.noMetadata', icon: FileQuestionMark },
 ];
 
 type MenuItemCountsProps = {
@@ -79,57 +82,36 @@ type MenuItemCountsProps = {
 };
 
 function MenuItemCounts({ item }: MenuItemCountsProps) {
-  const segments = [
-    ...(item.count > 0n
-      ? [{ label: 'total', value: item.count, className: 'bg-muted text-muted-foreground' }]
-      : []),
-    ...(item.queuedCount > 0n
-      ? [
-          {
-            label: 'queued',
-            value: item.queuedCount,
-            className: ANALYSIS_STATUS_STYLES.queued,
-          },
-        ]
-      : []),
-    ...(item.analysingCount > 0n
-      ? [
-          {
-            label: 'analysing',
-            value: item.analysingCount,
-            className: ANALYSIS_STATUS_STYLES.analysing,
-          },
-        ]
-      : []),
-    ...(item.analysedCount > 0n
-      ? [
-          {
-            label: 'analysed',
-            value: item.analysedCount,
-            className: ANALYSIS_STATUS_STYLES.analysed,
-          },
-        ]
-      : []),
-  ];
-
-  if (segments.length === 0) {
+  const { t } = useI18n();
+  if (item.count === 0n) {
     return null;
   }
+  const pending = item.queuedCount + item.analysingCount;
 
   return (
-    <Badge
-      className="h-[1.125rem] shrink-0 gap-0 overflow-hidden border border-foreground/15 bg-transparent p-0 text-[0.55rem] font-medium leading-none"
-      title={segments.map(({ label, value }) => `${value} ${label}`).join(', ')}
+    <span
+      className="flex shrink-0 items-center gap-1"
+      title={t('menu.counts', {
+        total: item.count,
+        ready: item.analysedCount,
+        pending,
+      })}
     >
-      {segments.map(({ label, value, className }, index) => (
-        <Fragment key={label}>
-          {index > 0 && <span className="h-full w-px bg-foreground/15" />}
-          <span className={`${className} flex h-full min-w-5 items-center justify-center px-1`}>
-            {value.toString()}
-          </span>
-        </Fragment>
-      ))}
-    </Badge>
+      {pending > 0n && (
+        <Badge
+          className={cn('h-5 gap-1 px-1.5 text-xs tabular-nums', ANALYSIS_STATUS_STYLES.analysing)}
+        >
+          <LoaderCircleIcon
+            className="size-3 animate-spin motion-reduce:animate-none"
+            aria-hidden
+          />
+          {pending.toString()}
+        </Badge>
+      )}
+      <Badge variant="secondary" className="h-5 px-1.5 text-xs tabular-nums">
+        {item.count.toString()}
+      </Badge>
+    </span>
   );
 }
 
@@ -144,6 +126,22 @@ type ItemTree = {
   expanded: ReadonlySet<string>;
   onToggle: (value: string) => void;
 };
+
+/** Built-in menu entries carry fixed English labels from the backend; translate them by value. */
+const BUILT_IN_ITEM_LABELS: ReadonlyMap<string, MessageKey> = new Map([
+  ['hot:all', 'menu.hot.all'],
+  ['hot:queued', 'menu.hot.queued'],
+  ['hot:analysed', 'menu.hot.analysed'],
+  ['hot:videos', 'menu.hot.videos'],
+  ['hot:usdx', 'menu.hot.usdx'],
+  ['no_metadata:unknown_artist', 'menu.noMetadata.unknownArtist'],
+  ['no_metadata:unknown_album', 'menu.noMetadata.unknownAlbum'],
+]);
+
+function itemLabel(t: Translate, section: LibraryMenuSection, item: LibraryMenuItem): string {
+  const key = BUILT_IN_ITEM_LABELS.get(`${section}:${item.value}`);
+  return key === undefined ? item.label : t(key);
+}
 
 const itemSection = (section: LibraryMenuSection, item: LibraryMenuItem): LibraryMenuSection =>
   section === 'artists' && item.depth === 1 ? 'albums' : section;
@@ -162,13 +160,14 @@ type TreeToggleProps = {
 };
 
 function TreeToggle({ node, label }: TreeToggleProps) {
+  const { t } = useI18n();
   if (!node.expandable) {
     return <span aria-hidden className="size-5 shrink-0" />;
   }
   return (
     <button
       type="button"
-      aria-label={`${node.expanded ? 'Collapse' : 'Expand'} ${label}`}
+      aria-label={node.expanded ? t('menu.collapse', { label }) : t('menu.expand', { label })}
       aria-expanded={node.expanded}
       onClick={node.onToggle}
       className="flex size-5 shrink-0 items-center justify-center rounded-sm text-sidebar-foreground/70 hover:bg-sidebar-accent"
@@ -190,6 +189,7 @@ function LibraryNavSubItem({
   onSelectItem,
   treeNode,
 }: LibraryNavSubItemProps) {
+  const { t } = useI18n();
   const { isSidebarActive, isItemFocused, itemIndex } = useSidebarRowFocus(section, item.value);
   const depth = item.depth ?? 0;
   return (
@@ -208,7 +208,7 @@ function LibraryNavSubItem({
         )}
         onClick={() => onSelectItem(section, item)}
       >
-        {item.label}
+        {itemLabel(t, section, item)}
         <MenuItemCounts item={item} />
       </SidebarMenuButton>
     </SidebarMenuSubItem>
@@ -226,7 +226,7 @@ type LibraryNavSectionProps = {
 
 function LibraryNavSection({
   section,
-  label,
+  labelKey,
   icon: Icon,
   items,
   filter,
@@ -235,6 +235,7 @@ function LibraryNavSection({
   onSelectItem,
   itemTree,
 }: LibraryNavSectionProps) {
+  const { t } = useI18n();
   const { isSidebarActive, isCollapseFocused, collapseIndex } = useSidebarRowFocus(section);
 
   return (
@@ -249,7 +250,7 @@ function LibraryNavSection({
           >
             <span className="flex items-center gap-2">
               <Icon className="size-4 shrink-0" />
-              {label}
+              {t(labelKey)}
             </span>
             <ChevronDown className="transition-transform group-data-[state=open]/collapsible:rotate-180" />
           </SidebarMenuButton>
@@ -295,6 +296,7 @@ export const MainNavigation = ({
   folderFocusedSidebarIndex,
   registerFolderCallback,
 }: MainNavigationProps) => {
+  const { t } = useI18n();
   const { data: menu, isLoading: isLoadingMenu } = useLibraryMenuItems();
   const { data: favoriteHashes = [] } = useFavoriteHashes();
   const { setOpen } = useSidebar();
@@ -529,7 +531,7 @@ export const MainNavigation = ({
                   >
                     <span className="flex items-center gap-2">
                       <StarIcon className="size-4 shrink-0" />
-                      Favorites
+                      {t('menu.favorites')}
                     </span>
                     <Badge variant="secondary">{favoriteHashes.length}</Badge>
                   </SidebarMenuButton>
@@ -539,7 +541,7 @@ export const MainNavigation = ({
                     <LibraryNavSection
                       key={config.section}
                       section={config.section}
-                      label={config.label}
+                      labelKey={config.labelKey}
                       icon={config.icon}
                       items={config.visibleItems}
                       filter={filter}

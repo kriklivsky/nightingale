@@ -6,6 +6,7 @@ import { useAnalysis } from '@/features/library/hooks/use-analysis';
 import { useDialog } from '@/features/menu/hooks/use-dialog';
 import { useProfiles } from '@/features/profiles/queries/use-profiles';
 import { Separator } from '@/shared/components/ui/separator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { Song } from '@/types/Song';
 
 import type { SongStatusInfo } from '../song/song-status';
@@ -38,6 +39,7 @@ export const ActionsSection = ({
   analysisBusy,
   supportsAnalysisActions,
 }: ActionsSectionProps) => {
+  const { t } = useI18n();
   const { setMode } = useDialog();
   const analysis = useAnalysis();
   const { data: profiles } = useProfiles();
@@ -51,6 +53,7 @@ export const ActionsSection = ({
     analysis,
     onEditLyrics: () => setMode({ mode: 'edit-lyrics', song }),
     onChangeLanguage: () => setMode({ mode: 'language', song }),
+    t,
     run,
   });
 
@@ -58,8 +61,8 @@ export const ActionsSection = ({
     groups.unshift([
       {
         icon: TrophyIcon,
-        title: 'Leaderboard',
-        description: 'View the best score from each profile.',
+        title: t('songAction.leaderboard'),
+        description: t('songAction.leaderboardDescription'),
         onClick: () => setMode({ mode: 'song-leaderboard', song }),
       },
     ]);
@@ -69,8 +72,8 @@ export const ActionsSection = ({
     groups.unshift([
       {
         icon: VideoIcon,
-        title: 'YouTube video',
-        description: 'Find a clip and synchronize it with the local song.',
+        title: t('songAction.youtubeVideo'),
+        description: t('songAction.youtubeVideoDescription'),
         onClick: () => setMode({ mode: 'song-video', song }),
       },
     ]);
@@ -79,7 +82,7 @@ export const ActionsSection = ({
   return (
     <section className="px-2 py-4" aria-labelledby="song-actions-heading">
       <h3 id="song-actions-heading" className="mb-2 px-2 text-xs font-semibold">
-        Actions
+        {t('songAction.heading')}
       </h3>
       <div className="flex flex-col gap-1">
         {groups.map((group, groupIndex) => (

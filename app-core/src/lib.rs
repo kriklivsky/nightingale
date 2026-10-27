@@ -79,8 +79,8 @@ pub use profile::ProfileStore;
 pub use scanner::{CacheReconcileSummary, reconcile_cache, start_scan};
 pub use song::{Song, SongOrigin};
 pub use song_video::{
-    SongVideo, VideoCandidate, download_song_video, get_song_video, remove_song_video,
-    search_song_videos, set_song_video_offset,
+    SongVideo, VideoCandidate, download_song_video, get_song_video, list_song_video_hashes,
+    remove_song_video, search_song_videos, set_song_video_offset,
 };
 pub use source::{
     JellyfinAuth, JellyfinSource, MediaSource, NavidromeAuth, NavidromeSource, PlexAuth,

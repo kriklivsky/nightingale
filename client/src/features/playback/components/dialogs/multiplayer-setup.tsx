@@ -31,6 +31,8 @@ import {
 } from '@/shared/components/ui/select';
 import { useConfig } from '@/shared/config/use-config';
 import { useConfigMutation } from '@/shared/config/use-config-mutation';
+import type { MessageKey, Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import {
   PLAYER_COLOR_OPTIONS,
   defaultPlayerColor,
@@ -139,12 +141,11 @@ type SetupErrorInput = {
   validMicrophones: boolean;
 };
 
-const setupDescription = (queuePlayback: boolean | undefined): string =>
-  queuePlayback === true
-    ? 'Choose one microphone per singer. This lineup stays active for every queued song.'
-    : 'Choose one microphone per singer.';
+const setupDescription = (t: Translate, queuePlayback: boolean | undefined): string =>
+  queuePlayback === true ? t('multiplayer.descriptionQueue') : t('multiplayer.description');
 
-const setupSubmitLabel = (label: string | undefined): string => label ?? 'Start multiplayer';
+const setupSubmitLabel = (t: Translate, label: string | undefined): string =>
+  label ?? t('multiplayer.start');
 
 const setupNavOpen = (open: boolean, colorDialogOpen: boolean): boolean => open && !colorDialogOpen;
 
@@ -160,21 +161,21 @@ const capabilityDevices = (
 const shouldLoadCombinedCapabilities = (open: boolean, combineChannels: boolean): boolean =>
   open && !combineChannels;
 
-function setupError(input: SetupErrorInput): string | null {
+function setupError(input: SetupErrorInput): MessageKey | null {
   if (input.microphonesError) {
-    return 'Could not load microphones. Check microphone permission and try again.';
+    return 'multiplayer.error.microphones';
   }
   if (input.microphoneCount < 2) {
-    return 'Connect at least two microphones to start multiplayer.';
+    return 'multiplayer.error.tooFewMicrophones';
   }
   if (input.duplicateMicrophone) {
-    return 'Each player needs a different microphone.';
+    return 'multiplayer.error.duplicateMicrophone';
   }
   if (input.duplicateProfile) {
-    return 'A saved profile can only be used once.';
+    return 'multiplayer.error.duplicateProfile';
   }
   if (!input.validMicrophones) {
-    return 'Select a connected microphone for every player.';
+    return 'multiplayer.error.missingMicrophone';
   }
   return null;
 }
@@ -281,6 +282,8 @@ function PlayerRows({
   navClass,
   focusSegment,
 }: PlayerRowsProps) {
+  const { t } = useI18n();
+
   return players.map((player, index) => {
     const slots = playerNavSlots(index);
     const segment = index + segmentOffset;
@@ -298,13 +301,15 @@ function PlayerRows({
             onFocus={() => focusSegment(segment, slots.color)}
             onMouseEnter={() => focusSegment(segment, slots.color)}
             onClick={() => openColorDialog(player.id)}
-            aria-label={`Choose color for Player ${index + 1}`}
+            aria-label={t('multiplayer.chooseColorFor', { number: index + 1 })}
           >
             <span
               className={`size-2.5 rounded-full ${playerColorOption(player.color).className}`}
             />
           </Button>
-          <h3 className="text-sm font-semibold">Player {index + 1}</h3>
+          <h3 className="text-sm font-semibold">
+            {t('playback.playerNumber', { number: index + 1 })}
+          </h3>
           {index >= 2 ? (
             <Button
               type="button"
@@ -314,7 +319,7 @@ function PlayerRows({
               onFocus={() => focusSegment(segment, slots.remove)}
               onMouseEnter={() => focusSegment(segment, slots.remove)}
               onClick={() => removePlayer(player.id)}
-              aria-label={`Remove player ${index + 1}`}
+              aria-label={t('multiplayer.removePlayer', { number: index + 1 })}
             >
               <XIcon />
             </Button>
@@ -323,7 +328,7 @@ function PlayerRows({
 
         <Field className="min-w-0">
           <Label htmlFor={`${player.id}-profile`} className="sm:sr-only">
-            Profile
+            {t('result.profile')}
           </Label>
           <Select
             value={profileValue(player.profile)}
@@ -342,8 +347,8 @@ function PlayerRows({
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectLabel>Profile</SelectLabel>
-                <SelectItem value={GUEST_VALUE}>Guest</SelectItem>
+                <SelectLabel>{t('result.profile')}</SelectLabel>
+                <SelectItem value={GUEST_VALUE}>{t('multiplayer.guest')}</SelectItem>
                 {profiles.map((profile) => (
                   <SelectItem key={profile} value={`${PROFILE_PREFIX}${profile}`}>
                     {profile}
@@ -356,7 +361,7 @@ function PlayerRows({
 
         <Field className="min-w-0">
           <Label htmlFor={`${player.id}-microphone`} className="sm:sr-only">
-            Microphone
+            {t('playback.microphone')}
           </Label>
           <Select
             value={player.microphoneId || undefined}
@@ -371,11 +376,11 @@ function PlayerRows({
               onFocus={() => focusSegment(segment, slots.microphone)}
               onMouseEnter={() => focusSegment(segment, slots.microphone)}
             >
-              <SelectValue placeholder="Select microphone" />
+              <SelectValue placeholder={t('multiplayer.selectMicrophone')} />
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectLabel>Microphone</SelectLabel>
+                <SelectLabel>{t('playback.microphone')}</SelectLabel>
                 {microphones.map((microphone) => (
                   <SelectItem key={microphone.deviceId} value={microphone.deviceId}>
                     {microphone.label}
@@ -386,7 +391,7 @@ function PlayerRows({
                     (microphone) => microphone.deviceId === player.microphoneId,
                   ) && (
                     <SelectItem value={player.microphoneId}>
-                      Selected microphone: {player.microphoneId}
+                      {t('multiplayer.selectedMicrophone', { id: player.microphoneId })}
                     </SelectItem>
                   )}
               </SelectGroup>
@@ -413,6 +418,7 @@ function CombineChannelsField({
   onFocus,
   onCheckedChange,
 }: CombineChannelsFieldProps) {
+  const { t } = useI18n();
   if (!available) {
     return null;
   }
@@ -426,7 +432,7 @@ function CombineChannelsField({
         onMouseEnter={onFocus}
         onCheckedChange={(value) => onCheckedChange(value === true)}
       />
-      Combine multi-channel
+      {t('multiplayer.combineChannels')}
     </Label>
   );
 }
@@ -438,6 +444,7 @@ type PlayerColorDialogProps = {
 };
 
 function PlayerColorDialog({ player, onColorChange, onOpenChange }: PlayerColorDialogProps) {
+  const { t } = useI18n();
   const open = player !== undefined;
   const selectedColor = player?.color;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -452,10 +459,8 @@ function PlayerColorDialog({ player, onColorChange, onOpenChange }: PlayerColorD
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent ref={containerRef} showCloseButton={false} className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>Choose player color</DialogTitle>
-          <DialogDescription>
-            Choose the color used for this player during playback.
-          </DialogDescription>
+          <DialogTitle>{t('multiplayer.colorTitle')}</DialogTitle>
+          <DialogDescription>{t('multiplayer.colorDescription')}</DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-2 gap-2">
           {PLAYER_COLOR_OPTIONS.map((option, index) => (
@@ -469,7 +474,7 @@ function PlayerColorDialog({ player, onColorChange, onOpenChange }: PlayerColorD
               onClick={() => onColorChange(option.value)}
             >
               <span className={`size-3 rounded-full ${option.className}`} aria-hidden="true" />
-              {option.label}
+              {t(option.labelKey)}
             </Button>
           ))}
         </div>
@@ -485,6 +490,7 @@ export function MultiplayerSetupDialog({
   queuePlayback,
   submitLabel,
 }: MultiplayerSetupDialogProps) {
+  const { t } = useI18n();
   const { data: profileStore, isLoading: profilesLoading } = useProfiles();
   const { data: config, isLoading: configLoading } = useConfig();
   const { mutate: saveConfig } = useConfigMutation();
@@ -643,9 +649,9 @@ export function MultiplayerSetupDialog({
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <UsersIcon className="size-5" /> Set up players
+            <UsersIcon className="size-5" /> {t('multiplayer.title')}
           </DialogTitle>
-          <DialogDescription>{setupDescription(queuePlayback)}</DialogDescription>
+          <DialogDescription>{setupDescription(t, queuePlayback)}</DialogDescription>
         </DialogHeader>
 
         <CombineChannelsField
@@ -660,9 +666,9 @@ export function MultiplayerSetupDialog({
 
         <div>
           <div className="hidden grid-cols-[7rem_minmax(0,0.8fr)_minmax(0,1.2fr)] gap-3 border-b px-1 pb-2 text-xs font-medium text-muted-foreground sm:grid">
-            <span>Player</span>
-            <span>Profile</span>
-            <span>Microphone</span>
+            <span>{t('result.player')}</span>
+            <span>{t('result.profile')}</span>
+            <span>{t('playback.microphone')}</span>
           </div>
           <div className="divide-y border-b">
             <PlayerRows
@@ -688,11 +694,11 @@ export function MultiplayerSetupDialog({
               onMouseEnter={() => focusSegment(addPlayerSegment)}
               onClick={addPlayer}
             >
-              <PlusIcon /> Add player
+              <PlusIcon /> {t('multiplayer.addPlayer')}
             </Button>
             {error !== null ? (
               <p role="alert" className="text-right text-sm text-destructive">
-                {error}
+                {t(error)}
               </p>
             ) : null}
           </div>
@@ -707,7 +713,7 @@ export function MultiplayerSetupDialog({
             onMouseEnter={() => focusSegment(footerSegment, 0)}
             onClick={closeDialog}
           >
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button
             type="button"
@@ -717,7 +723,7 @@ export function MultiplayerSetupDialog({
             onMouseEnter={() => focusSegment(footerSegment, 1)}
             onClick={startMultiplayer}
           >
-            {setupSubmitLabel(submitLabel)}
+            {setupSubmitLabel(t, submitLabel)}
           </Button>
         </DialogFooter>
       </DialogContent>

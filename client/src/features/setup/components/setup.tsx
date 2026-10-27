@@ -24,6 +24,8 @@ import { Input } from '@/shared/components/ui/input';
 import { Label } from '@/shared/components/ui/label';
 import { Progress } from '@/shared/components/ui/progress';
 import { useConfig } from '@/shared/config/use-config';
+import type { MessageKey } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { ANALYSIS_QUEUE, CONFIG, MENU, SONGS, SONGS_META } from '@/shared/query-keys';
 import type { CachePaths } from '@/types/CachePaths';
 import type { SetupProgress } from '@/types/SetupProgress';
@@ -55,24 +57,23 @@ type InitialStepProps = {
 };
 
 const InitialStep = ({ toNextStep }: InitialStepProps) => {
+  const { t } = useI18n();
+
   return (
     <>
       <AlertDialogHeader>
-        <AlertDialogTitle>Welcome to Nightingale!</AlertDialogTitle>
+        <AlertDialogTitle>{t('setup.welcome')}</AlertDialogTitle>
+        <AlertDialogDescription>{t('setup.dependencies')}</AlertDialogDescription>
         <AlertDialogDescription>
-          Before you get started, we need to install a few dependencies: <code>ffmpeg</code>,{' '}
-          <code>uv</code>, <code>python 3.10</code>, Python packages, and <code>CUDA</code> wheels
-          (NVIDIA GPUs only).
+          {t('setup.duration')} {EXIT_SUPPORTED ? t('setup.exitAnyTime') : ''}
         </AlertDialogDescription>
-        <AlertDialogDescription>
-          This may take a few minutes.{' '}
-          {EXIT_SUPPORTED ? "You can exit at any time if you'd prefer not to continue." : ''}
-        </AlertDialogDescription>
-        <AlertDialogDescription>This only happens once.</AlertDialogDescription>
+        <AlertDialogDescription>{t('setup.once')}</AlertDialogDescription>
       </AlertDialogHeader>
       <AlertDialogFooter>
-        {EXIT_SUPPORTED && <AlertDialogCancel onClick={() => void exit()}>Exit</AlertDialogCancel>}
-        <AlertDialogAction onClick={toNextStep}>Continue</AlertDialogAction>
+        {EXIT_SUPPORTED && (
+          <AlertDialogCancel onClick={() => void exit()}>{t('menu.exit')}</AlertDialogCancel>
+        )}
+        <AlertDialogAction onClick={toNextStep}>{t('playback.continue')}</AlertDialogAction>
       </AlertDialogFooter>
     </>
   );
@@ -90,11 +91,11 @@ type ChangeDataStepProps = {
   setCacheFolder: (key: CachePathKey, folder?: string) => void;
 };
 
-const cacheFolderLabels: Array<[CachePathKey, string, string]> = [
-  ['songs', 'Songs cache', 'Stems, lyrics, transcripts, covers'],
-  ['videos', 'Video cache', 'Downloaded and converted videos'],
-  ['models', 'Models cache', 'AI and ASR model files'],
-  ['vendor', 'Vendor tools', 'ffmpeg, uv, Python, virtualenv'],
+const cacheFolderLabels: Array<[CachePathKey, MessageKey, MessageKey]> = [
+  ['songs', 'setup.cache.songs', 'setup.cache.songsDescription'],
+  ['videos', 'setup.cache.videos', 'setup.cache.videosDescription'],
+  ['models', 'setup.cache.models', 'setup.cache.modelsDescription'],
+  ['vendor', 'setup.cache.vendor', 'setup.cache.vendorDescription'],
 ];
 
 const FolderPicker = ({
@@ -106,6 +107,7 @@ const FolderPicker = ({
   onChange: (folder?: string) => void;
   buttonLabel?: string;
 }) => {
+  const { t } = useI18n();
   const chooseFolder = async (): Promise<void> => {
     const folder = await selectFolderPath();
     if (typeof folder === 'string' && folder !== '') {
@@ -122,8 +124,8 @@ const FolderPicker = ({
         onClick={() => void chooseFolder()}
       >
         {typeof value === 'string' && value !== ''
-          ? 'Change Folder'
-          : (buttonLabel ?? 'Choose Folder')}
+          ? t('setup.changeFolder')
+          : (buttonLabel ?? t('source.chooseFolder'))}
       </Button>
     </div>
   );
@@ -137,89 +139,103 @@ const ChangeDataFolderStep = ({
   setSeparateCacheFolders,
   cacheFolders,
   setCacheFolder,
-}: ChangeDataStepProps) => (
-  <>
-    <AlertDialogHeader className="w-full place-items-stretch text-left">
-      <AlertDialogTitle>Data Folder</AlertDialogTitle>
-      <>
-        <AlertDialogDescription className="mb-2">
-          Choose where Nightingale stores app data. We will store cache, videos, models, vendor
-          tools, and the library database in this folder. Only <code>config.json</code> and{' '}
-          <code>nightingale.log</code> stay in the default <code>~/.nightingale</code> path.
-        </AlertDialogDescription>
-        {!separateCacheFolders && <FolderPicker value={folder} onChange={setFolder} />}
-        <Label className="mt-1 gap-1.5 text-xs/relaxed font-normal text-muted-foreground">
-          <Checkbox
-            checked={separateCacheFolders}
-            onCheckedChange={(checked) => setSeparateCacheFolders(checked === true)}
-          />
-          Use different folders per cache type
-        </Label>
-        {separateCacheFolders && (
-          <div className="mt-2 flex w-full flex-col gap-3">
-            {cacheFolderLabels.map(([key, label, description]) => (
-              <div key={key} className="flex w-full flex-col gap-1">
-                <div className="text-sm font-medium">{label}</div>
-                <div className="text-xs text-muted-foreground">{description}</div>
-                <FolderPicker
-                  value={cacheFolders[key]}
-                  onChange={(cachePath) => setCacheFolder(key, cachePath)}
-                  buttonLabel="Choose Folder"
-                />
-              </div>
-            ))}
-          </div>
+}: ChangeDataStepProps) => {
+  const { t } = useI18n();
+
+  return (
+    <>
+      <AlertDialogHeader className="w-full place-items-stretch text-left">
+        <AlertDialogTitle>{t('setup.dataFolder')}</AlertDialogTitle>
+        <>
+          <AlertDialogDescription className="mb-2">
+            {t('setup.dataFolderDescription')}
+          </AlertDialogDescription>
+          {!separateCacheFolders && <FolderPicker value={folder} onChange={setFolder} />}
+          <Label className="mt-1 gap-1.5 text-xs/relaxed font-normal text-muted-foreground">
+            <Checkbox
+              checked={separateCacheFolders}
+              onCheckedChange={(checked) => setSeparateCacheFolders(checked === true)}
+            />
+            {t('setup.separateFolders')}
+          </Label>
+          {separateCacheFolders && (
+            <div className="mt-2 flex w-full flex-col gap-3">
+              {cacheFolderLabels.map(([key, label, description]) => (
+                <div key={key} className="flex w-full flex-col gap-1">
+                  <div className="text-sm font-medium">{t(label)}</div>
+                  <div className="text-xs text-muted-foreground">{t(description)}</div>
+                  <FolderPicker
+                    value={cacheFolders[key]}
+                    onChange={(cachePath) => setCacheFolder(key, cachePath)}
+                    buttonLabel={t('source.chooseFolder')}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        {EXIT_SUPPORTED && (
+          <AlertDialogCancel onClick={() => void exit()}>{t('menu.exit')}</AlertDialogCancel>
         )}
-      </>
-    </AlertDialogHeader>
-    <AlertDialogFooter>
-      {EXIT_SUPPORTED && <AlertDialogCancel onClick={() => void exit()}>Exit</AlertDialogCancel>}
-      <AlertDialogAction onClick={() => void onStart()}>Continue</AlertDialogAction>
-    </AlertDialogFooter>
-  </>
-);
+        <AlertDialogAction onClick={() => void onStart()}>
+          {t('playback.continue')}
+        </AlertDialogAction>
+      </AlertDialogFooter>
+    </>
+  );
+};
 
 type LoadStepProps = {
   action: string;
   percent: number;
 };
 
-const LoadStep = ({ action, percent }: LoadStepProps) => (
-  <>
-    <AlertDialogHeader>
-      <AlertDialogTitle>Setting up Nightingale</AlertDialogTitle>
-      <div className="flex flex-col gap-2 w-full">
-        <AlertDialogDescription className="w-full">{action}</AlertDialogDescription>
-        <Progress value={percent} />
-      </div>
-    </AlertDialogHeader>
-    {EXIT_SUPPORTED && (
-      <AlertDialogFooter>
-        <AlertDialogCancel onClick={() => void exit()}>Exit</AlertDialogCancel>
-      </AlertDialogFooter>
-    )}
-  </>
-);
+const LoadStep = ({ action, percent }: LoadStepProps) => {
+  const { t } = useI18n();
+
+  return (
+    <>
+      <AlertDialogHeader>
+        <AlertDialogTitle>{t('setup.settingUp')}</AlertDialogTitle>
+        <div className="flex flex-col gap-2 w-full">
+          <AlertDialogDescription className="w-full">{action}</AlertDialogDescription>
+          <Progress value={percent} />
+        </div>
+      </AlertDialogHeader>
+      {EXIT_SUPPORTED && (
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={() => void exit()}>{t('menu.exit')}</AlertDialogCancel>
+        </AlertDialogFooter>
+      )}
+    </>
+  );
+};
 
 type ErrorStepProps = {
   error: string;
 };
 
-const ErrorStep = ({ error }: ErrorStepProps) => (
-  <>
-    <AlertDialogHeader className="min-w-0 w-full">
-      <AlertDialogTitle>Something went wrong</AlertDialogTitle>
-      <AlertDialogDescription className="max-h-[50svh] min-w-0 w-full overflow-y-auto text-left">
-        <code className="block whitespace-pre-wrap [overflow-wrap:anywhere]">{error}</code>
-      </AlertDialogDescription>
-    </AlertDialogHeader>
-    {EXIT_SUPPORTED && (
-      <AlertDialogFooter>
-        <AlertDialogAction onClick={() => void exit()}>Exit</AlertDialogAction>
-      </AlertDialogFooter>
-    )}
-  </>
-);
+const ErrorStep = ({ error }: ErrorStepProps) => {
+  const { t } = useI18n();
+
+  return (
+    <>
+      <AlertDialogHeader className="min-w-0 w-full">
+        <AlertDialogTitle>{t('setup.error')}</AlertDialogTitle>
+        <AlertDialogDescription className="max-h-[50svh] min-w-0 w-full overflow-y-auto text-left">
+          <code className="block whitespace-pre-wrap [overflow-wrap:anywhere]">{error}</code>
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      {EXIT_SUPPORTED && (
+        <AlertDialogFooter>
+          <AlertDialogAction onClick={() => void exit()}>{t('menu.exit')}</AlertDialogAction>
+        </AlertDialogFooter>
+      )}
+    </>
+  );
+};
 
 type FinalStepProps = {
   onFinish: () => void;
@@ -252,20 +268,23 @@ const selectedCachePaths = (enabled: boolean, paths: CachePaths): CachePaths | u
   };
 };
 
-const FinalStep = ({ onFinish, folder, vendorFolder }: FinalStepProps) => (
-  <>
-    <AlertDialogHeader>
-      <AlertDialogTitle>You're all set!</AlertDialogTitle>
-      <AlertDialogDescription>
-        All dependencies have been installed to <code>{vendorFolder ?? `${folder}/vendor`}</code>.
-        Nightingale is ready to use.
-      </AlertDialogDescription>
-    </AlertDialogHeader>
-    <AlertDialogFooter>
-      <AlertDialogAction onClick={onFinish}>Get Started</AlertDialogAction>
-    </AlertDialogFooter>
-  </>
-);
+const FinalStep = ({ onFinish, folder, vendorFolder }: FinalStepProps) => {
+  const { t } = useI18n();
+
+  return (
+    <>
+      <AlertDialogHeader>
+        <AlertDialogTitle>{t('setup.done')}</AlertDialogTitle>
+        <AlertDialogDescription>
+          {t('setup.doneDescription', { folder: vendorFolder ?? `${folder}/vendor` })}
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogAction onClick={onFinish}>{t('setup.getStarted')}</AlertDialogAction>
+      </AlertDialogFooter>
+    </>
+  );
+};
 
 const defaultProgress = {
   step: 'init' as const,

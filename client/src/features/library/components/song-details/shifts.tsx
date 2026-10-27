@@ -1,4 +1,5 @@
 import { calculateKeyShift } from '@/features/library/utils/shift-key';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { Song } from '@/types/Song';
 
 import { Stepper } from './stepper';
@@ -28,10 +29,8 @@ const hasDetectedKey = (song: Song): song is Song & { key: string } =>
 const ShiftControlRow = ({ control, disabled }: { control: ShiftControl; disabled: boolean }) => (
   <div className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2">
     <div className="min-w-0 basis-48 flex-1">
-      <p className="text-xs font-medium">{control.title}</p>
-      <p className="mt-0.5 text-[0.625rem] leading-snug text-muted-foreground">
-        {control.description}
-      </p>
+      <p className="text-sm font-medium">{control.title}</p>
+      <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{control.description}</p>
     </div>
     <Stepper
       ariaLabel={control.title.toLowerCase()}
@@ -53,6 +52,7 @@ export const Shifts = ({
   onTempoChange,
   onKeyOffsetChange,
 }: Props) => {
+  const { t } = useI18n();
   if (!song.is_analyzed || song.transcript_source === 'Usdx') {
     return null;
   }
@@ -62,8 +62,8 @@ export const Shifts = ({
   const controls: ShiftControl[] = [
     {
       shiftType: 'tempo',
-      title: 'Tempo',
-      description: 'Adjust playback speed in 0.1× steps.',
+      title: t('shift.tempo'),
+      description: t('shift.tempoDescription'),
       value: `${tempo.toFixed(1)}×`,
       onPlus: () => onTempoChange(Number((tempo + 0.1).toFixed(1))),
       onMinus: () => onTempoChange(Number((tempo - 0.1).toFixed(1))),
@@ -71,8 +71,8 @@ export const Shifts = ({
     },
     {
       shiftType: 'key',
-      title: 'Key',
-      description: hasKey ? `Original key: ${song.key}` : 'Analyze again to detect the key.',
+      title: t('shift.key'),
+      description: hasKey ? t('shift.originalKey', { key: song.key }) : t('shift.keyMissing'),
       value: shiftedKey,
       onPlus: () => onKeyOffsetChange(keyOffset + 1),
       onMinus: () => onKeyOffsetChange(keyOffset - 1),

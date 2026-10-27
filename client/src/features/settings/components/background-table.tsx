@@ -7,10 +7,21 @@ import {
   TableHeader,
   TableRow,
 } from '@/shared/components/ui/table';
+import type { Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { CustomBackground } from '@/types/CustomBackground';
 
-function sourceLabel(background: CustomBackground): string {
-  return background.source.kind === 'url' ? 'Link' : 'Uploaded file';
+function sourceLabel(t: Translate, background: CustomBackground): string {
+  return background.source.kind === 'url' ? t('background.link') : t('background.uploadedFile');
+}
+
+function typeLabel(t: Translate, background: CustomBackground): string {
+  if (background.background_type === 'shader') {
+    return t('background.type.shader');
+  }
+  return background.background_type === 'video'
+    ? t('background.type.video')
+    : t('background.type.image');
 }
 
 export function BackgroundTable({
@@ -26,10 +37,11 @@ export function BackgroundTable({
   getFocusClassName: (index: number) => string | undefined;
   onRemove: (id: string) => void;
 }) {
+  const { t } = useI18n();
   if (backgrounds.length === 0) {
     return (
       <div className="flex min-h-32 items-center justify-center rounded-lg border">
-        <p className="text-sm text-muted-foreground">No custom backgrounds yet.</p>
+        <p className="text-sm text-muted-foreground">{t('background.none')}</p>
       </div>
     );
   }
@@ -39,18 +51,18 @@ export function BackgroundTable({
       <Table>
         <TableHeader className="sticky top-0 z-10 bg-background">
           <TableRow>
-            <TableHead>Name</TableHead>
-            <TableHead>Type</TableHead>
-            <TableHead>Source</TableHead>
-            <TableHead className="text-right">Action</TableHead>
+            <TableHead>{t('background.name')}</TableHead>
+            <TableHead>{t('background.typeHeader')}</TableHead>
+            <TableHead>{t('background.source')}</TableHead>
+            <TableHead className="text-right">{t('background.action')}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {backgrounds.map((background, index) => (
             <TableRow key={background.id}>
               <TableCell className="max-w-64 truncate font-medium">{background.name}</TableCell>
-              <TableCell className="capitalize">{background.background_type}</TableCell>
-              <TableCell>{sourceLabel(background)}</TableCell>
+              <TableCell>{typeLabel(t, background)}</TableCell>
+              <TableCell>{sourceLabel(t, background)}</TableCell>
               <TableCell className="text-right">
                 <Button
                   variant={pendingRemoval === background.id ? 'destructive' : 'outline'}
@@ -59,7 +71,9 @@ export function BackgroundTable({
                   className={getFocusClassName(index)}
                   onClick={() => onRemove(background.id)}
                 >
-                  {pendingRemoval === background.id ? 'Confirm remove' : 'Remove'}
+                  {pendingRemoval === background.id
+                    ? t('background.confirmRemove')
+                    : t('background.remove')}
                 </Button>
               </TableCell>
             </TableRow>

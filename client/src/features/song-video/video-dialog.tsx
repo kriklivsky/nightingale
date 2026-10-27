@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from '@/shared/components/ui/dialog';
 import { Input } from '@/shared/components/ui/input';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { Song } from '@/types/Song';
 
 import { useVideoDialogNav } from './use-video-dialog-nav';
@@ -33,12 +34,13 @@ function VideoWorkspace({
   song: Song;
   workspace: ReturnType<typeof useVideoWorkspace>;
 }) {
+  const { t } = useI18n();
   if (workspace.operation.isLoading) {
     return (
       <output>
         {workspace.operation.variables?.action === 'download'
-          ? 'Downloading video and matching its audio… This can take several minutes.'
-          : 'Saving video settings…'}
+          ? t('video.downloading')
+          : t('video.saving')}
       </output>
     );
   }
@@ -47,14 +49,14 @@ function VideoWorkspace({
     <>
       <div className="flex flex-wrap gap-2" data-video-nav-row>
         <Button variant="outline" onClick={() => workspace.runSearch(false)}>
-          Search artist + title
+          {t('video.searchArtistTitle')}
         </Button>
         <Button variant="outline" onClick={() => workspace.runSearch(true)}>
-          Search title only
+          {t('video.searchTitle')}
         </Button>
       </div>
-      {workspace.candidates.isFetching && <output>Searching YouTube…</output>}
-      {empty && <p>No videos found. Try searching by title only.</p>}
+      {workspace.candidates.isFetching && <output>{t('video.searching')}</output>}
+      {empty && <p>{t('video.noResults')}</p>}
       <VideoSearchResults
         candidates={workspace.candidates.data ?? []}
         onSelect={(id) => workspace.operation.mutate({ action: 'download', id })}
@@ -74,6 +76,7 @@ function VideoWorkspace({
 }
 
 export function SongVideoDialog({ song }: { song: Song }) {
+  const { t } = useI18n();
   const { close } = useDialog();
   const workspace = useVideoWorkspace(song.file_hash);
   const tokenId = useId();
@@ -94,16 +97,13 @@ export function SongVideoDialog({ song }: { song: Song }) {
         onEscapeKeyDown={(event) => event.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle className="text-xl">Video · {song.title}</DialogTitle>
-          <DialogDescription>
-            Find a clip, match it to your local song, and fine-tune its timing. Karaoke keeps its
-            local audio; the clip is muted.
-          </DialogDescription>
+          <DialogTitle className="text-xl">{t('video.title', { title: song.title })}</DialogTitle>
+          <DialogDescription>{t('video.description')}</DialogDescription>
         </DialogHeader>
         {videoTokenRequired && (
           <div className="space-y-1">
             <label htmlFor={tokenId} className="text-sm">
-              Server YouTube access token
+              {t('video.token')}
             </label>
             <Input
               id={tokenId}
@@ -122,13 +122,9 @@ export function SongVideoDialog({ song }: { song: Song }) {
             {workspace.error}
           </p>
         )}
-        <p className="text-xs text-muted-foreground">
-          ↑↓ rows · ←→ buttons · OK select · Back close. Downloads: H.264, up to 1080p/512 MiB.
-          Download only videos you are permitted to use. Clearing the video cache removes these
-          clips.
-        </p>
+        <p className="text-sm text-muted-foreground">{t('video.footnote')}</p>
         <Button variant="outline" onClick={close}>
-          Close
+          {t('common.close')}
         </Button>
       </DialogContent>
     </Dialog>

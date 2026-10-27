@@ -7,6 +7,8 @@ import { Field } from '@/shared/components/ui/field';
 import { Label } from '@/shared/components/ui/label';
 import { Slider } from '@/shared/components/ui/slider';
 import { useConfigMutation } from '@/shared/config/use-config-mutation';
+import type { Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { AppConfig } from '@/types/AppConfig';
 
 import { NAV } from './constants';
@@ -27,37 +29,41 @@ type MicrophoneSettingsProps = {
   onLatencyChange: (latencySec: number) => void;
 };
 
-const microphoneOptions = (devices: MicDevice[], preferred: string | null) => {
+const microphoneOptions = (t: Translate, devices: MicDevice[], preferred: string | null) => {
   const options = [
-    { value: DEFAULT_MIC_ID, label: 'Default' },
+    { value: DEFAULT_MIC_ID, label: t('playback.defaultMicrophone') },
     ...devices.map(({ deviceId, label }) => ({ value: deviceId, label })),
   ];
   if (preferred !== null && !options.some((option) => option.value === preferred)) {
-    options.push({ value: preferred, label: `Selected microphone: ${preferred}` });
+    options.push({
+      value: preferred,
+      label: t('multiplayer.selectedMicrophone', { id: preferred }),
+    });
   }
   return options;
 };
 
 type MicDevicesQuery = ReturnType<typeof useMicDevicesQuery>;
 
-const microphoneDiscoveryHint = (query: MicDevicesQuery): string => {
+const microphoneDiscoveryHint = (t: Translate, query: MicDevicesQuery): string => {
   if (query.isError) {
     const detail = query.error instanceof Error ? query.error.message : String(query.error);
-    return `Could not list microphones: ${detail}`;
+    return t('settings.mic.listFailed', { detail });
   }
   if (query.isFetching) {
-    return 'Looking for available microphones…';
+    return t('settings.mic.searching');
   }
-  return 'Select which microphone to use for pitch scoring';
+  return t('settings.mic.hint');
 };
 
 const MicrophoneRetryButton = ({ query }: { query: MicDevicesQuery }) => {
+  const { t } = useI18n();
   if (!query.isError) {
     return null;
   }
   return (
     <Button variant="outline" size="sm" onClick={() => void query.refetch()}>
-      Retry microphone discovery
+      {t('settings.mic.retry')}
     </Button>
   );
 };
@@ -90,6 +96,7 @@ export function MicrophoneSettings({
   onMonitorGainChange,
   onLatencyChange,
 }: MicrophoneSettingsProps) {
+  const { t } = useI18n();
   const { mutate } = useConfigMutation();
   const micDevicesQuery = useMicDevicesQuery(undefined, true, combineMultiChannel);
   const capabilityQuery = useMicDevicesQuery(undefined, !combineMultiChannel, true);
@@ -101,8 +108,8 @@ export function MicrophoneSettings({
   const [micTestBusy, setMicTestBusy] = useState(false);
   const [latencyMeasuring, setLatencyMeasuring] = useState(false);
   const micOptions = useMemo(
-    () => microphoneOptions(micDevices, preferredMic),
-    [micDevices, preferredMic],
+    () => microphoneOptions(t, micDevices, preferredMic),
+    [micDevices, preferredMic, t],
   );
   const monitorGainPct = Math.round(monitorGain * 100);
   const controlsDisabled = micTestBusy || latencyMeasuring;
@@ -115,7 +122,7 @@ export function MicrophoneSettings({
   return (
     <>
       <Field>
-        <Label>Microphone</Label>
+        <Label>{t('playback.microphone')}</Label>
         {hasMultiChannelInput ? (
           <Label className="gap-1.5 text-xs/relaxed font-normal text-muted-foreground">
             <Checkbox
@@ -123,13 +130,13 @@ export function MicrophoneSettings({
               className={getFocusClassName(NAV.general.microphone, 0)}
               onCheckedChange={(checked) => mutate({ combine_multi_channel: checked === true })}
             />
-            Combine multi-channel
+            {t('multiplayer.combineChannels')}
           </Label>
         ) : null}
-        <Hint>{microphoneDiscoveryHint(micDevicesQuery)}</Hint>
+        <Hint>{microphoneDiscoveryHint(t, micDevicesQuery)}</Hint>
         <SettingsSelect
-          label="Microphone"
-          placeholder="Default microphone"
+          label={t('playback.microphone')}
+          placeholder={t('settings.mic.defaultPlaceholder')}
           value={preferredMic ?? DEFAULT_MIC_ID}
           options={micOptions}
           disabled={controlsDisabled}
@@ -144,11 +151,8 @@ export function MicrophoneSettings({
       </Field>
 
       <Field>
-        <Label>Mic monitor gain</Label>
-        <Hint>
-          Volume of your microphone played back through the speakers while monitoring (
-          {monitorGainPct}%)
-        </Hint>
+        <Label>{t('settings.mic.monitorGain')}</Label>
+        <Hint>{t('settings.mic.monitorGainHint', { value: monitorGainPct })}</Hint>
         <Slider
           min={0}
           max={200}

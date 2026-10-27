@@ -6,11 +6,13 @@ import { useMenuFocus } from '@/features/menu/providers/menu-focus-context';
 import { Button } from '@/shared/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/shared/components/ui/tooltip';
 import { useLatestRef } from '@/shared/hooks/use-latest-ref';
+import type { MessageKey } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 type CacheButton = {
   icon: LucideIcon;
-  label: string;
+  labelKey: MessageKey;
   target: ClearCacheTarget;
 };
 
@@ -20,14 +22,15 @@ type CacheActionsProps = {
 };
 
 export const CacheActions = ({ focusedSidebarIndex, registerCallback }: CacheActionsProps) => {
+  const { t } = useI18n();
   const { focus, actionsRef } = useMenuFocus();
   const { setMode } = useDialog();
 
   const buttons = useMemo<CacheButton[]>(
     () => [
-      { icon: Trash2Icon, label: 'Clear all cache', target: 'all' },
-      { icon: VideoIcon, label: 'Clear videos cache', target: 'videos' },
-      { icon: BoxIcon, label: 'Clear models cache', target: 'models' },
+      { icon: Trash2Icon, labelKey: 'cache.clearAll', target: 'all' },
+      { icon: VideoIcon, labelKey: 'cache.clearVideos', target: 'videos' },
+      { icon: BoxIcon, labelKey: 'cache.clearModels', target: 'models' },
     ],
     [],
   );
@@ -62,13 +65,13 @@ export const CacheActions = ({ focusedSidebarIndex, registerCallback }: CacheAct
         const isButtonFocused = isClusterFocused && focus.sidebarSubIndex === index;
 
         return (
-          <Tooltip key={button.label}>
+          <Tooltip key={button.target}>
             <TooltipTrigger asChild>
               <Button
                 tabIndex={-1}
                 variant="ghost"
                 size="icon-xs"
-                aria-label={button.label}
+                aria-label={t(button.labelKey)}
                 onClick={() => setMode({ mode: 'clear-cache', target: button.target })}
                 data-sidebar-sub-index={index}
                 className={cn(
@@ -79,7 +82,7 @@ export const CacheActions = ({ focusedSidebarIndex, registerCallback }: CacheAct
                 <Icon />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{button.label}</TooltipContent>
+            <TooltipContent>{t(button.labelKey)}</TooltipContent>
           </Tooltip>
         );
       })}

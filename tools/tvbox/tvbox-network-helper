@@ -1,0 +1,10 @@
+#!/usr/bin/python3 -I
+from __future__ import annotations
+
+import sys
+
+sys.path.insert(0, "/usr/local/libexec/tvbox-network")
+
+from network_backend import main
+
+main()

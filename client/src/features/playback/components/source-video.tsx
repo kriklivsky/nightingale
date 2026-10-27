@@ -11,6 +11,8 @@ import { useSourceVideoSync } from '@/shared/hooks/use-source-video-sync';
 
 type SourceVideoProps = {
   isActive: boolean;
+  /** Reports whether the clip currently covers the screen (false before it starts or after it ends). */
+  onCoverageChange?: (covered: boolean) => void;
 };
 
 const playableSource = (path: string | undefined, src: string | null): src is string =>
@@ -37,7 +39,7 @@ function useMediaUrl(filePath: string): string | null {
   return media?.filePath === filePath ? media.src : null;
 }
 
-export const SourceVideo = ({ isActive }: SourceVideoProps) => {
+export const SourceVideo = ({ isActive, onCoverageChange }: SourceVideoProps) => {
   const { sourceVideoPath, sourceVideoTempoRatio, sourceVideoOffsetSec } = usePlaybackThemeState();
   const { isReady, isPlaying } = usePlaybackTransportState();
   const { subscribe, getCurrentTime } = usePlaybackTransportActions();
@@ -46,10 +48,11 @@ export const SourceVideo = ({ isActive }: SourceVideoProps) => {
   const src = useMediaUrl(sourceVideoPath ?? '');
 
   const playWhenActive = isReady && isPlaying && isActive;
+  const playableSrc = playableSource(sourceVideoPath, src) ? src : null;
 
   const { ready, visible } = useSourceVideoSync({
     videoRef,
-    src: playableSource(sourceVideoPath, src) ? src : null,
+    src: playableSrc,
     isPlaying: playWhenActive,
     tempoRatio: sourceVideoTempoRatio,
     offsetSec: sourceVideoOffsetSec,
@@ -57,7 +60,12 @@ export const SourceVideo = ({ isActive }: SourceVideoProps) => {
     getCurrentTime,
   });
 
-  if (!playableSource(sourceVideoPath, src)) {
+  const covered = playableSrc !== null && ready && visible;
+  useEffect(() => {
+    onCoverageChange?.(covered);
+  }, [covered, onCoverageChange]);
+
+  if (playableSrc === null) {
     return null;
   }
 
@@ -65,8 +73,8 @@ export const SourceVideo = ({ isActive }: SourceVideoProps) => {
     <video
       ref={videoRef}
       className={VIDEO_CLASS_NAME}
-      style={{ visibility: ready && visible && isActive ? 'visible' : 'hidden' }}
-      src={src}
+      style={{ visibility: covered && isActive ? 'visible' : 'hidden' }}
+      src={playableSrc}
       preload="auto"
       muted
       playsInline

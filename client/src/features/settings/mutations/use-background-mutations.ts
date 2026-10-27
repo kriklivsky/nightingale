@@ -8,6 +8,8 @@ import {
   removeCustomBackground,
 } from '@/bridge/backgrounds';
 import { validateCustomShader } from '@/features/playback/lib/custom-shader';
+import type { Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { CONFIG } from '@/shared/query-keys';
 import type { AppConfig } from '@/types/AppConfig';
 import type { CustomBackground } from '@/types/CustomBackground';
@@ -15,6 +17,7 @@ import type { CustomBackground } from '@/types/CustomBackground';
 import type { BackgroundDraft } from '../lib/background-draft';
 
 async function validateAddedShader(
+  t: Translate,
   before: readonly CustomBackground[],
   saved: AppConfig,
   cacheConfig: (config: AppConfig) => void,
@@ -34,7 +37,7 @@ async function validateAddedShader(
   const reverted = await removeCustomBackground(added.id);
   cacheConfig(reverted);
   const message = error.length > 320 ? `${error.slice(0, 317)}…` : error;
-  throw new Error(`Shader did not compile: ${message}`);
+  throw new Error(t('playback.shaderCompileFailed', { detail: message }));
 }
 
 export function useBackgroundMutations({
@@ -46,6 +49,7 @@ export function useBackgroundMutations({
   onAdded: () => void;
   onRemoved: () => void;
 }) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const cacheConfig = (saved: AppConfig) => {
     queryClient.setQueryData(CONFIG, saved);
@@ -64,7 +68,7 @@ export function useBackgroundMutations({
               file: draft.file,
               path: draft.nativePath,
             });
-      return validateAddedShader(config.custom_backgrounds, saved, cacheConfig);
+      return validateAddedShader(t, config.custom_backgrounds, saved, cacheConfig);
     },
     onSuccess: (saved) => {
       if (saved === undefined) {
@@ -72,20 +76,20 @@ export function useBackgroundMutations({
       }
       cacheConfig(saved);
       onAdded();
-      toast.success('Background added');
+      toast.success(t('background.added'));
     },
     onError: (error) =>
-      toast.error(error instanceof Error ? error.message : 'Could not add background'),
+      toast.error(error instanceof Error ? error.message : t('background.addFailed')),
   });
   const removeMutation = useMutation({
     mutationFn: removeCustomBackground,
     onSuccess: (saved) => {
       cacheConfig(saved);
       onRemoved();
-      toast.success('Background removed');
+      toast.success(t('background.removed'));
     },
     onError: (error) =>
-      toast.error(error instanceof Error ? error.message : 'Could not remove background'),
+      toast.error(error instanceof Error ? error.message : t('background.removeFailed')),
   });
 
   return { addMutation, removeMutation };

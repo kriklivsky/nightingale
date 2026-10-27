@@ -14,6 +14,7 @@ mod samples;
 use buffering::Direction;
 pub(crate) use capture::{
     start_configured_monitor, start_mic_capture, stop_mic_capture, update_configured_monitor,
+    update_mic_capture_options,
 };
 use capture::{AudioState, CaptureTargets};
 use samples::{InputSamples, OutputSamples};
@@ -552,7 +553,7 @@ fn run_mic_loop(
         if state.shutdown.load(Ordering::Relaxed) || state.failures.load(Ordering::Relaxed) != 0 {
             break;
         }
-        if monitoring != (state.monitor_channels.load(Ordering::Relaxed) != 0) {
+        if !monitoring && state.monitor_channels.load(Ordering::Relaxed) != 0 {
             break;
         }
         if buffer_check_at.elapsed() >= std::time::Duration::from_secs(1) {

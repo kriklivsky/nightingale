@@ -3,6 +3,7 @@ import { useCallback, useReducer } from 'react';
 import { toast } from 'sonner';
 
 import { downloadAndInstallUpdate, relaunchApp } from '@/bridge/updater';
+import { useI18n } from '@/shared/i18n/use-i18n';
 
 export type InstallState =
   | { stage: 'idle' }
@@ -48,6 +49,7 @@ export type InstallFlow = ReturnType<typeof useInstallFlow>;
 
 export const useInstallFlow = (update: Update | null) => {
   const [state, dispatch] = useReducer(reducer, { stage: 'idle' });
+  const { t } = useI18n();
 
   const install = useCallback(async () => {
     if (!update) {
@@ -70,20 +72,20 @@ export const useInstallFlow = (update: Update | null) => {
       });
       dispatch({ type: 'finished' });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
+      const message = err instanceof Error ? err.message : t('common.unknownError');
       dispatch({ type: 'error', message });
-      toast.error(`Update failed: ${message}`);
+      toast.error(t('update.failed', { detail: message }));
     }
-  }, [update]);
+  }, [t, update]);
 
   const restart = useCallback(async () => {
     try {
       await relaunchApp();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      toast.error(`Restart failed: ${message}`);
+      const message = err instanceof Error ? err.message : t('common.unknownError');
+      toast.error(t('update.restartFailed', { detail: message }));
     }
-  }, []);
+  }, [t]);
 
   const reset = useCallback(() => dispatch({ type: 'reset' }), []);
 

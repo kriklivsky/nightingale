@@ -8,6 +8,9 @@ import {
   setSongVideoOffset,
   type SongVideo,
 } from '@/bridge/song-video';
+import type { Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
+import { SONG_VIDEO_ATTACHMENTS } from '@/shared/query-keys';
 
 import { songVideoKey, useSongVideo } from './queries';
 
@@ -16,14 +19,14 @@ type Operation =
   | { action: 'offset'; value: number }
   | { action: 'remove' };
 
-function message(error: unknown): string | null {
+function message(t: Translate, error: unknown): string | null {
   if (error instanceof Error) {
     return error.message;
   }
   if (typeof error === 'string') {
     return error;
   }
-  return error === null || error === undefined ? null : 'The video operation failed.';
+  return error === null || error === undefined ? null : t('video.operationFailed');
 }
 
 async function perform(
@@ -45,6 +48,7 @@ async function perform(
 }
 
 export function useVideoWorkspace(fileHash: string) {
+  const { t } = useI18n();
   const client = useQueryClient();
   const [token, setToken] = useState('');
   const [search, setSearch] = useState<{ titleOnly: boolean; attempt: number } | null>(null);
@@ -63,6 +67,11 @@ export function useVideoWorkspace(fileHash: string) {
       client.setQueryData(songVideoKey(fileHash), result);
       setDraft(null);
     },
+    onSettled: (_result, _error, action) => {
+      if (action.action !== 'offset') {
+        void client.invalidateQueries({ queryKey: SONG_VIDEO_ATTACHMENTS });
+      }
+    },
   });
   const offset = draft ?? video.data?.offset_sec ?? 0;
   const runSearch = (titleOnly: boolean) =>
@@ -79,6 +88,6 @@ export function useVideoWorkspace(fileHash: string) {
     runSearch,
     adjust,
     searched: search !== null,
-    error: message(operation.error) ?? message(candidates.error) ?? message(video.error),
+    error: message(t, operation.error) ?? message(t, candidates.error) ?? message(t, video.error),
   };
 }

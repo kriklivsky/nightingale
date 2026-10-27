@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { useI18n } from '@/shared/i18n/use-i18n';
+
 export function usePreviewAudio(src: string | undefined, volume: number) {
+  const { t } = useI18n();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const subscribers = useRef(new Set<(time: number) => void>());
   const [playing, setPlaying] = useState(false);
@@ -32,7 +35,7 @@ export function usePreviewAudio(src: string | undefined, volume: number) {
     const onTime = () => setTime(audio.currentTime);
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
-    const onError = () => setError('The original song audio is unavailable.');
+    const onError = () => setError(t('video.audioUnavailable'));
     audio.addEventListener('play', onPlay);
     audio.addEventListener('pause', onPause);
     audio.addEventListener('ended', onPause);
@@ -51,7 +54,7 @@ export function usePreviewAudio(src: string | undefined, volume: number) {
       audio.load();
       audioRef.current = null;
     };
-  }, [src, volume]);
+  }, [src, t, volume]);
 
   const toggle = async () => {
     const audio = audioRef.current;
@@ -66,7 +69,7 @@ export function usePreviewAudio(src: string | undefined, volume: number) {
       await audio.play();
       setError(null);
     } catch {
-      setError('Cannot play the local audio preview.');
+      setError(t('video.audioPlayFailed'));
     }
   };
   const seek = (delta: number) => {

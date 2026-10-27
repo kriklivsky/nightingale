@@ -38,11 +38,12 @@ export function findCurrentSegment(segments: Segment[], time: number, hint: numb
   return Math.max(0, segments.length - 1);
 }
 
-export function computeLyricGapCaption(
+/** Whole seconds until the next lyric line during a long instrumental gap. */
+export function computeLyricGapSeconds(
   segments: Segment[],
   time: number,
   segIdx: number,
-): string | null {
+): number | null {
   const seg = segments.at(segIdx);
   if (!seg) {
     return null;
@@ -60,5 +61,26 @@ export function computeLyricGapCaption(
     return null;
   }
 
-  return `Next lyrics in ${Math.ceil(timeUntil)}s`;
+  return Math.ceil(timeUntil);
+}
+
+export type SkipBounds = {
+  segmentCount: number;
+  firstSegmentStart: number;
+  lastSegmentEnd: number;
+  introSkipLeadSec: number;
+};
+
+/** Which skip the HUD offers at `time`, if any. Songs without lyrics offer none. */
+export function skipTarget(time: number, bounds: SkipBounds): 'intro' | 'outro' | null {
+  if (bounds.segmentCount === 0) {
+    return null;
+  }
+  if (time < bounds.firstSegmentStart - bounds.introSkipLeadSec) {
+    return 'intro';
+  }
+  if (time > bounds.lastSegmentEnd + 1) {
+    return 'outro';
+  }
+  return null;
 }

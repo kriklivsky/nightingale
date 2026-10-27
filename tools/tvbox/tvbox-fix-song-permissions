@@ -1,0 +1,75 @@
+#!/usr/bin/python3
+from __future__ import annotations
+
+import errno
+import fcntl
+import grp
+import os
+from pathlib import Path
+import pwd
+import stat
+
+
+LIBRARY = Path('/var/lib/tvbox/songs')
+LOCK = '/run/tvbox-song-permissions.lock'
+
+
+def repair_file(directory: int, name: str, device: int, owner: tuple[int, int]) -> None:
+    descriptor = None
+    try:
+        metadata = os.stat(name, dir_fd=directory, follow_symlinks=False)
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_dev != device
+                or metadata.st_nlink != 1 or (metadata.st_uid, metadata.st_gid) == owner):
+            return
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        metadata = os.fstat(descriptor)
+        if stat.S_ISREG(metadata.st_mode) and metadata.st_dev == device and metadata.st_nlink == 1:
+            if (metadata.st_uid, metadata.st_gid) != owner:
+                os.fchown(descriptor, *owner)
+    except OSError as error:
+        if error.errno not in (errno.ENOENT, errno.ELOOP, errno.ESTALE):
+            raise
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def walk_error(error: OSError) -> None:
+    if error.errno not in (errno.ENOENT, errno.ELOOP, errno.ESTALE):
+        raise error
+
+
+def main() -> None:
+    if os.geteuid() != 0:
+        raise SystemExit('Run with sudo or as root.')
+    if LIBRARY.is_symlink() or LIBRARY.resolve(strict=True) != LIBRARY:
+        raise SystemExit('Refusing a symlinked library path.')
+    owner = (pwd.getpwnam('tvbox').pw_uid, grp.getgrnam('tvbox').gr_gid)
+    lock = os.open(LOCK, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(lock, 'w') as stream:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        root = os.open(LIBRARY, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            device = os.fstat(root).st_dev
+            for _path, directories, files, directory in os.fwalk(
+                    '.', topdown=True, onerror=walk_error, follow_symlinks=False, dir_fd=root):
+                metadata = os.fstat(directory)
+                if metadata.st_dev != device:
+                    directories.clear()
+                    continue
+                if (metadata.st_uid, metadata.st_gid) != owner:
+                    os.fchown(directory, *owner)
+                for name in files:
+                    repair_file(directory, name, device, owner)
+        finally:
+            os.close(root)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, KeyError) as error:
+        raise SystemExit(f'Library ownership repair failed: {error}') from None

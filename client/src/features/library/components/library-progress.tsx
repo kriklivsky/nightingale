@@ -3,9 +3,11 @@ import { LoaderCircleIcon } from 'lucide-react';
 import { useSongsMeta } from '@/features/library/queries/use-songs';
 import { Progress as ShadCnProgress } from '@/shared/components/ui/progress';
 import { useConfig } from '@/shared/config/use-config';
+import type { Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { LibrarySource } from '@/types/LibrarySource';
 
-function sourceLabel(source: LibrarySource | null | undefined): string {
+function sourceLabel(t: Translate, source: LibrarySource | null | undefined): string {
   switch (source?.kind) {
     case 'jellyfin':
       return 'Jellyfin';
@@ -14,16 +16,17 @@ function sourceLabel(source: LibrarySource | null | undefined): string {
     case 'plex':
       return 'Plex Media Server';
     case 'folder':
-      return 'library folder';
+      return t('library.source.folder');
     case undefined: {
       throw new Error('Not implemented yet: undefined case');
     }
     default:
-      return 'library';
+      return t('library.source.library');
   }
 }
 
 export const LibraryProgress = () => {
+  const { t } = useI18n();
   const { data: meta } = useSongsMeta();
   const { data: config } = useConfig();
 
@@ -45,8 +48,8 @@ export const LibraryProgress = () => {
 
     return (
       <div className="flex items-center gap-1 text-xs text-muted-foreground">
-        <LoaderCircleIcon className="size-3 animate-spin" />
-        Connecting to {sourceLabel(source)}...
+        <LoaderCircleIcon className="size-3 animate-spin motion-reduce:animate-none" />
+        {t('library.connecting', { source: sourceLabel(t, source) })}
       </div>
     );
   }

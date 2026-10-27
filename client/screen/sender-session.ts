@@ -1,4 +1,5 @@
-import { ScreenSignaling, type ScreenPairing } from './api';
+import { ScreenSignaling, type ScreenAudioState, type ScreenPairing } from './api';
+import { messages } from './messages';
 import {
   createScreenPeer,
   gatherIce,
@@ -20,6 +21,7 @@ export class SenderSession {
     private readonly pairing: ScreenPairing,
     private readonly report: (message: string) => void,
     private readonly ended: () => void,
+    private readonly audioChanged: (state: ScreenAudioState) => void,
   ) {
     this.api = new ScreenSignaling('', pairing.token);
   }
@@ -38,9 +40,18 @@ export class SenderSession {
 
   private async poll(): Promise<void> {
     const state = await this.api.senderState(this.abort.signal);
+    this.audioChanged(state);
     if (state.answer !== null && this.peer?.remoteDescription === null) {
       await this.peer.setRemoteDescription({ type: 'answer', sdp: state.answer });
     }
+  }
+
+  async setMonitoring(enabled: boolean): Promise<void> {
+    await this.api.monitoring(enabled);
+  }
+
+  async microphoneAccess(enabled: boolean): Promise<string | null> {
+    return this.api.microphoneAccess(enabled);
   }
 
   async start(quality: ScreenQuality): Promise<void> {
@@ -96,13 +107,11 @@ export class SenderSession {
         if (peer.connectionState === 'connected') {
           this.report(
             stream.getAudioTracks().length === 0
-              ? 'Экран передаётся без звука. Для звука выберите вкладку и включите «Передавать звук».'
-              : 'Экран и звук передаются на телевизор.',
+              ? messages.sharingSilent
+              : messages.sharingWithAudio,
           );
         } else if (peer.connectionState === 'failed') {
-          this.report(
-            'Не удалось установить прямую связь. Проверьте сеть и изоляцию Wi-Fi клиентов.',
-          );
+          this.report(messages.directFailed);
           void this.stop().catch((error: unknown) => this.report(screenError(error)));
         }
       },
@@ -125,7 +134,7 @@ export class SenderSession {
     const sdp = await gatherIce(peer, this.abort.signal);
     if (!this.abort.signal.aborted) {
       await this.api.describe('offer', this.pairing.generation, sdp);
-      this.report('Подключаем телевизор…');
+      this.report(messages.connectingTv);
     }
   }
 

@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
 import { alignLrcLyrics, applyTimedLyrics, provideLrc } from '@/bridge/lyrics';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { ANALYSIS_QUEUE, LYRICS, MENU, SONGS, SONGS_META } from '@/shared/query-keys';
 
 const LYRICS_QUERY_KEYS = [LYRICS, MENU, SONGS, SONGS_META, ANALYSIS_QUEUE];
@@ -21,17 +22,18 @@ export type ProvideLrcInput = {
 
 export const useProvideLrcMutation = () => {
   const queryClient = useQueryClient();
+  const { t } = useI18n();
 
   return useMutation({
     mutationFn: async ({ hash, lrcText, separateStems, title }: ProvideLrcInput) => {
       await provideLrc(hash, lrcText, separateStems);
       toast.info(
-        separateStems ? `Separating stems for "${title}"` : `Saved timed lyrics for "${title}"`,
+        separateStems ? t('lyrics.separatingStems', { title }) : t('lyrics.savedTimed', { title }),
       );
     },
     onSuccess: () => invalidateLyricsQueries(queryClient),
     onError: (error: Error) => {
-      toast.error(`Error while providing lyrics: ${error.message}`);
+      toast.error(t('lyrics.provideFailed', { detail: error.message }));
     },
   });
 };
@@ -44,30 +46,32 @@ export type ApplyTimedLyricsInput = {
 
 export const useApplyTimedLyricsMutation = () => {
   const queryClient = useQueryClient();
+  const { t } = useI18n();
 
   return useMutation({
     mutationFn: async ({ hash, lrcText, title }: ApplyTimedLyricsInput) => {
       await applyTimedLyrics(hash, lrcText);
-      toast.info(`Applied timed lyrics to "${title}"`);
+      toast.info(t('lyrics.appliedTimed', { title }));
     },
     onSuccess: () => invalidateLyricsQueries(queryClient),
     onError: (error: Error) => {
-      toast.error(`Error while applying timed lyrics: ${error.message}`);
+      toast.error(t('lyrics.applyFailed', { detail: error.message }));
     },
   });
 };
 
 export const useAlignLrcMutation = () => {
   const queryClient = useQueryClient();
+  const { t } = useI18n();
 
   return useMutation({
     mutationFn: async ({ hash, lrcText, title }: ApplyTimedLyricsInput) => {
       await alignLrcLyrics(hash, lrcText);
-      toast.info(`Aligning words within the line timing of "${title}"`);
+      toast.info(t('lyrics.aligningWords', { title }));
     },
     onSuccess: () => invalidateLyricsQueries(queryClient),
     onError: (error: Error) => {
-      toast.error(`Error while aligning timed lyrics: ${error.message}`);
+      toast.error(t('lyrics.alignFailed', { detail: error.message }));
     },
   });
 };

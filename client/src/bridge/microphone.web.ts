@@ -96,7 +96,7 @@ export const setWebMicMonitorGain = (value: number): void => {
   liveMonitorGain = clamped;
   for (const active of activeCaptures.values()) {
     if (active.monitorGain) {
-      active.monitorGain.gain.value = clamped;
+      active.monitorGain.gain.value = active.emitAudio ? clamped : 0;
     }
   }
 };
@@ -285,5 +285,20 @@ export const webMicrophoneAdapter: MicrophoneAdapter = {
   listDevices,
   startCapture,
   stopCapture,
+  updateCaptureOptions: (captureId, options) =>
+    enqueueCaptureOperation(async () => {
+      const active = activeCaptures.get(captureId);
+      if (active === undefined) {
+        return;
+      }
+      if (active.monitorGain === null && options.emit_audio) {
+        active.monitorGain = active.context.createGain();
+        active.source.connect(active.monitorGain).connect(active.context.destination);
+      }
+      active.emitAudio = options.emit_audio;
+      if (active.monitorGain !== null) {
+        active.monitorGain.gain.value = options.emit_audio ? liveMonitorGain : 0;
+      }
+    }),
   subscribe: async (captureId, callback) => subscribeMicSamples(captureId, callback),
 };

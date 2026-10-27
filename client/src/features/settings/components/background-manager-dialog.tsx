@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/shared/components/ui/dialog';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { AppConfig } from '@/types/AppConfig';
 
 import { createBackgroundDraft, canSubmitBackground } from '../lib/background-draft';
@@ -32,6 +33,7 @@ export function BackgroundManagerDialog({
   config: AppConfig | undefined;
   onOpenChange: (open: boolean) => void;
 }) {
+  const { t } = useI18n();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<'list' | 'add'>('list');
@@ -91,10 +93,10 @@ export function BackgroundManagerDialog({
             <DialogHeader>
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
-                  <DialogTitle>Custom backgrounds ({backgrounds.length})</DialogTitle>
-                  <DialogDescription>
-                    Images, Nightingale GLSL shaders, and silent looping videos.
-                  </DialogDescription>
+                  <DialogTitle>
+                    {t('background.customTitle', { count: backgrounds.length })}
+                  </DialogTitle>
+                  <DialogDescription>{t('background.customDescription')}</DialogDescription>
                 </div>
                 <Button
                   className={getFocusClassName(0)}
@@ -103,7 +105,7 @@ export function BackgroundManagerDialog({
                     setView('add');
                   }}
                 >
-                  Add background
+                  {t('background.add')}
                 </Button>
               </div>
             </DialogHeader>
@@ -123,17 +125,15 @@ export function BackgroundManagerDialog({
                 className={getFocusClassName(footerFocusIndex)}
                 onClick={closeDialog}
               >
-                Close
+                {t('common.close')}
               </Button>
             </DialogFooter>
           </>
         ) : (
           <>
             <DialogHeader>
-              <DialogTitle>Add background</DialogTitle>
-              <DialogDescription>
-                Add an image, Nightingale GLSL shader, or silent looping video.
-              </DialogDescription>
+              <DialogTitle>{t('background.add')}</DialogTitle>
+              <DialogDescription>{t('background.addDescription')}</DialogDescription>
             </DialogHeader>
 
             <div className="min-h-0 overflow-y-auto">
@@ -152,14 +152,14 @@ export function BackgroundManagerDialog({
                 className={getFocusClassName(footerFocusIndex)}
                 onClick={() => setView('list')}
               >
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button
                 disabled={!canSubmitBackground(draft, busy)}
                 className={getFocusClassName(footerFocusIndex + 1)}
                 onClick={() => addMutation.mutate(draft)}
               >
-                {addMutation.isLoading ? 'Adding…' : 'Add background'}
+                {addMutation.isLoading ? t('background.adding') : t('background.add')}
               </Button>
             </DialogFooter>
           </>

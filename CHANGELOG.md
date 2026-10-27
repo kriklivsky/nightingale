@@ -15,6 +15,21 @@ below.
 
 ### Features
 
+- Add an OLED-friendly menu screensaver: after five idle minutes in the song menu a dim clock and date on black appear and move every minute; any remote, keyboard, gamepad or pointer input dismisses it without acting on the menu.
+- Add a Russian/English interface with a language setting (following the system language by default) across the karaoke app, and localize the laptop screen-sharing page to the browser language.
+- Make playback easier to control from a TV remote: the pause menu now holds Start over, volume, guide vocals, microphone, monitoring and background controls; OK performs Skip intro/outro while offered; volume and setting changes show a brief on-screen indicator; secondary HUD details fade when idle; a progress bar along the bottom edge of the screen marks the sung passages; and readable disclaimers explain AI timing and orange estimated words.
+- Add a note lane that shows upcoming melody notes with your detected pitch on top, with the previous compact meter selectable in Settings; scoring is unchanged.
+- Fill sung words from left to right in a highlight colour, count the score up on the results screen and mark new personal bests.
+- Simplify the library toolbar for the remote with a Ready to sing toggle, a combined Filters menu (including USDX) and a single view switch; label the Multiplayer and Add to queue buttons, confirm additions to the queue, show a loading skeleton, simplify sidebar counts and move Missing metadata to the end of the sidebar. Profile deletion is confirmed with a second press instead of an unreachable popover.
+- Keep YouTube clips aligned without frame skipping or stalls: the clip plays at the song tempo, drift beyond 0.35 s is corrected by an occasional seek that leads by the measured seek time, the default background is shown before the clip starts and after it ends, and a clip that fails to decode is replaced by the background instead of freezing.
+
+- Add launcher Wi-Fi settings, a manually enabled WPA2 event hotspot and automatic Ethernet uplink/direct-laptop detection, with remote-controlled password entry and USB/Bluetooth keyboard detection. Prefer Wi-Fi/AP addresses for the separate WebRTC receiver and retain the trusted HTTPS authority when its IP changes. Allow direct hardware-keyboard typing in TV karaoke search and US/Russian hardware layouts with Alt+Shift.
+
+- Mark songs with an attached, available YouTube clip in both table and grid views, refreshing tags after attachment, removal and video-cache clearing. Show lazy-loaded YouTube thumbnails in clip search, with a fallback when a preview is unavailable and unchanged remote-button navigation.
+
+- Toggle microphone speaker monitoring with OK / Enter during karaoke without disabling input or scoring; keep pause/results confirmation separate and retain the R shortcut and saved monitor preference.
+- Add independent monitor controls on the TV and paired screen-sharing page, plus an opt-in, authenticated two-channel UMC202HD PCM feed and a certificate-verifying Python client for local laptop processing. Revoking access or ending the paired session stops the feed; screen audio and Nightingale remain separate.
+
 - Backport Nightingale 1.3.0 features onto the TV-box fork: local multiplayer for two to four singers, independent solo/multiplayer channel-combining controls, shared hardware capture with separate channel scores, remembered player assignments and ranked per-player reports. Retain native low-latency monitoring, TV navigation, favorites, confirmed deletion, the scoring worker and synchronized YouTube clips.
 - Add custom image/shader/silent-video backgrounds, background selection and playback master volume in Settings, folder browsing and artist/album trees, remote/keyboard queue reordering, a song loading screen and persisted desktop/playback window sizes.
 - Import adjacent LRC/ELRC into the lyric editor without modifying files until Save, align words inside authored line windows, support custom reading annotations and optional CJK romanization, and discover completed shared-cache analyses on rescan. Preserve LRCLIB/Lyricsfile analysis and Rockchip RKNN processing.
@@ -52,6 +67,19 @@ below.
 - During playback, the Left/Right arrows (keyboard, gamepad D-pad/stick, and CEC remote) now adjust the guide vocal volume while a song with guide vocals is playing — right is louder, left is quieter — and the level is remembered between sessions. When guide vocals are unavailable or the song is paused, the arrows keep their normal navigation behavior; the `G` toggle and `+` / `-` hotkeys still work as before.
 
 ### Fixes
+
+- Decode YouTube clips and video backgrounds on the TV box with the Rockchip hardware decoder when its GStreamer plugin is installed: 1080p60 clips no longer play as a slideshow and corrective seeks take about 0.4 s instead of several seconds. Laptop screen sharing uses the same decoder, lowering 1080p display latency and raising 4K from about 10 to 22 fps.
+
+- Fix word timing of LRC-timed lyrics: lines containing a sentence break (`?`, `!`, `.`) no longer shift every later line onto another line's words, adjacent lines that claim the same audio are re-aligned together, authored lines are no longer split after ten words, and lines no longer overlap. Re-analyze affected songs to apply it.
+- Align LRC-timed lyrics with the Qwen3 forced aligner in chunks of several verses cut at vocal pauses, correcting LRC files that run a second or more ahead of or behind the recording, so line endings are no longer pressed into the next line's timestamp. On RK3588 boards with the converted model bundle the aligner runs on the NPU (about a minute per song instead of 15–20 minutes on the CPU); its timestamps match the reference model exactly. Lines sung only by a choir or backing vocals, which the separator puts in the instrumental, are aligned against the original mix instead of a silent vocal stem. A chunk that locks onto a repeated chorus no longer shifts the rest of the song: lines that end up squashed, overlapping or seconds away from their LRC time are re-aligned on their own, and the few that still cannot be placed are highlighted per line at their LRC time instead of with wrong word timings. Realign keeps each line's timing as an anchor instead of aligning the whole song as one text.
+
+- Recover the TV-box HDMI source once after cold startup, even when the TV input was selected before the CEC listener started. Send Image View On and Active Source separately without a startup mode switch; skip a standby TV or another reported active source and share the existing recovery throttle.
+
+- Keep TV karaoke networking available with split NetworkManager Wi-Fi / networkd Ethernet management by using the kernel-route GIO monitor, including when AP is disabled. Fit the independent network settings window to native TV geometry without requiring a window manager.
+
+- Automatically repair root-imported TV-box song ownership every minute through a low-priority, non-overlapping cron job, without following links, modifying song contents or restarting applications.
+
+- Repair TV-box library ownership after root-owned imports so Nightingale can stage and delete local songs without `Permission denied`; retain file contents and permission modes, and document ownership requirements for future imports.
 
 - Keep TV controls inside a small safe area without changing native 4K output, and give song titles flexible width and two lines before secondary table columns when a side panel is open.
 - Reject low-confidence microphone noise and expire stale pitch readings so a silent or disconnected multiplayer input cannot keep earning points from its last note. Channel capture and speaker monitoring stay independent of scoring gates.

@@ -112,6 +112,11 @@ impl OutputSamples {
         convert: F,
     ) {
         let monitoring = self.state.monitor_channels.load(Ordering::Relaxed) != 0;
+        if !monitoring {
+            while self.samples.pop().is_ok() {}
+            self.initialized = false;
+            self.position = 0.0;
+        }
         let gain = monitor_gain();
         for frame in data.chunks_mut(channels) {
             let sample = if monitoring {

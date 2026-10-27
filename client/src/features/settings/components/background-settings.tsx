@@ -5,6 +5,7 @@ import { Field, FieldDescription } from '@/shared/components/ui/field';
 import { Label } from '@/shared/components/ui/label';
 import { useConfig } from '@/shared/config/use-config';
 import { useConfigMutation } from '@/shared/config/use-config-mutation';
+import { useI18n } from '@/shared/i18n/use-i18n';
 
 import { backgroundOptions, initialBackgroundSelection } from '../lib/background-options';
 import { BackgroundManagerDialog } from './background-manager-dialog';
@@ -19,12 +20,13 @@ export function BackgroundSettings({
   manageClassName?: string;
   onDialogOpenChange?: (open: boolean) => void;
 }) {
+  const { t } = useI18n();
   const { data: config } = useConfig();
   const { mutate } = useConfigMutation();
   const [open, setOpen] = useState(false);
   const options = useMemo(
-    () => backgroundOptions(config?.custom_backgrounds ?? []),
-    [config?.custom_backgrounds],
+    () => backgroundOptions(t, config?.custom_backgrounds ?? []),
+    [config?.custom_backgrounds, t],
   );
   const selected =
     config === undefined ? options[0].value : initialBackgroundSelection(config, options);
@@ -36,15 +38,13 @@ export function BackgroundSettings({
   return (
     <>
       <Field>
-        <Label htmlFor="default-background">Default background</Label>
-        <FieldDescription>
-          Used when playback starts; press T during playback to cycle
-        </FieldDescription>
+        <Label htmlFor="default-background">{t('background.default')}</Label>
+        <FieldDescription>{t('background.defaultHint')}</FieldDescription>
         <div className="flex flex-col gap-2 sm:flex-row">
           <SettingsSelect
             id="default-background"
-            label="Default background"
-            placeholder="Select background"
+            label={t('background.default')}
+            placeholder={t('background.select')}
             value={selected}
             options={options}
             triggerClassName={selectClassName}
@@ -56,7 +56,7 @@ export function BackgroundSettings({
             }}
           />
           <Button variant="outline" className={manageClassName} onClick={() => updateOpen(true)}>
-            Manage
+            {t('background.manage')}
           </Button>
         </div>
       </Field>

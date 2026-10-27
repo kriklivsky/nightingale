@@ -222,6 +222,7 @@ pub struct AppConfig {
     pub lyrics_horizontal_position: Option<String>,
     pub lyrics_scale: Option<f64>,
     pub pitch_graph_scale: Option<f64>,
+    pub pitch_display: Option<String>,
     pub lyrics_romanization_mode: Option<String>,
     pub separator: Option<String>,
     pub asr_engine: Option<String>,
@@ -232,6 +233,7 @@ pub struct AppConfig {
     #[serde(default, deserialize_with = "deserialize_song_list_sort")]
     pub song_list_sort: Option<Vec<SongSort>>,
     pub language_overrides: Option<HashMap<String, String>>,
+    pub ui_language: Option<String>,
 }
 
 fn default_data_path_option() -> Option<PathBuf> {
@@ -290,6 +292,7 @@ impl Default for AppConfig {
             lyrics_horizontal_position: None,
             lyrics_scale: None,
             pitch_graph_scale: None,
+            pitch_display: None,
             lyrics_romanization_mode: None,
             separator: None,
             asr_engine: None,
@@ -299,6 +302,7 @@ impl Default for AppConfig {
             song_list_view: None,
             song_list_sort: None,
             language_overrides: None,
+            ui_language: None,
         }
     }
 }

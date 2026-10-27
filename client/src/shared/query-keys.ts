@@ -1,5 +1,7 @@
 export const CONFIG = ['config'];
 export const CACHE_STATS = ['cache-stats'];
+export const SONG_VIDEOS = ['song-video'];
+export const SONG_VIDEO_ATTACHMENTS = [...SONG_VIDEOS, 'attachments'];
 export const PROFILES = ['profiles'];
 export const PLAYBACK_QUEUE = ['playback-queue'];
 export const SONGS = ['songs'];

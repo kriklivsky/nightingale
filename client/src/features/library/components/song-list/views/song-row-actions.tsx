@@ -1,5 +1,6 @@
 import { PlayIcon, StarIcon, Trash2Icon } from 'lucide-react';
 
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 import type { SongItemProps } from '../types';
@@ -16,9 +17,6 @@ type SongRowActionsProps = Pick<
   | 'onDelete'
 >;
 
-const deleteTitle = (canDelete: boolean): string =>
-  canDelete ? 'Delete files from disk' : 'Only idle local songs can be deleted in the desktop app';
-
 export function SongRowActions({
   song,
   isFavorite,
@@ -29,6 +27,7 @@ export function SongRowActions({
   onPlay,
   onDelete,
 }: SongRowActionsProps) {
+  const { t } = useI18n();
   const actionClass =
     'inline-flex size-10 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background/75 text-muted-foreground outline-none hover:border-primary hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary';
 
@@ -36,9 +35,9 @@ export function SongRowActions({
     <div className="flex items-center justify-end gap-1">
       <button
         type="button"
-        aria-label={`${isFavorite ? 'Remove' : 'Add'} ${song.title} ${isFavorite ? 'from' : 'to'} favorites`}
+        aria-label={t('songRow.favoriteLabel', { title: song.title })}
         aria-pressed={isFavorite}
-        title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+        title={isFavorite ? t('songRow.removeFavorite') : t('songRow.addFavorite')}
         onClick={(event) => {
           event.stopPropagation();
           onToggleFavorite(song);
@@ -54,8 +53,8 @@ export function SongRowActions({
       </button>
       <button
         type="button"
-        aria-label={`Play ${song.title}`}
-        title={canPlay ? 'Play' : 'Analyze this song before playing'}
+        aria-label={t('songRow.playLabel', { title: song.title })}
+        title={canPlay ? t('songDetails.play') : t('songRow.analyzeFirst')}
         disabled={!canPlay}
         onClick={(event) => {
           event.stopPropagation();
@@ -72,8 +71,8 @@ export function SongRowActions({
       </button>
       <button
         type="button"
-        aria-label={`Delete ${song.title} from disk`}
-        title={deleteTitle(canDelete)}
+        aria-label={t('songRow.deleteLabel', { title: song.title })}
+        title={canDelete ? t('songRow.delete') : t('songRow.deleteUnavailable')}
         disabled={!canDelete}
         onClick={(event) => {
           event.stopPropagation();

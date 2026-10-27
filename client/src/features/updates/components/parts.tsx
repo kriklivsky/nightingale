@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 
 import { Button } from '@/shared/components/ui/button';
 import { DialogFooter } from '@/shared/components/ui/dialog';
+import type { Locale, Translate } from '@/shared/i18n/translator';
 import { cn } from '@/shared/utils/cn';
 
 import { version as currentVersion } from '../../../../package.json';
@@ -10,14 +11,15 @@ import { version as currentVersion } from '../../../../package.json';
 export const CURRENT_VERSION = currentVersion;
 export const RELEASES_URL = 'https://github.com/rzru/nightingale/releases/latest';
 export const SELF_HOSTED_DOCS_URL = 'https://nightingale.cafe/docs/self-hosted.html#updating';
-export const GENERIC_DESCRIPTION = 'Keep Nightingale up to date with the latest improvements.';
 
 const RING = 'ring-2 ring-primary';
 const NO_FOCUS_RING = 'focus-visible:ring-0 focus-visible:border-transparent';
 
-export type FocusCtx = {
+export type ViewCtx = {
   open: boolean;
   focusedIndex: number;
+  t: Translate;
+  locale: Locale;
 };
 
 export type ViewParts = {
@@ -26,11 +28,11 @@ export type ViewParts = {
   footer: ReactNode | null;
 };
 
-export const ringFor = (ctx: FocusCtx, idx: number) =>
+export const ringFor = (ctx: ViewCtx, idx: number) =>
   cn(NO_FOCUS_RING, ctx.open && ctx.focusedIndex === idx && RING);
 
 type SoloFooterProps = {
-  ctx: FocusCtx;
+  ctx: ViewCtx;
   label: string;
   onClick: () => void;
 };
@@ -44,7 +46,7 @@ export const SoloFooter = ({ ctx, label, onClick }: SoloFooterProps) => (
 );
 
 type PairFooterProps = {
-  ctx: FocusCtx;
+  ctx: ViewCtx;
   closeLabel?: string;
   onClose: () => void;
   primaryLabel: string;
@@ -54,7 +56,7 @@ type PairFooterProps = {
 
 export const PairFooter = ({
   ctx,
-  closeLabel = 'Close',
+  closeLabel,
   onClose,
   primaryLabel,
   primaryIcon: Icon,
@@ -62,7 +64,7 @@ export const PairFooter = ({
 }: PairFooterProps) => (
   <DialogFooter>
     <Button variant="outline" onClick={onClose} className={ringFor(ctx, 0)}>
-      {closeLabel}
+      {closeLabel ?? ctx.t('common.close')}
     </Button>
     <Button onClick={onPrimary} className={ringFor(ctx, 1)}>
       {Icon && <Icon />}

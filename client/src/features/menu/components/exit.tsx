@@ -13,12 +13,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/shared/components/ui/alert-dialog';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 const RING = 'ring-2 ring-primary';
 const NO_FOCUS_RING = 'focus-visible:ring-0 focus-visible:border-transparent';
 
 export const ExitDialog = () => {
+  const { t } = useI18n();
   const { close, mode } = useDialog();
 
   const open = mode === 'exit';
@@ -45,22 +47,22 @@ export const ExitDialog = () => {
     <AlertDialog open={open} onOpenChange={close}>
       <AlertDialogContent onEscapeKeyDown={(e) => e.preventDefault()}>
         <AlertDialogHeader>
-          <AlertDialogTitle>Exit</AlertDialogTitle>
-          <AlertDialogDescription>Are you sure you want to quit?</AlertDialogDescription>
+          <AlertDialogTitle>{t('menu.exit')}</AlertDialogTitle>
+          <AlertDialogDescription>{t('exit.description')}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel
             onClick={close}
             className={cn(NO_FOCUS_RING, open && focusedIndex === 0 && RING)}
           >
-            Cancel
+            {t('common.cancel')}
           </AlertDialogCancel>
           <AlertDialogAction
             variant="destructive"
             onClick={() => void exit()}
             className={cn(NO_FOCUS_RING, open && focusedIndex === 1 && RING)}
           >
-            Exit
+            {t('menu.exit')}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

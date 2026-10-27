@@ -6,6 +6,8 @@ import { useDialog } from '@/features/menu/hooks/use-dialog';
 import { useLibrarySourceActions } from '@/features/sources/hooks/use-library-source-actions';
 import { JellyfinIcon } from '@/shared/components/icons/jellyfin';
 import { PlexIcon } from '@/shared/components/icons/plex';
+import type { Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 
 export type SourceButton = {
   key: string;
@@ -18,6 +20,7 @@ export type SourceButton = {
 };
 
 type RemoteBadgeInput = {
+  t: Translate;
   label: string;
   baseUrl: string | undefined;
   health: { reachable: boolean; server_name?: string; error?: string } | undefined;
@@ -30,25 +33,26 @@ type RemoteBadgeInput = {
  * source costs one call instead of a new copy of the branch ladder.
  */
 const remoteBadge = ({
+  t,
   label,
   baseUrl,
   health,
 }: RemoteBadgeInput): { tooltip: string; badge?: BadgeTone } => {
   if (typeof baseUrl !== 'string' || baseUrl === '') {
-    return { tooltip: `Connect ${label}` };
+    return { tooltip: t('source.connect', { source: label }) };
   }
-  const hostname = health?.server_name ?? baseUrl.replace(/^https?:\/\//, '');
+  const host = health?.server_name ?? baseUrl.replace(/^https?:\/\//, '');
   if (!health) {
-    return { tooltip: `Checking ${hostname}…`, badge: 'muted' };
+    return { tooltip: t('source.checking', { host }), badge: 'muted' };
   }
   if (health.reachable) {
-    return { tooltip: `Connected to: ${hostname}`, badge: 'ok' };
+    return { tooltip: t('source.connected', { host }), badge: 'ok' };
   }
   return {
     tooltip:
       typeof health.error === 'string' && health.error !== ''
-        ? `Offline: ${hostname} — ${health.error}`
-        : `Offline: ${hostname}`,
+        ? t('source.offlineWithError', { host, error: health.error })
+        : t('source.offline', { host }),
     badge: 'warn',
   };
 };
@@ -61,6 +65,7 @@ const remoteBadge = ({
  * management.
  */
 export const useSourceButtons = (): SourceButton[] => {
+  const { t } = useI18n();
   const { setMode } = useDialog();
   const {
     selectFolder,
@@ -80,31 +85,34 @@ export const useSourceButtons = (): SourceButton[] => {
   const jellyfin = useMemo(
     () =>
       remoteBadge({
+        t,
         label: 'Jellyfin',
         baseUrl: jellyfinSource?.base_url,
         health: jellyfinHealth,
       }),
-    [jellyfinSource, jellyfinHealth],
+    [jellyfinSource, jellyfinHealth, t],
   );
 
   const navidrome = useMemo(
     () =>
       remoteBadge({
+        t,
         label: 'Navidrome',
         baseUrl: navidromeSource?.base_url,
         health: navidromeHealth,
       }),
-    [navidromeSource, navidromeHealth],
+    [navidromeSource, navidromeHealth, t],
   );
 
   const plex = useMemo(
     () =>
       remoteBadge({
+        t,
         label: 'Plex',
         baseUrl: plexSource?.base_url,
         health: plexHealth,
       }),
-    [plexSource, plexHealth],
+    [plexSource, plexHealth, t],
   );
 
   return useMemo<SourceButton[]>(() => {
@@ -116,7 +124,7 @@ export const useSourceButtons = (): SourceButton[] => {
           {
             key: 'plex',
             icon: PlexIcon,
-            label: 'Connect Plex',
+            label: t('empty.connectPlex'),
             tooltip: plex.tooltip,
             handler: () => setMode('plex-connect'),
             disabled: isPending,
@@ -125,7 +133,7 @@ export const useSourceButtons = (): SourceButton[] => {
           {
             key: 'navidrome',
             icon: Disc3Icon,
-            label: 'Connect Navidrome',
+            label: t('empty.connectNavidrome'),
             tooltip: navidrome.tooltip,
             handler: () => setMode('navidrome-connect'),
             disabled: isPending,
@@ -134,7 +142,7 @@ export const useSourceButtons = (): SourceButton[] => {
           {
             key: 'jellyfin',
             icon: JellyfinIcon,
-            label: 'Connect Jellyfin',
+            label: t('empty.connectJellyfin'),
             tooltip: jellyfin.tooltip,
             handler: () => setMode('jellyfin-connect'),
             disabled: isPending,
@@ -143,8 +151,8 @@ export const useSourceButtons = (): SourceButton[] => {
           {
             key: 'folder',
             icon: FolderIcon,
-            label: 'Select folder',
-            tooltip: 'Select folder',
+            label: t('empty.selectFolder'),
+            tooltip: t('empty.selectFolder'),
             handler: hasSource ? () => setMode('folder-source-confirm') : selectFolder,
             disabled: isPending,
           },
@@ -154,8 +162,8 @@ export const useSourceButtons = (): SourceButton[] => {
       buttons.push({
         key: 'rescan',
         icon: RefreshCwIcon,
-        label: 'Rescan library',
-        tooltip: 'Rescan library (reuses cached analyses)',
+        label: t('empty.rescan'),
+        tooltip: t('source.rescanTooltip'),
         handler: rescan,
         disabled: rescanDisabled,
       });
@@ -173,5 +181,6 @@ export const useSourceButtons = (): SourceButton[] => {
     rescanDisabled,
     selectFolder,
     setMode,
+    t,
   ]);
 };

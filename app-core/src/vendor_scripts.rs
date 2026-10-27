@@ -31,6 +31,7 @@ const FILES: &[(&str, &str)] = &[
     ("align.py", ALIGN_PY),
     ("ctc_align.py", CTC_ALIGN_PY),
     ("qwen_align.py", QWEN_ALIGN_PY),
+    ("qwen_rknn.py", include_str!("../analyzer/qwen_rknn.py")),
     ("audio.py", AUDIO_PY),
     ("hallucination.py", HALLUCINATION_PY),
     ("language.py", LANGUAGE_PY),

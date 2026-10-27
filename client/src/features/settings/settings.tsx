@@ -11,14 +11,17 @@ import {
   LYRICS_ROMANIZATION_MODES,
   LYRICS_VERTICAL_POSITIONS,
   NAV,
+  PITCH_DISPLAYS,
   PLAYBACK_MODES,
   PLAYBACK_SCALE_MAX,
   PLAYBACK_SCALE_MIN,
   PLAYBACK_SCALE_STEP,
   SEPARATORS,
   SETTINGS_TABS,
+  UI_LANGUAGES,
   VOCAL_THRESHOLD_MAX,
   getAnalysisNav,
+  localizeOptions,
   type SettingsTab,
 } from '@/features/settings/components/constants';
 import { MicrophoneSettings } from '@/features/settings/components/microphone-settings';
@@ -33,6 +36,8 @@ import { Slider } from '@/shared/components/ui/slider';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs';
 import { useConfig } from '@/shared/config/use-config';
 import { useConfigMutation } from '@/shared/config/use-config-mutation';
+import { parseUiLanguage } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { AppConfig } from '@/types/AppConfig';
 
 const generalSettings = (config: AppConfig | undefined) => {
@@ -64,6 +69,7 @@ const playbackSettings = (config: AppConfig | undefined) => {
       lyricsHorizontal: DEFAULTS.lyrics_horizontal_position,
       lyricsScale: DEFAULT_PLAYBACK_SCALE,
       pitchGraphScale: DEFAULT_PLAYBACK_SCALE,
+      pitchDisplay: DEFAULTS.pitch_display,
       lyricsRomanizationMode: DEFAULTS.lyrics_romanization_mode,
     };
   }
@@ -75,6 +81,7 @@ const playbackSettings = (config: AppConfig | undefined) => {
     lyricsHorizontal: config.lyrics_horizontal_position ?? DEFAULTS.lyrics_horizontal_position,
     lyricsScale: clampPlaybackScale(config.lyrics_scale),
     pitchGraphScale: clampPlaybackScale(config.pitch_graph_scale),
+    pitchDisplay: config.pitch_display === 'meter' ? 'meter' : DEFAULTS.pitch_display,
     lyricsRomanizationMode: config.lyrics_romanization_mode ?? DEFAULTS.lyrics_romanization_mode,
   };
 };
@@ -103,6 +110,7 @@ const isSettingsTab = (value: string): value is SettingsTab =>
   SETTINGS_TABS.some((tab) => tab.value === value);
 
 export const SettingsPage = () => {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const { data: config } = useConfig();
   const { mutate } = useConfigMutation();
@@ -114,6 +122,7 @@ export const SettingsPage = () => {
   const general = generalSettings(config);
   const playback = playbackSettings(config);
   const analysis = analysisSettings(config);
+  const uiLanguage = parseUiLanguage(config?.ui_language);
   const [isFullScreen, setIsFullScreen] = useState<boolean | null | undefined>(general.fullscreen);
   const [micMonitorGainInput, setMicMonitorGain] = useState<number | null>(null);
   const micMonitorGain = micMonitorGainInput ?? general.micMonitorGain;
@@ -228,7 +237,7 @@ export const SettingsPage = () => {
       <div className="mx-auto flex max-w-4xl flex-col gap-5">
         <PageHeader />
         <p className="rounded-md border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-muted-foreground">
-          Remote: ↑↓ move · ←→ choose or adjust · OK select · Back close
+          {t('settings.remoteHint')}
         </p>
 
         <Tabs
@@ -251,7 +260,7 @@ export const SettingsPage = () => {
                   }
                 }}
               >
-                {settingsTab.label}
+                {t(settingsTab.labelKey)}
               </TabsTrigger>
             ))}
           </TabsList>
@@ -259,22 +268,38 @@ export const SettingsPage = () => {
           <TabsContent value="general" className="mt-4">
             <FieldGroup>
               <Field>
-                <Label>Window</Label>
+                <Label>{t('settings.window')}</Label>
                 <ButtonGroup>
                   <Button
                     variant={isFullScreen === true ? 'outline' : 'default'}
                     onClick={() => toggleWindowMode(false)}
                     className={getFocusClassName(NAV.general.window, 0)}
                   >
-                    Windowed
+                    {t('settings.windowed')}
                   </Button>
                   <Button
                     variant={isFullScreen === false ? 'outline' : 'default'}
                     onClick={() => toggleWindowMode(true)}
                     className={getFocusClassName(NAV.general.window, 1)}
                   >
-                    Fullscreen
+                    {t('settings.fullscreen')}
                   </Button>
+                </ButtonGroup>
+              </Field>
+
+              <Field>
+                <Label>{t('settings.language')}</Label>
+                <ButtonGroup>
+                  {UI_LANGUAGES.map((option, slot) => (
+                    <Button
+                      key={option.value}
+                      variant={uiLanguage === option.value ? 'default' : 'outline'}
+                      className={getFocusClassName(NAV.general.language, slot)}
+                      onClick={() => mutate({ ui_language: option.value })}
+                    >
+                      {t(option.labelKey)}
+                    </Button>
+                  ))}
                 </ButtonGroup>
               </Field>
 
@@ -299,6 +324,7 @@ export const SettingsPage = () => {
                   lyricsHorizontalPosition={lyricsHorizontal}
                   lyricsScale={lyricsScale}
                   pitchGraphScale={pitchGraphScale}
+                  pitchDisplay={playback.pitchDisplay}
                 />
               </div>
 
@@ -310,22 +336,22 @@ export const SettingsPage = () => {
                 />
 
                 <Field>
-                  <Label htmlFor="playback-mode-1">Playback mode</Label>
-                  <Hint>Choose whether playback replaces the menu or runs beside it</Hint>
+                  <Label htmlFor="playback-mode-1">{t('settings.playbackMode')}</Label>
+                  <Hint>{t('settings.playbackModeHint')}</Hint>
                   <SettingsSelect
                     id="playback-mode-1"
-                    label="Playback mode"
-                    placeholder="Select playback mode"
+                    label={t('settings.playbackMode')}
+                    placeholder={t('settings.playbackModePlaceholder')}
                     value={playback.mode}
-                    options={PLAYBACK_MODES}
+                    options={localizeOptions(t, PLAYBACK_MODES)}
                     triggerClassName={getFocusClassName(NAV.playback.mode)}
                     onValueChange={(playback_mode) => mutate({ playback_mode })}
                   />
                 </Field>
 
                 <Field>
-                  <Label>Master volume</Label>
-                  <Hint>Overall playback volume ({masterVolumePct}%)</Hint>
+                  <Label>{t('settings.masterVolume')}</Label>
+                  <Hint>{t('settings.masterVolumeHint', { value: masterVolumePct })}</Hint>
                   <Slider
                     min={0}
                     max={100}
@@ -337,14 +363,14 @@ export const SettingsPage = () => {
                 </Field>
 
                 <Field>
-                  <Label htmlFor="lyrics-vertical-position-1">Lyrics vertical position</Label>
-                  <Hint>Top moves playback HUD and pitch meter to the bottom</Hint>
+                  <Label htmlFor="lyrics-vertical-position-1">{t('settings.lyricsVertical')}</Label>
+                  <Hint>{t('settings.lyricsVerticalHint')}</Hint>
                   <SettingsSelect
                     id="lyrics-vertical-position-1"
-                    label="Lyrics vertical position"
-                    placeholder="Select vertical position"
+                    label={t('settings.lyricsVertical')}
+                    placeholder={t('settings.selectPosition')}
                     value={lyricsVertical}
-                    options={LYRICS_VERTICAL_POSITIONS}
+                    options={localizeOptions(t, LYRICS_VERTICAL_POSITIONS)}
                     triggerClassName={getFocusClassName(NAV.playback.lyricsVerticalPosition)}
                     onValueChange={(lyrics_vertical_position) => {
                       setLyricsVertical(lyrics_vertical_position);
@@ -354,14 +380,16 @@ export const SettingsPage = () => {
                 </Field>
 
                 <Field>
-                  <Label htmlFor="lyrics-horizontal-position-1">Lyrics horizontal position</Label>
-                  <Hint>Align lyrics left, center, or right during playback</Hint>
+                  <Label htmlFor="lyrics-horizontal-position-1">
+                    {t('settings.lyricsHorizontal')}
+                  </Label>
+                  <Hint>{t('settings.lyricsHorizontalHint')}</Hint>
                   <SettingsSelect
                     id="lyrics-horizontal-position-1"
-                    label="Lyrics horizontal position"
-                    placeholder="Select horizontal position"
+                    label={t('settings.lyricsHorizontal')}
+                    placeholder={t('settings.selectPosition')}
                     value={lyricsHorizontal}
-                    options={LYRICS_HORIZONTAL_POSITIONS}
+                    options={localizeOptions(t, LYRICS_HORIZONTAL_POSITIONS)}
                     triggerClassName={getFocusClassName(NAV.playback.lyricsHorizontalPosition)}
                     onValueChange={(lyrics_horizontal_position) => {
                       setLyricsHorizontal(lyrics_horizontal_position);
@@ -371,8 +399,8 @@ export const SettingsPage = () => {
                 </Field>
 
                 <Field>
-                  <Label>Lyrics scale</Label>
-                  <Hint>Size of lyrics during playback ({lyricsScalePct}%)</Hint>
+                  <Label>{t('settings.lyricsScale')}</Label>
+                  <Hint>{t('settings.lyricsScaleHint', { value: lyricsScalePct })}</Hint>
                   <Slider
                     min={PLAYBACK_SCALE_MIN * 100}
                     max={PLAYBACK_SCALE_MAX * 100}
@@ -384,8 +412,25 @@ export const SettingsPage = () => {
                 </Field>
 
                 <Field>
-                  <Label>Pitch meter scale</Label>
-                  <Hint>Size of the calm pitch meter during playback ({pitchGraphScalePct}%)</Hint>
+                  <Label>{t('settings.pitchDisplay')}</Label>
+                  <Hint>{t('settings.pitchDisplayHint')}</Hint>
+                  <ButtonGroup>
+                    {localizeOptions(t, PITCH_DISPLAYS).map((option, slot) => (
+                      <Button
+                        key={option.value}
+                        variant={playback.pitchDisplay === option.value ? 'default' : 'outline'}
+                        className={getFocusClassName(NAV.playback.pitchDisplay, slot)}
+                        onClick={() => mutate({ pitch_display: option.value })}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </ButtonGroup>
+                </Field>
+
+                <Field>
+                  <Label>{t('settings.pitchScale')}</Label>
+                  <Hint>{t('settings.pitchScaleHint', { value: pitchGraphScalePct })}</Hint>
                   <Slider
                     min={PLAYBACK_SCALE_MIN * 100}
                     max={PLAYBACK_SCALE_MAX * 100}
@@ -396,10 +441,10 @@ export const SettingsPage = () => {
                   />
                 </Field>
                 <Field>
-                  <Label>Romanized lyrics</Label>
-                  <Hint>Show readings for Chinese, Japanese and Korean lyrics</Hint>
+                  <Label>{t('settings.romanization')}</Label>
+                  <Hint>{t('settings.romanizationHint')}</Hint>
                   <ButtonGroup>
-                    {LYRICS_ROMANIZATION_MODES.map((option, slot) => (
+                    {localizeOptions(t, LYRICS_ROMANIZATION_MODES).map((option, slot) => (
                       <Button
                         key={option.value}
                         variant={
@@ -420,61 +465,57 @@ export const SettingsPage = () => {
           <TabsContent value="analysis" className="mt-4">
             <FieldGroup>
               <Field>
-                <Label htmlFor="separator-1">Vocal separator</Label>
-                <Hint>How vocals are split from the music.</Hint>
+                <Label htmlFor="separator-1">{t('settings.separator')}</Label>
+                <Hint>{t('settings.separatorHint')}</Hint>
                 <SettingsSelect
                   id="separator-1"
-                  label="Separator"
-                  placeholder="Select a separator"
+                  label={t('settings.separator')}
+                  placeholder={t('settings.separatorPlaceholder')}
                   value={analysis.separator}
-                  options={SEPARATORS}
+                  options={localizeOptions(t, SEPARATORS)}
                   triggerClassName={getFocusClassName(analysisNav.separator)}
                   onValueChange={(separator) => mutate({ separator })}
                 />
               </Field>
 
               <Field>
-                <Label htmlFor="align-backend-1">Alignment model</Label>
-                <Hint>Used only when aligning plain lyrics you provide manually.</Hint>
+                <Label htmlFor="align-backend-1">{t('settings.alignment')}</Label>
+                <Hint>{t('settings.alignmentHint')}</Hint>
                 <SettingsSelect
                   id="align-backend-1"
-                  label="Forced alignment"
-                  placeholder="Select an alignment backend"
+                  label={t('settings.alignment')}
+                  placeholder={t('settings.alignmentPlaceholder')}
                   value={analysis.alignBackend}
-                  options={ALIGN_BACKENDS}
+                  options={localizeOptions(t, ALIGN_BACKENDS)}
                   triggerClassName={getFocusClassName(analysisNav.alignBackend)}
                   onValueChange={(align_backend) => mutate({ align_backend })}
                 />
               </Field>
 
               <Field>
-                <Label>Auto-analyze</Label>
-                <Hint>Automatically queue every unanalyzed song after scans finish</Hint>
+                <Label>{t('settings.autoAnalyze')}</Label>
+                <Hint>{t('settings.autoAnalyzeHint')}</Hint>
                 <ButtonGroup>
                   <Button
                     variant={analysis.autoAnalyze ? 'outline' : 'default'}
                     onClick={() => mutate({ auto_analyze: false })}
                     className={getFocusClassName(analysisNav.autoAnalyze, 0)}
                   >
-                    Off
+                    {t('common.off')}
                   </Button>
                   <Button
                     variant={analysis.autoAnalyze ? 'default' : 'outline'}
                     onClick={() => mutate({ auto_analyze: true })}
                     className={getFocusClassName(analysisNav.autoAnalyze, 1)}
                   >
-                    On
+                    {t('common.on')}
                   </Button>
                 </ButtonGroup>
               </Field>
 
               <Field>
-                <Label>Vocal detection sensitivity</Label>
-                <Hint>
-                  How loud the vocals must be to count as the song's start and end. Lower it if
-                  quiet intros, outros, or soft singing get cut off; raise it to trim more silence (
-                  {vocalThresholdDisplayPct}% of the loudest moment)
-                </Hint>
+                <Label>{t('settings.vocalThreshold')}</Label>
+                <Hint>{t('settings.vocalThresholdHint', { value: vocalThresholdDisplayPct })}</Hint>
                 <Slider
                   min={0}
                   max={Math.round(VOCAL_THRESHOLD_MAX * 100)}
@@ -494,14 +535,14 @@ export const SettingsPage = () => {
             onClick={resetDefaults}
             className={`min-h-11 text-base ${getFocusClassName(footerSegment, 0)}`}
           >
-            Restore Defaults
+            {t('settings.restoreDefaults')}
           </Button>
           <Button
             variant="outline"
             onClick={close}
             className={`min-h-11 text-base ${getFocusClassName(footerSegment, 1)}`}
           >
-            Close
+            {t('common.close')}
           </Button>
         </div>
       </div>

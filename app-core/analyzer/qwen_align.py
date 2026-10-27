@@ -193,6 +193,67 @@ def qwen_align(raw_segments, audio, language: str, device: str) -> dict:
     return {"segments": aligned_segments, "word_segments": word_segments}
 
 
+class _TorchChunkAligner:
+    max_sequence = None
+
+    def __init__(self, device: str):
+        from transformers import AutoModelForTokenClassification, AutoProcessor
+
+        self._held = gpu_model(f"qwen-aligner:{device}")
+        held = self._held.__enter__()
+        self.processor = AutoProcessor.from_pretrained(QWEN_MODEL_ID)
+        self.model = AutoModelForTokenClassification.from_pretrained(
+            QWEN_MODEL_ID, dtype=_pick_dtype(device),
+        ).to(device).eval()
+        held.append(self.model)
+
+    def fits(self, seconds: float, text: str, language: str) -> bool:
+        return True
+
+    def align(self, audio: np.ndarray, text: str, language: str) -> list[dict]:
+        inputs, word_lists = self.processor.prepare_forced_aligner_inputs(
+            audio=[audio], transcript=[text], language=language,
+        )
+        inputs = inputs.to(self.model.device, self.model.dtype)
+        with torch.inference_mode():
+            logits = self.model(**inputs).logits
+        return self.processor.decode_forced_alignment(
+            logits=logits,
+            input_ids=inputs["input_ids"],
+            word_lists=word_lists,
+            timestamp_token_id=self.model.config.timestamp_token_id,
+        )[0]
+
+    def close(self) -> None:
+        self.model = None
+        self._held.__exit__(None, None, None)
+
+
+def open_chunk_aligner(language: str):
+    """Aligner for repeated ``align(audio, text, language)`` calls on one song.
+
+    Uses the RK3588 NPU bundle when it is installed, otherwise the transformers
+    model on the best available device. Returns tokens with chunk-relative
+    ``start_time``/``end_time`` seconds.
+    """
+    if language not in SUPPORTED_LANGS:
+        raise QwenUnsupportedError(f"language '{language}' not supported by qwen aligner")
+    import qwen_rknn
+
+    torch_home = os.environ.get("TORCH_HOME", "")
+    models_dir = os.path.dirname(torch_home) if torch_home else ""
+    try:
+        manifest = qwen_rknn.resolve_bundle(models_dir)
+        aligner = qwen_rknn.SplitAligner(manifest)
+        print("[nightingale:LOG] Qwen forced aligner on RK3588 NPU", flush=True)
+        return aligner
+    except qwen_rknn.AlignerUnavailable as e:
+        print(f"[nightingale:LOG] Qwen NPU aligner unavailable ({e}); using transformers", flush=True)
+    device = detect_device()
+    print(f"[nightingale:LOG] Loading Qwen forced aligner on {device}", flush=True)
+    return _TorchChunkAligner(device)
+
+
 def qwen_align_with_cpu_fallback(raw_segments, audio, language: str, pre_align_cleanup=None) -> dict:
     """Run :func:`qwen_align` on the best available device, retrying on CPU if the
     accelerator runs out of memory.

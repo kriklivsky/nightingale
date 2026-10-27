@@ -301,6 +301,7 @@ run_as_tvbox() {
         NIGHTINGALE_RKNN_PARALLEL_CORES=1 \
         OMP_NUM_THREADS=1 \
         GDK_SCALE="${display_scale}" \
+        GST_PLUGIN_PATH=/usr/local/lib/aarch64-linux-gnu/gstreamer-1.0 \
         TVBOX_STATUS="${TVBOX_STATUS:-}" \
         "$@" &
     child_pid="$!"

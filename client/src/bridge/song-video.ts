@@ -21,6 +21,12 @@ export type SongVideo = z.infer<typeof songVideoSchema>;
 export type VideoCandidate = z.infer<typeof candidateSchema>;
 export const videoTokenRequired = !isTauri;
 
+export async function listSongVideoHashes(): Promise<string[]> {
+  return z
+    .array(z.string().regex(/^[A-Fa-f0-9]{32}$/))
+    .parse(await invoke('list_song_video_hashes'));
+}
+
 export async function getSongVideo(fileHash: string): Promise<SongVideo | null> {
   return songVideoSchema.nullable().parse(await invoke('get_song_video', { fileHash }));
 }

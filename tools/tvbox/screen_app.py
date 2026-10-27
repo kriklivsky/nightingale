@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import os
@@ -30,11 +31,12 @@ LOGGER = logging.getLogger("tvbox-screen")
 
 
 class ScreenApplication:
-    def __init__(self, config: dict, settings: dict) -> None:
+    def __init__(self, config: dict, settings: dict, microphones_disabled: bool = False) -> None:
         self.config = config
         self.stopped = threading.Event()
         self.commands = queue.SimpleQueue()
         self.generation = -1
+        self.monitoring_revision = 0
         self.window = Gtk.Window(title="Экран ноутбука")
         self.window.set_default_size(1920, 1080)
         self.window.connect("destroy", Gtk.main_quit)
@@ -42,7 +44,8 @@ class ScreenApplication:
         self.status = Gtk.Label(label="Ожидаем подключения")
         self.microphone_status = Gtk.Label()
         self.receiver = Receiver(self.show_video, self.report)
-        self.monitor = MicrophoneMonitor(settings, self.microphone_status.set_text)
+        self.monitor = MicrophoneMonitor(settings, self.microphone_status.set_text, self.audio_changed,
+                                         disabled=microphones_disabled)
         self.welcome = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24)
         self.welcome.set_halign(Gtk.Align.CENTER)
         self.welcome.set_valign(Gtk.Align.CENTER)
@@ -69,12 +72,13 @@ class ScreenApplication:
         footer.pack_start(self.microphone_status, False, False, 0)
         self.disconnect_button = Gtk.Button(label="Завершить трансляцию")
         self.disconnect_button.set_sensitive(False)
-        self.disconnect_button.connect("clicked", lambda _button: self.commands.put("disconnect"))
-        microphone_button = Gtk.Button(label="Микрофоны вкл/выкл")
-        microphone_button.connect("clicked", lambda _button: self.monitor.toggle())
+        self.disconnect_button.connect("clicked", lambda _button: self.commands.put(("disconnect", {})))
+        self.microphone_button = Gtk.Button()
+        self.microphone_button.set_sensitive(not microphones_disabled)
+        self.microphone_button.connect("clicked", self.toggle_monitoring)
         exit_button = Gtk.Button(label="В лаунчер · Назад")
         exit_button.connect("clicked", lambda _button: self.window.destroy())
-        self.buttons = [self.disconnect_button, microphone_button, exit_button]
+        self.buttons = [self.disconnect_button, self.microphone_button, exit_button]
         for button in self.buttons:
             footer.pack_start(button, False, False, 0)
         layout = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -90,8 +94,21 @@ class ScreenApplication:
         self.fit_attempts = 0
         GLib.timeout_add(250, self.fit_window)
         self.monitor.start()
+        self.audio_worker = threading.Thread(target=lambda: asyncio.run(self.monitor.publish(config, self.stopped)), daemon=True)
+        self.audio_worker.start()
         self.worker = threading.Thread(target=self.signaling, daemon=True)
         self.worker.start()
+
+    def audio_changed(self) -> None:
+        self.microphone_button.set_label("Мониторинг: " + ("вкл" if self.monitor.enabled else "выкл"))
+        self.commands.put(("audio", {"monitoring": self.monitor.enabled,
+                                   "available": self.monitor.available,
+                                   "revision": self.monitoring_revision}))
+
+    def toggle_monitoring(self, _button) -> None:
+        self.monitor.toggle()
+        self.commands.put(("audio", {"monitoring": self.monitor.enabled,
+                                   "available": self.monitor.available, "revision": None}))
 
     def key_pressed(self, _window, event) -> bool:
         if event.keyval == Gdk.KEY_Escape:
@@ -153,9 +170,9 @@ class ScreenApplication:
     def signaling(self) -> None:
         while not self.stopped.is_set():
             try:
-                if not self.commands.empty():
-                    self.commands.get_nowait()
-                    self.request("disconnect", {})
+                while not self.commands.empty():
+                    path, body = self.commands.get_nowait()
+                    self.request(path, body)
                 while not self.receiver.answers.empty():
                     generation, sdp = self.receiver.answers.get_nowait()
                     self.request("answer", {"generation": generation, "sdp": sdp})
@@ -175,12 +192,22 @@ class ScreenApplication:
             return False
         if self.generation != generation:
             self.generation = generation
+            self.monitor.generation = generation
+            self.monitor.set_transmitting(False)
             self.receiver.stop()
             self.welcome.show_all()
             self.report("Ожидаем подключения")
         self.code.set_text(code[:3] + " " + code[3:])
         paired = state.get("paired") is True
         self.disconnect_button.set_sensitive(paired)
+        revision = state.get("monitoring_revision")
+        monitoring = state.get("monitoring")
+        if type(revision) is int and revision > self.monitoring_revision and isinstance(monitoring, bool):
+            self.monitoring_revision = revision
+            if self.monitor.enabled != monitoring:
+                self.monitor.enabled = monitoring
+                self.monitor.start()
+        self.monitor.set_transmitting(state.get("microphone_streaming") is True)
         offer = state.get("offer")
         if isinstance(offer, str) and self.receiver.generation != generation:
             self.receiver.accept(offer, generation)
@@ -189,8 +216,10 @@ class ScreenApplication:
 
     def close(self) -> None:
         self.stopped.set()
-        self.worker.join(timeout=6)
+        self.monitor.transmitting = False
         self.monitor.stop()
+        self.worker.join(timeout=6)
+        self.audio_worker.join(timeout=3)
         self.receiver.stop()
 
 
@@ -203,8 +232,6 @@ def main() -> None:
     settings = json.loads(settings_path.read_text()) if settings_path.is_file() else {}
     if not isinstance(settings, dict):
         raise ValueError("Screen receiver settings must be a JSON object")
-    if args.no_microphones:
-        settings["microphone_monitoring"] = False
     runtime = Path(os.environ["XDG_RUNTIME_DIR"]) / "tvbox-screen/receiver.json"
     if runtime.exists():
         raise RuntimeError("Screen receiver is already running or its runtime requires cleanup")
@@ -219,7 +246,7 @@ def main() -> None:
                 raise RuntimeError("HTTPS screen service failed to start")
             time.sleep(0.1)
         config = json.loads(runtime.read_text())
-        application = ScreenApplication(config, settings)
+        application = ScreenApplication(config, settings, microphones_disabled=args.no_microphones)
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda: (Gtk.main_quit(), False)[1])
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, lambda: (Gtk.main_quit(), False)[1])
         Gtk.main()

@@ -17,7 +17,7 @@ import ssl
 import time
 from urllib.parse import urlsplit
 
-from aiohttp import web
+from aiohttp import WSMsgType, web
 
 
 LOGGER = logging.getLogger("tvbox-screen")
@@ -37,8 +37,23 @@ class Session:
     sender_seen: float = 0
     attempts: dict[str, deque[float]] = field(default_factory=lambda: defaultdict(deque))
     all_attempts: deque[float] = field(default_factory=deque)
+    monitoring: bool | None = None
+    monitoring_revision: int = 0
+    microphone_available: bool = False
+    microphone_token: str | None = None
+    microphone_queue: asyncio.Queue[bytes | None] | None = None
+    microphone_source: web.WebSocketResponse | None = None
+
+    def stop_microphones(self) -> None:
+        self.microphone_token = None
+        if self.microphone_queue is not None:
+            while not self.microphone_queue.empty():
+                self.microphone_queue.get_nowait()
+            self.microphone_queue.put_nowait(None)
+            self.microphone_queue = None
 
     def reset(self) -> None:
+        self.stop_microphones()
         self.code = f"{secrets.randbelow(1_000_000):06d}"
         self.sender_token = None
         self.offer = None
@@ -158,7 +173,94 @@ def create_apps(args: argparse.Namespace, session: Session) -> tuple[web.Applica
         session.expire()
         authorize(request, session.sender_token)
         session.sender_seen = time.monotonic()
-        return web.json_response({"generation": session.generation, "answer": session.answer})
+        return web.json_response({
+            "generation": session.generation, "answer": session.answer,
+            "monitoring": session.monitoring,
+            "microphone_available": session.microphone_available,
+            "microphone_streaming": session.microphone_queue is not None,
+        })
+
+    async def monitoring(request: web.Request) -> web.Response:
+        session.expire()
+        authorize(request, session.sender_token)
+        value = await object_body(request)
+        if type(value.get("enabled")) is not bool:
+            raise web.HTTPBadRequest(text="Expected enabled boolean")
+        session.monitoring = value["enabled"]
+        session.monitoring_revision += 1
+        return web.json_response({"ok": True})
+
+    async def microphone_access(request: web.Request) -> web.Response:
+        session.expire()
+        authorize(request, session.sender_token)
+        value = await object_body(request)
+        if type(value.get("enabled")) is not bool:
+            raise web.HTTPBadRequest(text="Expected enabled boolean")
+        session.stop_microphones()
+        if value["enabled"]:
+            if not session.microphone_available:
+                raise web.HTTPConflict(text="UMC202HD is unavailable on the TV receiver")
+            session.microphone_token = secrets.token_urlsafe(32)
+        return web.json_response({"token": session.microphone_token})
+
+    async def microphone_audio(request: web.Request) -> web.StreamResponse:
+        session.expire()
+        authorize(request, session.microphone_token)
+        if session.microphone_queue is not None:
+            raise web.HTTPConflict(text="Microphones already have a consumer")
+        frames: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=4)
+        session.microphone_queue = frames
+        response = web.StreamResponse(headers={
+            "Content-Type": "application/octet-stream",
+            "X-Audio-Format": "S16LE;rate=48000;channels=2;layout=interleaved",
+            "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "X-Accel-Buffering": "no",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+        })
+        try:
+            await response.prepare(request)
+            while True:
+                try:
+                    frame = await asyncio.wait_for(frames.get(), timeout=5)
+                except TimeoutError:
+                    break
+                if frame is None:
+                    break
+                await asyncio.wait_for(response.write(frame), timeout=2)
+        except (ConnectionError, TimeoutError):
+            pass
+        finally:
+            if session.microphone_queue is frames:
+                session.microphone_queue = None
+        return response
+
+    async def microphone_source(request: web.Request) -> web.WebSocketResponse:
+        authorize(request, session.receiver_token)
+        generation = session.generation
+        if request.query.get("generation") != str(generation):
+            raise web.HTTPConflict(text="Microphone session changed")
+        if session.microphone_source is not None:
+            raise web.HTTPConflict(text="Microphone producer already connected")
+        socket = web.WebSocketResponse(max_msg_size=8192, heartbeat=5)
+        await socket.prepare(request)
+        session.microphone_source = socket
+        try:
+            async for message in socket:
+                if generation != session.generation:
+                    await socket.close(code=1008, message=b"Microphone session changed")
+                    break
+                if message.type != WSMsgType.BINARY or not message.data or len(message.data) % 4:
+                    await socket.close(code=1003, message=b"Expected stereo S16LE PCM")
+                    break
+                frames = session.microphone_queue
+                if frames is not None:
+                    if frames.full():
+                        frames.get_nowait()
+                    frames.put_nowait(message.data)
+        finally:
+            session.microphone_source = None
+        return socket
 
     async def offer(request: web.Request) -> web.Response:
         session.expire()
@@ -184,7 +286,24 @@ def create_apps(args: argparse.Namespace, session: Session) -> tuple[web.Applica
             "generation": session.generation,
             "paired": session.sender_token is not None,
             "offer": session.offer,
+            "monitoring": session.monitoring,
+            "monitoring_revision": session.monitoring_revision,
+            "microphone_streaming": session.microphone_queue is not None,
         })
+
+    async def receiver_audio(request: web.Request) -> web.Response:
+        authorize(request, session.receiver_token)
+        value = await object_body(request)
+        if type(value.get("monitoring")) is not bool or type(value.get("available")) is not bool:
+            raise web.HTTPBadRequest(text="Expected audio state booleans")
+        revision = value.get("revision")
+        if revision is not None and (type(revision) is not int or revision < 0):
+            raise web.HTTPBadRequest(text="Invalid audio revision")
+        if revision is None or revision == session.monitoring_revision:
+            session.monitoring = value["monitoring"]
+            session.monitoring_revision += 1
+        session.microphone_available = value["available"]
+        return web.json_response({"ok": True})
 
     async def answer(request: web.Request) -> web.Response:
         authorize(request, session.receiver_token)
@@ -204,18 +323,28 @@ def create_apps(args: argparse.Namespace, session: Session) -> tuple[web.Applica
         return web.FileResponse(args.assets / "index.html")
 
     async def certificate(_request: web.Request) -> web.FileResponse:
-        return web.FileResponse(args.certificate, headers={"Content-Disposition": 'attachment; filename="orangepi-screen.crt"'})
+        return web.FileResponse(args.trust_certificate or args.certificate, headers={"Content-Disposition": 'attachment; filename="orangepi-screen.crt"'})
+
+    async def microphone_client(_request: web.Request) -> web.FileResponse:
+        return web.FileResponse(Path(__file__).with_name("microphone_client.py"),
+                                headers={"Content-Disposition": 'attachment; filename="microphone_client.py"'})
 
     sender.router.add_get("/", index)
     sender.router.add_get("/certificate", certificate)
+    sender.router.add_get("/microphone-client.py", microphone_client)
     sender.router.add_static("/assets/", args.assets / "assets", follow_symlinks=False)
     sender.router.add_post("/api/pair", pair)
     sender.router.add_get("/api/state", sender_state)
     sender.router.add_post("/api/offer", offer)
     sender.router.add_post("/api/disconnect", disconnect_sender)
+    sender.router.add_post("/api/monitoring", monitoring)
+    sender.router.add_post("/api/microphone-access", microphone_access)
+    sender.router.add_get("/api/microphone-audio", microphone_audio)
     receiver.router.add_get("/api/state", receiver_state)
     receiver.router.add_post("/api/answer", answer)
     receiver.router.add_post("/api/disconnect", disconnect_receiver)
+    receiver.router.add_post("/api/audio", receiver_audio)
+    receiver.router.add_get("/api/microphone-source", microphone_source)
     receiver.router.add_route("OPTIONS", "/api/{name}", receiver_state)
     return sender, receiver
 
@@ -229,7 +358,7 @@ async def run(args: argparse.Namespace) -> None:
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     tls.minimum_version = ssl.TLSVersion.TLSv1_2
     tls.load_cert_chain(args.certificate, args.private_key)
-    pem = args.certificate.read_text(encoding="ascii")
+    pem = (args.trust_certificate or args.certificate).read_text(encoding="ascii")
     fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest().upper()
     runners = [web.AppRunner(sender, access_log=None), web.AppRunner(receiver, access_log=None)]
     runtime_written = False
@@ -262,7 +391,7 @@ async def run(args: argparse.Namespace) -> None:
             try:
                 await asyncio.wait_for(stopped.wait(), timeout=2)
             except TimeoutError:
-                continue
+                session.expire()
     finally:
         if runtime_written:
             args.runtime.unlink(missing_ok=True)
@@ -277,6 +406,7 @@ def main() -> None:
     parser.add_argument("--receiver-port", type=int, default=8092)
     parser.add_argument("--public-url", required=True)
     parser.add_argument("--certificate", type=Path, required=True)
+    parser.add_argument("--trust-certificate", type=Path)
     parser.add_argument("--private-key", type=Path, required=True)
     parser.add_argument("--assets", type=Path, required=True)
     parser.add_argument("--runtime", type=Path, required=True)

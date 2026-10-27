@@ -1,13 +1,13 @@
 import { Spinner } from '@/shared/components/ui/spinner';
 
-import { GENERIC_DESCRIPTION, type ViewParts } from '../parts';
+import type { ViewCtx, ViewParts } from '../parts';
 
-export const installingView = (): ViewParts => ({
-  description: GENERIC_DESCRIPTION,
+export const installingView = ({ ctx }: { ctx: ViewCtx }): ViewParts => ({
+  description: ctx.t('update.description'),
   body: (
     <p className="flex items-center gap-2 text-xs text-muted-foreground">
       <Spinner className="size-4" />
-      <span>Installing update… The app will restart shortly.</span>
+      <span>{ctx.t('update.installing')}</span>
     </p>
   ),
   footer: null,

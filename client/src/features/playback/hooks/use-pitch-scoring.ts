@@ -28,10 +28,18 @@ export type PitchScoringSource = {
   singableDuration: number;
   getReferenceBuffer: () => AudioBuffer | null;
   subscribe: (fn: TimeSubscriber) => () => void;
+  onRestart: (fn: () => void) => () => void;
 };
 
 export function usePitchScoring(
-  { isReady, duration, singableDuration, getReferenceBuffer, subscribe }: PitchScoringSource,
+  {
+    isReady,
+    duration,
+    singableDuration,
+    getReferenceBuffer,
+    subscribe,
+    onRestart,
+  }: PitchScoringSource,
   micPitch: number | null,
   latencyCompensationSec = DEFAULT_MIC_LATENCY_COMPENSATION_SEC,
 ) {
@@ -51,21 +59,25 @@ export function usePitchScoring(
     refPitches: [],
     userPitches: [],
     similarities: [],
+    times: [],
   });
   const [score, setScore] = useState(0);
 
   useEffect(() => {
     if (!isReady || duration <= 0) {
-      return;
+      return undefined;
     }
-    bufferRef.current.reset();
-    reportRef.current.reset();
+    const reset = () => {
+      bufferRef.current.reset();
+      reportRef.current.reset();
+      scoringRef.current = new PitchScoring(singableDuration);
+      setSeries(bufferRef.current.snapshot());
+      setScore(0);
+    };
 
-    scoringRef.current = new PitchScoring(singableDuration);
-
-    setSeries(bufferRef.current.snapshot());
-    setScore(0);
-  }, [isReady, duration, singableDuration]);
+    reset();
+    return onRestart(reset);
+  }, [isReady, duration, singableDuration, onRestart]);
 
   useEffect(() => {
     if (!isReady) {

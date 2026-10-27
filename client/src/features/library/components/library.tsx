@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PlaybackQueueEntry } from '@/bridge/playback-queue';
 import { canDeleteLocalFiles } from '@/bridge/songs';
 import { useFavoriteHashes, useSetSongFavorite } from '@/features/library/hooks/use-favorites';
+import { TOOLBAR_ACTION } from '@/features/library/lib/toolbar-actions';
 import { useAnalysisQueue, useSongs } from '@/features/library/queries/use-songs';
 import { useDialog } from '@/features/menu/hooks/use-dialog';
 import { useLibraryFilter } from '@/features/menu/hooks/use-library-filter';
@@ -17,6 +18,8 @@ import { useConfig } from '@/shared/config/use-config';
 import { useConfigMutation } from '@/shared/config/use-config-mutation';
 import { useLatestRef } from '@/shared/hooks/use-latest-ref';
 import { usePersistentScroll } from '@/shared/hooks/use-persistent-scroll';
+import type { MessageKey } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 import type { AppConfig } from '@/types/AppConfig';
 import type { QueuedStatus } from '@/types/QueuedStatus';
@@ -54,24 +57,28 @@ const nextSongSort = (sorts: readonly SongSort[], column: SongSortColumn): SongS
 };
 
 function SongLoadError({ retrying, onRetry }: { retrying: boolean; onRetry: () => void }) {
+  const { t } = useI18n();
   const { focus } = useMenuFocus();
   const focused =
-    focus.active && focus.panel === 'songList' && focus.actionsFocused && focus.actionsIndex === 8;
+    focus.active &&
+    focus.panel === 'songList' &&
+    focus.actionsFocused &&
+    focus.actionsIndex === TOOLBAR_ACTION.retry;
 
   return (
     <div
       role="alert"
       className="flex items-center justify-between gap-3 rounded-lg border border-destructive p-3"
     >
-      <p>Could not load songs. Try again.</p>
+      <p>{t('library.loadFailed')}</p>
       <Button
         variant="outline"
-        data-actions-index="8"
+        data-actions-index={TOOLBAR_ACTION.retry}
         className={cn(focused && 'ring-2 ring-primary')}
         onClick={onRetry}
         disabled={retrying}
       >
-        Retry
+        {t('common.retry')}
       </Button>
     </div>
   );
@@ -115,26 +122,29 @@ function SongSidePanel({
 const songListPaneClass = (song: Song | null, queueOpen: boolean): string =>
   song || queueOpen ? 'hidden xl:flex' : 'flex';
 
+function remoteGuideKey(focus: MenuFocus): MessageKey {
+  if (focus.panel === 'sidebar') {
+    return 'library.remote.sidebar';
+  }
+  if (focus.panel === 'songDetails') {
+    return 'library.remote.details';
+  }
+  if (focus.actionsFocused) {
+    return 'library.remote.toolbar';
+  }
+  return focus.songActionIndex === null ? 'library.remote.songs' : 'library.remote.songActions';
+}
+
 function RemoteNavigationGuide({ focus }: { focus: MenuFocus }) {
+  const { t } = useI18n();
   if (!focus.active || focus.source !== 'nav') {
     return null;
   }
 
-  let instructions = '↑↓ Songs · → Song actions · OK Details · ← Library';
-  if (focus.panel === 'sidebar') {
-    instructions = '↑↓ Browse library · ←→ Sections and panels · OK Select';
-  } else if (focus.panel === 'songDetails') {
-    instructions = '↑↓ Options · ←→ Adjust or move · OK Select · Back Songs';
-  } else if (focus.actionsFocused) {
-    instructions = '←→ Search, filters and tools · ↓ Songs · OK Select';
-  } else if (focus.songActionIndex !== null) {
-    instructions = '←→ Favorite, Play, Delete · ↑↓ Songs · OK Select';
-  }
-
   return (
-    <div className="shrink-0 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
-      <span className="mr-2 font-semibold text-foreground">Remote</span>
-      {instructions}
+    <div className="shrink-0 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
+      <span className="mr-2 font-semibold text-foreground">{t('library.remote.title')}</span>
+      {t(remoteGuideKey(focus))}
     </div>
   );
 }

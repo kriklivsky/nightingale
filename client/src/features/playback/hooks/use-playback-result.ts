@@ -20,6 +20,7 @@ import {
 } from '@/features/playback/providers';
 import { useProfiles } from '@/features/profiles/queries/use-profiles';
 import { useLatestRef } from '@/shared/hooks/use-latest-ref';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { defaultPlayerColor, type PlayerColor } from '@/shared/player-colors';
 import { PROFILES } from '@/shared/query-keys';
 import type { ProfileStore } from '@/types/ProfileStore';
@@ -33,6 +34,8 @@ export type PlaybackPlayerResult = {
   color: PlayerColor;
   score: number;
   report: PitchReport | null;
+  /** True when this saved score beats the profile's earlier best for the song. */
+  personalBest: boolean;
 };
 
 type FinalResultsInput = {
@@ -53,6 +56,7 @@ function buildFinalResults(input: FinalResultsInput): PlaybackPlayerResult[] {
         color: defaultPlayerColor(0),
         score: input.soloScore,
         report: input.soloReport,
+        personalBest: false,
       },
     ];
   }
@@ -62,7 +66,22 @@ function buildFinalResults(input: FinalResultsInput): PlaybackPlayerResult[] {
     color: player.color,
     score: player.rawScore,
     report: player.getPitchReport(input.segments),
+    personalBest: false,
   }));
+}
+
+function previousBest(
+  scores: readonly ScoreRecord[],
+  profile: string,
+  songHash: string,
+): number | null {
+  let best: number | null = null;
+  for (const record of scores) {
+    if (record.profile === profile && record.song_hash === songHash) {
+      best = best === null ? record.score : Math.max(best, record.score);
+    }
+  }
+  return best;
 }
 
 function finishReady(
@@ -96,6 +115,7 @@ export function usePlaybackResult(
 ): PlaybackResult {
   const fileHash = song.file_hash;
   const queryClient = useQueryClient();
+  const { t } = useI18n();
   const { data: profileData = EMPTY_PROFILES, isLoading: profilesLoading } = useProfiles();
   const { data: entries = [] } = usePlaybackQueueQuery();
   const { isPreparing, playNext } = useStartNextPlaybackQueueSong(entries);
@@ -137,14 +157,27 @@ export function usePlaybackResult(
           }
           return [[result.profile, result.score] satisfies readonly [string, number]];
         });
+        for (const result of finalResults) {
+          const saved = savedScores.some(([profile]) => profile === result.profile);
+          const best =
+            result.profile === null
+              ? null
+              : previousBest(profileData.scores, result.profile, fileHash);
+          result.personalBest = saved && result.score > 0 && (best === null || result.score > best);
+        }
         if (savedScores.length > 0) {
           await addScores(fileHash, savedScores);
           await queryClient.invalidateQueries({ queryKey: PROFILES });
         }
       } catch (error) {
         toast.error(
-          `Could not save score: ${error instanceof Error ? error.message : String(error)}`,
+          t('playback.scoreSaveFailed', {
+            detail: error instanceof Error ? error.message : String(error),
+          }),
         );
+        for (const result of finalResults) {
+          result.personalBest = false;
+        }
       }
       setResults(finalResults.toSorted((left, right) => right.score - left.score));
       setShowResult(true);
@@ -158,11 +191,13 @@ export function usePlaybackResult(
     micPlayersRef,
     multiplayer,
     profileData.active,
+    profileData.scores,
     profilesLoading,
     queryClient,
     queuePlayback,
     scoreRef,
     skipOutroPending,
+    t,
   ]);
 
   useEffect(() => {

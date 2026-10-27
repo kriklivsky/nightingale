@@ -18,6 +18,7 @@ export type MicrophoneAdapter = {
     options: MicCaptureOptions,
   ): Promise<string>;
   stopCapture(captureId: string): Promise<void>;
+  updateCaptureOptions(captureId: string, options: MicCaptureOptions): Promise<void>;
   subscribe(captureId: string, cb: MicSamplesCallback): Promise<StopListening>;
 };
 

@@ -13,19 +13,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { PlaybackAdapter } from '@/bridge/playback';
 import { playbackAdapter } from '@/bridge/playback';
-import { analyzeReferenceDuration } from '@/features/playback/lib/pitch/reference-duration';
+import {
+  analyzeReference,
+  ReferenceAnalysisError,
+} from '@/features/playback/lib/pitch/reference-analysis';
+import type { ReferenceContour } from '@/features/playback/lib/pitch/state';
 
 export type TimeSubscriber = (time: number) => void;
+
+export type AudioPlayerError = { kind: 'reference' } | { kind: 'load'; detail: string };
 
 export type AudioPlayer = {
   getCurrentTime: () => number;
   subscribe: (fn: TimeSubscriber) => () => void;
   duration: number;
   singableDuration: number;
+  referenceContour: ReferenceContour | null;
   isReady: boolean;
   isPlaying: boolean;
   isFinished: boolean;
-  error: string | null;
+  error: AudioPlayerError | null;
   guideVolume: number;
   /** False for LRC-provided songs without stems: the original mix plays and
    * there is no separate guide vocal track to control. */
@@ -81,10 +88,11 @@ export function useAudioPlayer({
 
   const [duration, setDuration] = useState(0);
   const [singableDuration, setSingableDuration] = useState(0);
+  const [referenceContour, setReferenceContour] = useState<ReferenceContour | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<AudioPlayerError | null>(null);
   const [guideVolume, setGuideVolumeState] = useState(initialGuideVolume);
   const [guideAvailable, setGuideAvailable] = useState(true);
   const [outputVolume, setOutputVolumeState] = useState(initialOutputVolume);
@@ -279,7 +287,7 @@ export function useAudioPlayer({
           return undefined;
         }
 
-        const singable = await analyzeReferenceDuration(vocBuf ?? instBuf, loadingAbort.signal);
+        const reference = await analyzeReference(vocBuf ?? instBuf, loadingAbort.signal);
         if (isCancelled()) {
           return undefined;
         }
@@ -288,7 +296,8 @@ export function useAudioPlayer({
         vocalsBufRef.current = vocBuf;
 
         setDuration(instBuf.duration);
-        setSingableDuration(singable);
+        setSingableDuration(reference.singableSec);
+        setReferenceContour(reference.contour);
 
         startSources(0);
         setIsReady(true);
@@ -297,7 +306,11 @@ export function useAudioPlayer({
       })
       .catch((e: unknown) => {
         if (!isCancelled()) {
-          setError(`Failed to load audio: ${e instanceof Error ? e.message : String(e)}`);
+          setError(
+            e instanceof ReferenceAnalysisError
+              ? { kind: 'reference' }
+              : { kind: 'load', detail: e instanceof Error ? e.message : String(e) },
+          );
         }
       });
 
@@ -429,6 +442,7 @@ export function useAudioPlayer({
       subscribe,
       duration,
       singableDuration,
+      referenceContour,
       isReady,
       isPlaying,
       isFinished,
@@ -452,6 +466,7 @@ export function useAudioPlayer({
       subscribe,
       duration,
       singableDuration,
+      referenceContour,
       isReady,
       isPlaying,
       isFinished,

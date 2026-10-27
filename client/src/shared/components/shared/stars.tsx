@@ -2,6 +2,7 @@ import { StarHalfIcon, StarIcon } from 'lucide-react';
 
 import { halfStarUnits } from '@/features/playback/utils/result';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/shared/components/ui/tooltip';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 type Size = 'sm' | 'lg';
@@ -18,6 +19,7 @@ type Props = {
 };
 
 export const Stars = ({ score, size = 'lg', className }: Props) => {
+  const { t } = useI18n();
   const hs = halfStarUnits(score);
   const filled = Math.floor(hs / 2);
   const hasHalf = hs % 2 === 1;
@@ -28,7 +30,13 @@ export const Stars = ({ score, size = 'lg', className }: Props) => {
     <Tooltip>
       <TooltipTrigger asChild>
         <span className={cn('flex w-fit flex-row items-center gap-1', className)}>
-          <meter className="sr-only" aria-label="Score" min={0} max={1000} value={score} />
+          <meter
+            className="sr-only"
+            aria-label={t('result.score')}
+            min={0}
+            max={1000}
+            value={score}
+          />
           {Array.from({ length: filled }, (_, i) => (
             <StarIcon key={`f-${i}`} className={cn(ic, 'fill-primary text-primary')} />
           ))}
@@ -39,7 +47,7 @@ export const Stars = ({ score, size = 'lg', className }: Props) => {
         </span>
       </TooltipTrigger>
       <TooltipContent side="right" sideOffset={4}>
-        Score: {score}
+        {t('result.scoreValue', { score })}
       </TooltipContent>
     </Tooltip>
   );

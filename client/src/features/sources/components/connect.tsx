@@ -21,6 +21,7 @@ import { Field, FieldGroup } from '@/shared/components/ui/field';
 import { Input } from '@/shared/components/ui/input';
 import { Label } from '@/shared/components/ui/label';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/shared/components/ui/tooltip';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
 
 const normaliseUrl = (raw: string) => raw.trim().replace(/\/+$/, '');
@@ -137,6 +138,7 @@ export const RemoteSourceConnectDialog = <TLogin extends RemoteLoginResult>({
   connectMutation,
   selection,
 }: RemoteSourceConnectDialogProps<TLogin>) => {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const { mode, close } = useDialog();
   const open = mode === dialogMode;
@@ -186,7 +188,7 @@ export const RemoteSourceConnectDialog = <TLogin extends RemoteLoginResult>({
       return;
     }
     testMutation.mutate(credentials(), {
-      onError: (e) => toast.error(`Could not reach server: ${e.message}`),
+      onError: (e) => toast.error(t('source.unreachable', { detail: e.message })),
     });
   };
 
@@ -205,10 +207,12 @@ export const RemoteSourceConnectDialog = <TLogin extends RemoteLoginResult>({
       { ...credentials(), selectedIds },
       {
         onSuccess: ({ login }) => {
-          toast.success(`Library now reads from ${login.server_name ?? login.server_url}`);
+          toast.success(
+            t('source.connectedToast', { host: login.server_name ?? login.server_url }),
+          );
           close();
         },
-        onError: (e) => toast.error(`Login failed: ${e.message}`),
+        onError: (e) => toast.error(t('source.loginFailed', { detail: e.message })),
       },
     );
   };
@@ -226,23 +230,23 @@ export const RemoteSourceConnectDialog = <TLogin extends RemoteLoginResult>({
   } = (() => {
     if (testMutation.isPending) {
       return {
-        icon: <Loader2Icon className="size-4 animate-spin" />,
-        tooltip: 'Testing connection…',
+        icon: <Loader2Icon className="size-4 animate-spin motion-reduce:animate-none" />,
+        tooltip: t('source.testing'),
       };
     }
     if (testMutation.isError) {
       return {
         icon: <XCircleIcon className="size-4 text-destructive" />,
-        tooltip: `Could not reach server: ${testMutation.error.message}`,
+        tooltip: t('source.unreachable', { detail: testMutation.error.message }),
       };
     }
     if (testMutation.isSuccess && typeof reachedHost === 'string' && reachedHost !== '') {
       return {
         icon: <CheckCircle2Icon className="size-4 text-chart-3" />,
-        tooltip: `Reached: ${reachedHost}`,
+        tooltip: t('source.reached', { host: reachedHost }),
       };
     }
-    return { icon: null, tooltip: 'Test connection' };
+    return { icon: null, tooltip: t('source.test') };
   })();
 
   return (
@@ -256,7 +260,7 @@ export const RemoteSourceConnectDialog = <TLogin extends RemoteLoginResult>({
           <SourceChangeWarning />
           <FieldGroup>
             <Field>
-              <Label htmlFor={urlInputId}>Server URL</Label>
+              <Label htmlFor={urlInputId}>{t('source.serverUrl')}</Label>
               <Input
                 id={urlInputId}
                 placeholder={urlPlaceholder}
@@ -266,7 +270,7 @@ export const RemoteSourceConnectDialog = <TLogin extends RemoteLoginResult>({
               />
             </Field>
             <Field>
-              <Label htmlFor={usernameInputId}>Username</Label>
+              <Label htmlFor={usernameInputId}>{t('source.username')}</Label>
               <Input
                 id={usernameInputId}
                 autoComplete="username"
@@ -276,7 +280,7 @@ export const RemoteSourceConnectDialog = <TLogin extends RemoteLoginResult>({
               />
             </Field>
             <Field>
-              <Label htmlFor={passwordInputId}>Password</Label>
+              <Label htmlFor={passwordInputId}>{t('source.password')}</Label>
               <Input
                 id={passwordInputId}
                 type="password"
@@ -309,7 +313,7 @@ export const RemoteSourceConnectDialog = <TLogin extends RemoteLoginResult>({
                   disabled={isBusy}
                   className={focusRing(focusedIndex, 0)}
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </Button>
               </DialogClose>
               <Tooltip>
@@ -322,7 +326,7 @@ export const RemoteSourceConnectDialog = <TLogin extends RemoteLoginResult>({
                     className={focusRing(focusedIndex, 1)}
                   >
                     {testState.icon}
-                    Test connection
+                    {t('source.test')}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>{testState.tooltip}</TooltipContent>
@@ -332,7 +336,7 @@ export const RemoteSourceConnectDialog = <TLogin extends RemoteLoginResult>({
                 onClick={handleConnect}
                 className={focusRing(focusedIndex, 2)}
               >
-                Connect
+                {t('source.connectButton')}
               </Button>
             </div>
           </DialogFooter>

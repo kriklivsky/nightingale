@@ -1,3 +1,4 @@
+import { useI18n } from '@/shared/i18n/use-i18n';
 import type { Song } from '@/types/Song';
 
 import { Shifts } from './shifts';
@@ -21,12 +22,13 @@ export const KeyTempoSection = ({
   onTempoChange,
   onKeyOffsetChange,
 }: KeyTempoSectionProps) => {
+  const { t } = useI18n();
   const sectionClass = supportsShifts ? 'px-4 pt-4 pb-2' : 'px-4 py-4';
 
   return (
     <section className={sectionClass} aria-labelledby="song-adjustments-heading">
       <h3 id="song-adjustments-heading" className="mb-2 text-xs font-semibold">
-        Key & tempo
+        {t('shift.heading')}
       </h3>
       {supportsShifts ? (
         <Shifts
@@ -39,7 +41,7 @@ export const KeyTempoSection = ({
         />
       ) : (
         <p className="max-w-72 text-xs leading-relaxed text-muted-foreground">
-          Key and tempo controls become available after compatible analysis.
+          {t('shift.unavailable')}
         </p>
       )}
     </section>

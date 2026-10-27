@@ -10,6 +10,7 @@ import { DeleteSongDialog } from '@/features/menu/components/delete-song';
 import { DonateDialog } from '@/features/menu/components/donate';
 import { ExitDialog } from '@/features/menu/components/exit';
 import { InfoDialog } from '@/features/menu/components/info';
+import { MenuScreensaver } from '@/features/menu/components/screensaver';
 import { Sidebar } from '@/features/menu/components/sidebar/sidebar';
 import { useDialog, type DialogMode } from '@/features/menu/hooks/use-dialog';
 import { useMenuNav } from '@/features/menu/hooks/use-menu-nav';
@@ -80,6 +81,7 @@ export const MenuLayout = () => {
       <DeleteSongDialog />
       <SourceDialogs mode={mode} />
       <Setup />
+      <MenuScreensaver />
       <SidebarInset>
         <Outlet />
       </SidebarInset>

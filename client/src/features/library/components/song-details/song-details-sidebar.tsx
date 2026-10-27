@@ -11,6 +11,8 @@ import { useBestScoresBySongForActiveProfile } from '@/features/profiles/hooks/u
 import { Button } from '@/shared/components/ui/button';
 import { Separator } from '@/shared/components/ui/separator';
 import { Spinner } from '@/shared/components/ui/spinner';
+import type { Translate } from '@/shared/i18n/translator';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { SONGS } from '@/shared/query-keys';
 import type { QueuedStatus } from '@/types/QueuedStatus';
 import type { Song } from '@/types/Song';
@@ -36,39 +38,43 @@ type AddToQueueButtonProps = {
 };
 
 function AddToQueueButton({ song, tempo, keyOffset, ready, preparing }: AddToQueueButtonProps) {
+  const { t } = useI18n();
   const { mutate: addToQueue, isLoading } = useAddPlaybackQueueEntry();
 
   return (
     <Button
       variant="outline"
-      size="icon-lg"
+      size="lg"
+      className="h-11"
       disabled={!ready || preparing || isLoading}
       onClick={() => addToQueue({ song, tempo, keyOffset })}
-      aria-label={`Add ${song.title} to playback queue`}
-      title="Add to queue"
+      aria-label={t('songDetails.addToQueueLabel', { title: song.title })}
     >
       <ListPlusIcon />
+      {t('songDetails.addToQueue')}
     </Button>
   );
 }
 
+function analysisFailureMessage(t: Translate, failure: string): string {
+  if (failure.startsWith('No synchronized lyrics found')) {
+    return t('songDetails.failure.noLyrics');
+  }
+  if (failure.startsWith('Song title, artist, and duration')) {
+    return t('songDetails.failure.metadata');
+  }
+  if (failure.startsWith('LRCLIB is unavailable') || failure.startsWith('LRCLIB rate limit')) {
+    return t('songDetails.failure.lrclibUnavailable');
+  }
+  return t('songDetails.failure.generic');
+}
+
 function AnalysisFailure({ queueStatus }: { queueStatus?: QueuedStatus }) {
+  const { t } = useI18n();
   if (typeof queueStatus !== 'object' || !('Failed' in queueStatus)) {
     return null;
   }
-
-  let message = 'Analysis failed. Retry or provide timed LRC.';
-  if (queueStatus.Failed.startsWith('No synchronized lyrics found')) {
-    message = 'No synchronized lyrics found on LRCLIB. Provide timed LRC to continue.';
-  } else if (queueStatus.Failed.startsWith('Song title, artist, and duration')) {
-    message =
-      'LRCLIB needs a title, artist, and duration. Correct the metadata or provide timed LRC.';
-  } else if (
-    queueStatus.Failed.startsWith('LRCLIB is unavailable') ||
-    queueStatus.Failed.startsWith('LRCLIB rate limit')
-  ) {
-    message = 'LRCLIB is temporarily unavailable. Retry analysis later.';
-  }
+  const message = analysisFailureMessage(t, queueStatus.Failed);
 
   return (
     <p
@@ -84,6 +90,7 @@ const hasPendingKey = (song: Song): boolean =>
   song.is_analyzed && song.transcript_source === 'Lrc' && song.no_stems && song.key === null;
 
 export const SongDetailsSidebar = ({ song, queueStatus, onClose }: SongDetailsSidebarProps) => {
+  const { t } = useI18n();
   const [multiplayerOpen, setMultiplayerOpen] = useState(false);
   const queryClient = useQueryClient();
   const bestScores = useBestScoresBySongForActiveProfile();
@@ -142,7 +149,7 @@ export const SongDetailsSidebar = ({ song, queueStatus, onClose }: SongDetailsSi
     <aside
       ref={detailsRef}
       className="flex min-h-0 min-w-0 flex-1 flex-col border-l bg-background [&_[data-song-details-focused=true]]:z-10 [&_[data-song-details-focused=true]]:ring-2 [&_[data-song-details-focused=true]]:ring-primary xl:w-[28rem] xl:flex-none"
-      aria-label="Song details"
+      aria-label={t('songDetails.label')}
     >
       <SongDetailsHeader
         song={song}
@@ -173,45 +180,45 @@ export const SongDetailsSidebar = ({ song, queueStatus, onClose }: SongDetailsSi
         />
       </div>
 
-      <footer
-        className="flex gap-3 border-t p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
-        data-song-details-nav-group
-      >
+      <footer className="flex flex-col gap-2 border-t p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
         <Button
           size="lg"
           data-song-details-primary
-          className="h-12 flex-1 text-base disabled:bg-primary/50 disabled:text-primary-foreground/45 disabled:opacity-100"
+          className="h-12 w-full text-base disabled:bg-primary/50 disabled:text-primary-foreground/45 disabled:opacity-100"
           disabled={status.isReady !== true || preparingPlayback}
           aria-busy={preparingPlayback}
           onClick={() => handlePlay()}
         >
           {preparingPlayback ? (
             <>
-              <Spinner className="size-4" /> Preparing playback…
+              <Spinner className="size-4" /> {t('songDetails.preparing')}
             </>
           ) : (
             <>
-              <PlayIcon /> Play
+              <PlayIcon /> {t('songDetails.play')}
             </>
           )}
         </Button>
-        <Button
-          variant="outline"
-          size="icon-lg"
-          disabled={playbackDisabled}
-          onClick={() => setMultiplayerOpen(true)}
-          aria-label={`Play ${song.title} in multiplayer`}
-          title="Play multiplayer"
-        >
-          <UsersIcon />
-        </Button>
-        <AddToQueueButton
-          song={song}
-          tempo={tempo}
-          keyOffset={keyOffset}
-          ready={status.isReady === true}
-          preparing={preparingPlayback}
-        />
+        <div className="grid grid-cols-2 gap-2" data-song-details-nav-group>
+          <Button
+            variant="outline"
+            size="lg"
+            className="h-11"
+            disabled={playbackDisabled}
+            onClick={() => setMultiplayerOpen(true)}
+            aria-label={t('songDetails.multiplayerLabel', { title: song.title })}
+          >
+            <UsersIcon />
+            {t('songDetails.multiplayer')}
+          </Button>
+          <AddToQueueButton
+            song={song}
+            tempo={tempo}
+            keyOffset={keyOffset}
+            ready={status.isReady === true}
+            preparing={preparingPlayback}
+          />
+        </div>
       </footer>
 
       <MultiplayerSetupDialog

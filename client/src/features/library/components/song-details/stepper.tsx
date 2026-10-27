@@ -4,6 +4,7 @@ import type { MouseEvent } from 'react';
 import { Button } from '@/shared/components/ui/button';
 import { ButtonGroup, ButtonGroupText } from '@/shared/components/ui/button-group';
 import { Spinner } from '@/shared/components/ui/spinner';
+import { useI18n } from '@/shared/i18n/use-i18n';
 
 type StepperActions = {
   plus?: () => void;
@@ -40,6 +41,8 @@ export const Stepper = ({
   disabled: { plus: plusDisabled, minus: minusDisabled } = NOT_DISABLED,
   onClick = NO_ACTIONS,
 }: Props) => {
+  const { t } = useI18n();
+
   return (
     <ButtonGroup
       aria-label={ariaLabel}
@@ -52,7 +55,7 @@ export const Stepper = ({
         disabled={minusDisabled}
         variant="outline"
         size="icon-sm"
-        aria-label={`Decrease ${ariaLabel}`}
+        aria-label={t('stepper.decrease', { setting: ariaLabel })}
       >
         <MinusIcon />
       </Button>
@@ -65,7 +68,7 @@ export const Stepper = ({
         disabled={plusDisabled}
         variant="outline"
         size="icon-sm"
-        aria-label={`Increase ${ariaLabel}`}
+        aria-label={t('stepper.increase', { setting: ariaLabel })}
       >
         <PlusIcon />
       </Button>

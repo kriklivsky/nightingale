@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
 import { loadFavoriteHashes, setSongFavorite } from '@/bridge/songs';
+import { useI18n } from '@/shared/i18n/use-i18n';
 import { FAVORITES, SONGS } from '@/shared/query-keys';
 
 export const useFavoriteHashes = () =>
@@ -12,6 +13,7 @@ export const useFavoriteHashes = () =>
 
 export const useSetSongFavorite = () => {
   const queryClient = useQueryClient();
+  const { t } = useI18n();
 
   return useMutation({
     mutationFn: ({ fileHash, favorite }: { fileHash: string; favorite: boolean }) =>
@@ -24,7 +26,9 @@ export const useSetSongFavorite = () => {
     },
     onError: (error: unknown) => {
       toast.error(
-        `Could not update favorites: ${error instanceof Error ? error.message : String(error)}`,
+        t('favorites.updateFailed', {
+          detail: error instanceof Error ? error.message : String(error),
+        }),
       );
     },
   });
