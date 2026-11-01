@@ -30,8 +30,12 @@ export function TauriAppShell({ children }: { children: React.ReactNode }) {
     void triggerFrontendReady().catch(() => undefined);
     refreshFullscreen();
     window.addEventListener(FULLSCREEN_CHANGE_EVENT, refreshFullscreen);
+    window.addEventListener('resize', refreshFullscreen);
 
-    return () => window.removeEventListener(FULLSCREEN_CHANGE_EVENT, refreshFullscreen);
+    return () => {
+      window.removeEventListener(FULLSCREEN_CHANGE_EVENT, refreshFullscreen);
+      window.removeEventListener('resize', refreshFullscreen);
+    };
   }, []);
 
   useEffect(() => {

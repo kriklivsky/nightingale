@@ -6,11 +6,10 @@ use std::time::Duration;
 
 use app_core::AppConfig;
 use cpal::traits::DeviceTrait;
-use tauri::ipc::Channel;
 use tracing::warn;
 
 use super::buffering::{Direction, MonitorBuffers};
-use super::{find_device, run_mic_loop, MicCaptureOptions, MicSampleFrame};
+use super::{find_device, run_mic_loop, stream, MicCaptureOptions};
 
 const CONFIGURED_MONITOR: &str = "nightingale-configured-monitor";
 const MAX_CAPTURES: usize = 8;
@@ -38,7 +37,7 @@ impl AudioState {
 pub(super) struct CaptureTarget {
     pub(super) selected_channel: Option<usize>,
     pub(super) emit_audio: bool,
-    pub(super) channel: Option<Channel<MicSampleFrame>>,
+    pub(super) streams_frames: bool,
 }
 
 pub(super) type CaptureTargets = Arc<Mutex<HashMap<String, CaptureTarget>>>;
@@ -253,7 +252,6 @@ pub(crate) fn start_mic_capture(
     capture_id: String,
     preferred: Option<String>,
     options: Option<MicCaptureOptions>,
-    on_samples: Channel<MicSampleFrame>,
 ) -> Result<String, String> {
     let _guard = OPERATIONS.lock().unwrap_or_else(|error| error.into_inner());
     if capture_id.is_empty() || capture_id.len() > 128 || capture_id == CONFIGURED_MONITOR {
@@ -268,7 +266,7 @@ pub(crate) fn start_mic_capture(
         CaptureTarget {
             selected_channel: resolved.selected_channel,
             emit_audio: options.unwrap_or_default().emit_audio,
-            channel: Some(on_samples),
+            streams_frames: true,
         },
     );
     if result.is_err() && !frontend_active() {
@@ -311,7 +309,7 @@ fn restore_monitor(config: &AppConfig) {
         CaptureTarget {
             selected_channel: None,
             emit_audio: true,
-            channel: None,
+            streams_frames: false,
         },
     ) {
         warn!("[mic] configured monitor unavailable: {error}");
@@ -354,6 +352,7 @@ pub(crate) fn stop_mic_capture(capture_id: String) {
         return;
     }
     remove_target(&capture_id, None);
+    stream::close(&capture_id);
     if !frontend_active() {
         restore_monitor(&AppConfig::load());
     }

@@ -516,9 +516,13 @@ the original background.
 
 Setup installs `yt-dlp[default]==2026.8.19`, including its packaged YouTube
 challenge solver. Existing installations can add that package to their vendor
-Python environment without reinstalling analysis models. A supported Node.js
-or Deno runtime must also be available to the application's process. Remote
-solver downloads, browser cookies and account credentials are not used.
+Python environment without reinstalling analysis models. A JavaScript runtime
+that yt-dlp supports must also be available to the application's process:
+Debian trixie's Node.js 20 is reported as unsupported, so install QuickJS
+(`sudo apt-get install quickjs`), which yt-dlp is allowed to use alongside
+Node.js and Deno. Without one, YouTube serves streams that stop with HTTP 403
+partway through the download. Remote solver downloads, browser cookies and
+account credentials are not used.
 
 Offset matching compares the first five minutes of the unmodified local audio
 with the downloaded clip, using independent spectral windows. It accepts a
@@ -538,7 +542,7 @@ A positive offset skips extra introduction in the video; a negative offset
 holds the video until the song reaches its first frame. Video is hidden before
 its start and after its end. All controls support arrows/OK/Back. Downloads
 continue if the dialog closes and have a 15-minute timeout. Only one YouTube
-worker runs at a time. Clearing the video cache removes downloaded clips and
+download runs at a time; searches can run alongside it. Clearing the video cache removes downloaded clips and
 their saved offsets, without deleting original library files. Download only
 videos you are permitted to use.
 
@@ -548,3 +552,58 @@ Without it, search/download/offset/removal endpoints are disabled. The token is
 kept only in the open dialog, not URLs or persistent browser storage. Use HTTPS
 or a trusted private tunnel for remote access; other pre-existing server
 endpoints do not gain authentication from this video-specific token.
+
+## Phone remote and YouTube import
+
+A phone can act as a second TV remote from a browser: reorder, remove or clear
+queue entries, browse the whole library by artist or search it, add songs that
+are ready to sing, import songs from YouTube, and
+start the queue or a song solo or in multiplayer, choosing each singer's profile
+and microphone. While a song plays the phone shows it with pause, ±10-second
+seek, start over, next song, stop, music/guide volume, microphone and
+monitoring switches, monitoring level and background controls. Commands go
+through the same actions as the TV remote, so both can be used at once and the
+last action wins; a song can only be started while the TV shows the menu. The
+phone does not play audio or video. The remote is off until this file exists, owned
+by `tvbox` with mode `0600`:
+
+```sh
+sudo -u tvbox install -m 0600 /dev/stdin /var/lib/tvbox/.nightingale/remote-control.json <<'JSON'
+{ "port": 8080, "username": "<login>", "password": "<8-128 characters>" }
+JSON
+```
+
+Write the password as plain text; Nightingale replaces it with its at-rest
+encrypted form when it starts. Restart Nightingale after editing the file.
+Settings → General then lists the current addresses (hotspot `10.77.0.1`,
+wired LAN `10.77.1.1`, or the Wi-Fi/Ethernet DHCP address) and the login, or
+why the remote could not start. The listener binds every IPv4 interface on the
+configured port, so it keeps working when addresses change.
+
+The page shows a sign-in form that browsers can save in their password manager.
+A successful sign-in sets an HttpOnly, SameSite=Strict session cookie valid for
+30 days of inactivity; sessions are kept in memory, so after Nightingale
+restarts the phone signs in again (a saved password fills the form). Scripts can
+send the same login as HTTP Basic credentials instead. The connection is plain
+HTTP, so the password crosses the network unencrypted: use the WPA2 event
+hotspot or a trusted LAN, never an open network, and do not forward the port to
+the internet. Wrong passwords are answered with a short delay; state-changing
+requests must be JSON from the remote page's own origin.
+
+**YouTube import** needs a local-folder library and the same `yt-dlp` setup as
+song clips. Search, pick a result, correct the suggested artist and title (they
+are used to find synchronized lyrics on LRCLIB), and import. The clip (H.264 MP4
+up to 1080p, 20 minutes and 512 MiB) is saved as
+`<library>/YouTube/<Artist> - <Title> [<video id>].mp4`, analysed ahead of
+the rest of the analysis queue, and added to the karaoke queue immediately. A
+video already in that folder is not imported again. Music videos often differ
+in length from the album release (an intro, a live cut): when LRCLIB has no
+synchronized lyrics within 2 s of the clip, the release of the same artist and
+title closest in length is used and its timings are moved by the shift that
+best matches the clip's separated vocals (searched up to 2 minutes either way)
+before the usual alignment. Lines the clip does not sing are shown at their
+estimated time. Local songs keep requiring a matching length.
+The TV skips it, keeping its place, until analysis finishes; the clip then plays
+as the song's own video, so no offset matching is needed. Imports run one at a
+time with up to five waiting; their progress and errors are shown on the phone
+until Nightingale restarts.

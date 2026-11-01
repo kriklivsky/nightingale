@@ -22,6 +22,7 @@ import {
   usePlaybackTranscriptState,
   usePlaybackTransportState,
 } from '@/features/playback/providers';
+import { useRemotePlaybackControl } from '@/features/remote-control/use-remote-playback-control';
 import { useI18n } from '@/shared/i18n/use-i18n';
 import type { AppConfig } from '@/types/AppConfig';
 import type { Song } from '@/types/Song';
@@ -68,6 +69,7 @@ function PlaybackLayout({
 
   const volume = usePlaybackInput(config);
   const result = usePlaybackResult(song, queuePlayback, players);
+  useRemotePlaybackControl({ song, volume, result });
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-black" style={{ contain: 'strict' }}>

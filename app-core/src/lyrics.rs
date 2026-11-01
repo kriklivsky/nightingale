@@ -15,16 +15,26 @@ use crate::lrc::{self, ParsedLrc};
 use crate::song::{Song, SongOrigin, TranscriptSource, read_transcript_meta};
 use crate::usdx::decode_text;
 
+/// LRCLIB sends `null` for missing text fields; read it as the empty value so
+/// one sparse search result does not invalidate the whole response.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct LrclibCandidate {
-    #[serde(default, alias = "trackName")]
+    #[serde(default, alias = "trackName", deserialize_with = "null_as_default")]
     pub track_name: String,
-    #[serde(default, alias = "artistName")]
+    #[serde(default, alias = "artistName", deserialize_with = "null_as_default")]
     pub artist_name: String,
-    #[serde(default, alias = "albumName")]
+    #[serde(default, alias = "albumName", deserialize_with = "null_as_default")]
     pub album_name: String,
-    #[serde(default, alias = "duration")]
+    #[serde(default, alias = "duration", deserialize_with = "null_as_default")]
     pub duration_secs: f64,
     #[serde(skip_deserializing, default)]
     pub lines: Vec<String>,
@@ -34,7 +44,12 @@ pub struct LrclibCandidate {
     /// but still serializes as `synced_lyrics` for the frontend type.
     #[serde(default, alias = "syncedLyrics")]
     pub synced_lyrics: Option<String>,
-    #[serde(default, rename = "plainLyrics", skip_serializing)]
+    #[serde(
+        default,
+        rename = "plainLyrics",
+        skip_serializing,
+        deserialize_with = "null_as_default"
+    )]
     #[ts(skip)]
     plain_lyrics: String,
     #[serde(default, skip_serializing)]
@@ -45,7 +60,34 @@ pub struct LrclibCandidate {
 pub(crate) struct TimedLyrics {
     pub parsed: ParsedLrc,
     pub lyricsfile: Option<String>,
+    /// Length of the other release of the song this LRC belongs to; the analyzer
+    /// then looks for the shift onto the vocals of this recording.
+    pub other_release_secs: Option<f64>,
 }
+
+/// What LRCLIB is asked about and its results are compared with.
+#[derive(Clone, Copy)]
+pub(crate) struct LrclibSong<'a> {
+    pub title: &'a str,
+    pub artist: &'a str,
+    pub album: &'a str,
+    pub duration_secs: f64,
+}
+
+impl<'a> From<&'a Song> for LrclibSong<'a> {
+    fn from(song: &'a Song) -> Self {
+        Self {
+            title: &song.title,
+            artist: &song.artist,
+            album: &song.album,
+            duration_secs: song.duration_secs,
+        }
+    }
+}
+
+const SHIFT_SEARCH_MARGIN_SECONDS: f64 = 15.0;
+const MIN_SHIFT_SEARCH_SECONDS: f64 = 30.0;
+const MAX_SHIFT_SEARCH_SECONDS: f64 = 120.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -99,6 +141,15 @@ pub struct SidecarLrc {
 
 const SIDECAR_LRC_MAX_BYTES: u64 = 1024 * 1024;
 
+/// LRCLIB answers most requests with 503 while it is overloaded and recovers on
+/// its own, so a song waits through such a spell (about 13 minutes) and someone
+/// looking at the screen gets an answer within about 20 seconds.
+const LRCLIB_ANALYSIS_ATTEMPTS: u32 = 30;
+const LRCLIB_ANALYSIS_MAX_BACKOFF_SECONDS: u64 = 30;
+const LRCLIB_INTERACTIVE_ATTEMPTS: u32 = 12;
+const LRCLIB_INTERACTIVE_MAX_BACKOFF_SECONDS: u64 = 2;
+const LRCLIB_BACKOFF_SLICE: Duration = Duration::from_millis(200);
+
 static LRCLIB_RETRY_AFTER: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
 
 pub(crate) fn lrclib_retry_delay() -> Option<Duration> {
@@ -119,64 +170,103 @@ fn lrclib_request<T: serde::de::DeserializeOwned>(
         .http_status_as_error(false)
         .build();
     let agent = ureq::Agent::new_with_config(config);
-    for attempt in 0..4 {
+    let (attempts, max_backoff) = if wait_for_retry.is_some() {
+        (
+            LRCLIB_ANALYSIS_ATTEMPTS,
+            LRCLIB_ANALYSIS_MAX_BACKOFF_SECONDS,
+        )
+    } else {
+        (
+            LRCLIB_INTERACTIVE_ATTEMPTS,
+            LRCLIB_INTERACTIVE_MAX_BACKOFF_SECONDS,
+        )
+    };
+    for attempt in 0..attempts {
         if let Some(wait) = wait_for_retry {
             wait()?;
         } else if lrclib_retry_delay().is_some() {
             return Err("LRCLIB rate limit reached. Retry analysis later.".into());
         }
 
-        let mut response = agent
+        let request = agent
             .get(url)
             .header(
                 "User-Agent",
                 concat!("Nightingale/", env!("CARGO_PKG_VERSION")),
             )
-            .call()
-            .map_err(|_| "LRCLIB is unavailable. Retry analysis later.".to_string())?;
-
-        match response.status().as_u16() {
-            200 => {
-                return response
-                    .body_mut()
-                    .with_config()
-                    .limit(1024 * 1024)
-                    .read_json()
-                    .map(Some)
-                    .map_err(|_| "LRCLIB returned invalid or oversized lyrics data.".to_string());
+            .call();
+        let retry_after = match request {
+            Err(error) => {
+                warn!("[lrclib] Request failed: {error}");
+                None
             }
-            404 => return Ok(None),
-            429 => {
-                let seconds = response
+            Ok(mut response) => {
+                let status = response.status().as_u16();
+                let retry_after = response
                     .headers()
                     .get("Retry-After")
                     .and_then(|value| value.to_str().ok())
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .unwrap_or(60)
-                    .clamp(1, 3600);
-                let mut blocked_until =
-                    LRCLIB_RETRY_AFTER.lock().unwrap_or_else(|e| e.into_inner());
-                *blocked_until = Some(Instant::now() + Duration::from_secs(seconds));
-                if wait_for_retry.is_some() && attempt < 3 {
-                    continue;
+                    .and_then(|value| value.parse::<u64>().ok());
+                match status {
+                    200 => {
+                        return response
+                            .body_mut()
+                            .with_config()
+                            .limit(1024 * 1024)
+                            .read_json()
+                            .map(Some)
+                            .map_err(|_| {
+                                "LRCLIB returned invalid or oversized lyrics data.".to_string()
+                            });
+                    }
+                    404 => return Ok(None),
+                    429 => {
+                        let seconds = retry_after.unwrap_or(60).clamp(1, 3600);
+                        let mut blocked_until =
+                            LRCLIB_RETRY_AFTER.lock().unwrap_or_else(|e| e.into_inner());
+                        *blocked_until = Some(Instant::now() + Duration::from_secs(seconds));
+                        if wait_for_retry.is_some() && attempt + 1 < attempts {
+                            continue;
+                        }
+                        return Err("LRCLIB rate limit reached. Retry analysis later.".into());
+                    }
+                    500..=599 => {
+                        if attempt == 0 {
+                            info!("[lrclib] Status {status}; retrying");
+                        }
+                        retry_after
+                    }
+                    _ => {
+                        warn!("[lrclib] Unexpected status {status}");
+                        return Err("LRCLIB is unavailable. Retry analysis later.".into());
+                    }
                 }
-                return Err("LRCLIB rate limit reached. Retry analysis later.".into());
             }
-            503 if attempt < 3 => {
-                let seconds = response
-                    .headers()
-                    .get("Retry-After")
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .unwrap_or(1 << attempt)
-                    .clamp(1, 30);
-                std::thread::sleep(Duration::from_secs(seconds));
-            }
-            _ => return Err("LRCLIB is unavailable. Retry analysis later.".into()),
+        };
+        if attempt + 1 < attempts {
+            let backoff = 1u64 << attempt.min(6);
+            let seconds = backoff.max(retry_after.unwrap_or(0)).min(max_backoff);
+            lrclib_backoff(Duration::from_secs(seconds), wait_for_retry)?;
         }
     }
 
+    warn!("[lrclib] Giving up after {attempts} attempts");
     Err("LRCLIB is unavailable. Retry analysis later.".into())
+}
+
+/// Sleeps in slices so that cancelling a waiting analysis takes effect promptly.
+fn lrclib_backoff(
+    delay: Duration,
+    wait_for_retry: Option<&dyn Fn() -> Result<(), String>>,
+) -> Result<(), String> {
+    let until = Instant::now() + delay;
+    while let Some(left) = until.checked_duration_since(Instant::now()) {
+        if let Some(wait) = wait_for_retry {
+            wait()?;
+        }
+        std::thread::sleep(left.min(LRCLIB_BACKOFF_SLICE));
+    }
+    Ok(())
 }
 
 fn fold_name(value: &str) -> String {
@@ -226,28 +316,28 @@ fn fold_name(value: &str) -> String {
 }
 
 fn search_lrclib(
-    song: &Song,
+    song: LrclibSong<'_>,
     title_only: bool,
     wait_for_retry: Option<&dyn Fn() -> Result<(), String>>,
 ) -> Result<Vec<LrclibCandidate>, String> {
     let mut url = format!(
         "https://lrclib.net/api/search?track_name={}",
-        urlencoding::encode(&song.title),
+        urlencoding::encode(song.title),
     );
     if !title_only {
         url.push_str("&artist_name=");
-        url.push_str(&urlencoding::encode(&song.artist));
+        url.push_str(&urlencoding::encode(song.artist));
     }
     std::thread::sleep(Duration::from_millis(300));
     Ok(lrclib_request::<Vec<LrclibCandidate>>(&url, wait_for_retry)?.unwrap_or_default())
 }
 
-fn pick_timed_lyrics(song: &Song, results: Vec<LrclibCandidate>) -> Option<TimedLyrics> {
+fn pick_timed_lyrics(song: LrclibSong<'_>, results: &[LrclibCandidate]) -> Option<TimedLyrics> {
     results
-        .into_iter()
+        .iter()
         .filter_map(|candidate| {
-            valid_timed_candidate(song, &candidate).map(|parsed| {
-                let album_match = fold_name(&candidate.album_name) == fold_name(&song.album);
+            valid_timed_candidate(song, candidate).map(|parsed| {
+                let album_match = fold_name(&candidate.album_name) == fold_name(song.album);
                 (
                     (candidate.duration_secs - song.duration_secs).abs(),
                     album_match,
@@ -274,35 +364,97 @@ pub(crate) fn fetch_lrclib_timed_lyrics(
         );
     }
 
-    std::thread::sleep(Duration::from_millis(300));
-    let mut url = format!(
-        "https://lrclib.net/api/get?track_name={}&artist_name={}",
-        urlencoding::encode(&song.title),
-        urlencoding::encode(&song.artist),
-    );
-    if (1.0..=3600.0).contains(&song.duration_secs) {
-        url.push_str(&format!("&duration={}", song.duration_secs.round()));
-    }
-
-    if let Some(candidate) = lrclib_request::<LrclibCandidate>(&url, Some(wait_for_retry))?
-        && let Some(parsed) = valid_timed_candidate(song, &candidate)
-    {
-        return Ok(parsed);
-    }
-
-    if let Some(parsed) = pick_timed_lyrics(song, search_lrclib(song, false, Some(wait_for_retry))?)
-    {
-        return Ok(parsed);
-    }
-
-    pick_timed_lyrics(song, search_lrclib(song, true, Some(wait_for_retry))?).ok_or_else(|| {
+    find_timed_lyrics(
+        LrclibSong::from(song),
+        Some(wait_for_retry),
+        crate::youtube_import::is_imported(song),
+    )?
+    .ok_or_else(|| {
         "No matching synchronized lyrics found on LRCLIB. Provide timed LRC manually.".into()
     })
 }
 
-fn valid_timed_candidate(song: &Song, candidate: &LrclibCandidate) -> Option<TimedLyrics> {
-    if fold_name(&song.title) != fold_name(&candidate.track_name)
-        || fold_name(&song.artist) != fold_name(&candidate.artist_name)
+/// The LRC analysis would use for this song: the release of the same length,
+/// otherwise, with `other_releases`, the closest one.
+pub(crate) fn find_timed_lyrics(
+    song: LrclibSong<'_>,
+    wait_for_retry: Option<&dyn Fn() -> Result<(), String>>,
+    other_releases: bool,
+) -> Result<Option<TimedLyrics>, String> {
+    if (1.0..=3600.0).contains(&song.duration_secs) {
+        std::thread::sleep(Duration::from_millis(300));
+        let url = format!(
+            "https://lrclib.net/api/get?track_name={}&artist_name={}&duration={}",
+            urlencoding::encode(song.title),
+            urlencoding::encode(song.artist),
+            song.duration_secs.round(),
+        );
+        if let Some(candidate) = lrclib_request::<LrclibCandidate>(&url, wait_for_retry)?
+            && let Some(parsed) = valid_timed_candidate(song, &candidate)
+        {
+            return Ok(Some(parsed));
+        }
+    }
+
+    let results = search_lrclib(song, false, wait_for_retry)?;
+    if let Some(parsed) = pick_timed_lyrics(song, &results) {
+        return Ok(Some(parsed));
+    }
+
+    let title_results = search_lrclib(song, true, wait_for_retry)?;
+    if let Some(parsed) = pick_timed_lyrics(song, &title_results) {
+        return Ok(Some(parsed));
+    }
+
+    Ok(other_releases
+        .then(|| pick_shifted_lyrics(song, results.iter().chain(&title_results)))
+        .flatten())
+}
+
+/// LRC from another release of the same song (a music video with a longer
+/// intro, a live cut), closest in length: its own timings must fit its own
+/// duration, and the analyzer later finds where they fall in this recording.
+/// Word timings are dropped because they would need the same shift.
+fn pick_shifted_lyrics<'a>(
+    song: LrclibSong<'_>,
+    results: impl Iterator<Item = &'a LrclibCandidate>,
+) -> Option<TimedLyrics> {
+    results
+        .filter(|candidate| {
+            fold_name(song.title) == fold_name(&candidate.track_name)
+                && fold_name(song.artist) == fold_name(&candidate.artist_name)
+                && candidate.duration_secs.is_finite()
+                && candidate.duration_secs > 0.0
+        })
+        .filter_map(|candidate| {
+            let parsed = lrc::parse_lrc(candidate.synced_lyrics.as_deref()?).ok()?;
+            let max_time = candidate.duration_secs + 2.0;
+            parsed
+                .segments
+                .iter()
+                .all(|segment| {
+                    segment.start.is_finite()
+                        && segment.end.is_finite()
+                        && segment.start <= max_time
+                        && segment.end > segment.start
+                })
+                .then_some((candidate.duration_secs, parsed))
+        })
+        .min_by(|a, b| {
+            (song.duration_secs - a.0)
+                .abs()
+                .total_cmp(&(song.duration_secs - b.0).abs())
+        })
+        .map(|(duration_secs, parsed)| TimedLyrics {
+            parsed,
+            lyricsfile: None,
+            other_release_secs: Some(duration_secs),
+        })
+}
+
+fn valid_timed_candidate(song: LrclibSong<'_>, candidate: &LrclibCandidate) -> Option<TimedLyrics> {
+    if fold_name(song.title) != fold_name(&candidate.track_name)
+        || fold_name(song.artist) != fold_name(&candidate.artist_name)
         || !candidate.duration_secs.is_finite()
         || (song.duration_secs - candidate.duration_secs).abs() > 2.0
     {
@@ -326,6 +478,7 @@ fn valid_timed_candidate(song: &Song, candidate: &LrclibCandidate) -> Option<Tim
                 .lyricsfile
                 .clone()
                 .filter(|value| !value.trim().is_empty()),
+            other_release_secs: None,
         })
 }
 
@@ -337,12 +490,12 @@ pub(crate) fn lrclib_candidates(song: &Song) -> Vec<LrclibCandidate> {
     let mut results = if song.artist.trim().is_empty() || song.artist == "Unknown Artist" {
         Vec::new()
     } else {
-        search_lrclib(song, false, None).unwrap_or_else(|error| {
+        search_lrclib(song.into(), false, None).unwrap_or_else(|error| {
             warn!("[lrclib] Artist search failed: {error}");
             Vec::new()
         })
     };
-    match search_lrclib(song, true, None) {
+    match search_lrclib(song.into(), true, None) {
         Ok(title_results) => {
             for candidate in title_results {
                 let duplicate = results.iter().any(|existing: &LrclibCandidate| {
@@ -627,10 +780,15 @@ fn build_lrc_transcript(
 pub(crate) fn write_lrclib_transcript(
     song: &Song,
     cache: &CacheDir,
-    parsed: &ParsedLrc,
+    timed: &TimedLyrics,
 ) -> Result<(), String> {
-    let mut value = build_lrc_transcript(parsed, song.language.as_deref(), None, 1.0, false);
+    let mut value = build_lrc_transcript(&timed.parsed, song.language.as_deref(), None, 1.0, false);
     value["source"] = serde_json::json!("lrclib_pending");
+    if let Some(release_secs) = timed.other_release_secs {
+        let seconds = ((song.duration_secs - release_secs).abs() + SHIFT_SEARCH_MARGIN_SECONDS)
+            .clamp(MIN_SHIFT_SEARCH_SECONDS, MAX_SHIFT_SEARCH_SECONDS);
+        value["lrc_shift_search_secs"] = serde_json::json!(seconds);
+    }
     write_transcript_json(cache, &song.file_hash, &value)
         .map_err(|_| "Failed to save timed lyrics before analysis.".to_string())
 }

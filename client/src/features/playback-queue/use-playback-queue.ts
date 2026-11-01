@@ -12,6 +12,8 @@ import {
   type PlaybackQueueEntry,
 } from '@/bridge/playback-queue';
 import type { PlaybackPlayer, PlaybackTarget } from '@/bridge/playback-session';
+import { getSongStatusInfo } from '@/features/library/components/song/song-status';
+import { useAnalysisQueue } from '@/features/library/queries/use-songs';
 import { usePlaybackLauncher } from '@/features/playback/hooks/use-playback-launcher';
 import {
   preparePlayback,
@@ -134,6 +136,12 @@ type StartResult = {
 export function useStartNextPlaybackQueueSong(entries: PlaybackQueueEntry[]) {
   const queryClient = useQueryClient();
   const { t } = useI18n();
+  const { data: analysis } = useAnalysisQueue();
+  const nextEntry = entries.find(
+    (entry) =>
+      getSongStatusInfo(entry.song.is_analyzed, analysis?.entries[entry.song.file_hash]).isReady ===
+      true,
+  );
   const { launch, reserveTarget } = usePlaybackLauncher();
   const { mutate, isLoading } = useMutation({
     mutationFn: async ({ entry, target, players }: StartInput): Promise<StartResult> => {
@@ -165,17 +173,17 @@ export function useStartNextPlaybackQueueSong(entries: PlaybackQueueEntry[]) {
 
   const playNext = useCallback(
     (players: PlaybackPlayer[] = []) => {
-      if (entries.length === 0 || isLoading) {
+      if (nextEntry === undefined || isLoading) {
         return;
       }
       const target = reserveTarget();
       if (target === undefined) {
         return;
       }
-      mutate({ entry: entries[0], target, players });
+      mutate({ entry: nextEntry, target, players });
     },
-    [entries, isLoading, mutate, reserveTarget],
+    [nextEntry, isLoading, mutate, reserveTarget],
   );
 
-  return { playNext, isPreparing: isLoading };
+  return { playNext, isPreparing: isLoading, nextEntryId: nextEntry?.id, analysis };
 }

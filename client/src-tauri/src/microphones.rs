@@ -10,6 +10,7 @@ use ts_rs::TS;
 mod buffering;
 mod capture;
 mod samples;
+mod stream;
 
 use buffering::Direction;
 pub(crate) use capture::{
@@ -18,9 +19,10 @@ pub(crate) use capture::{
 };
 use capture::{AudioState, CaptureTargets};
 use samples::{InputSamples, OutputSamples};
+pub(crate) use stream::mic_stream_endpoint;
 
 /// Worker drains the cpal queue in fixed-size chunks before forwarding to the
-/// JS side; smaller chunks lower IPC latency at the cost of more sends/sec.
+/// JS side; smaller chunks lower delivery latency at the cost of more sends/sec.
 const SAMPLE_CHUNK: usize = 512;
 const PCM_QUEUE_CAP: usize = 24_000;
 const DEFAULT_PERIOD_FRAMES: usize = 512;
@@ -587,10 +589,10 @@ fn run_mic_loop(
                 .max_by(|(_, left), (_, right)| left.total_cmp(right))
                 .map_or(0, |(channel, _)| channel);
             let targets = targets.lock().unwrap_or_else(|error| error.into_inner());
-            for target in targets.values() {
-                let Some(channel) = target.channel.as_ref() else {
+            for (id, target) in targets.iter() {
+                if !target.streams_frames {
                     continue;
-                };
+                }
                 let selected = target.selected_channel.unwrap_or(strongest);
                 if selected >= channels {
                     return Err("Requested microphone channel is no longer available".into());
@@ -599,12 +601,13 @@ fn run_mic_loop(
                     .chunks_exact(channels)
                     .map(|frame| frame[selected])
                     .collect();
-                if let Err(error) = channel.send(MicSampleFrame {
-                    sample_rate: sr,
-                    samples,
-                }) {
-                    warn!("[mic] channel send failed: {error}");
-                }
+                stream::send(
+                    id,
+                    &MicSampleFrame {
+                        sample_rate: sr,
+                        samples,
+                    },
+                );
             }
         }
     }

@@ -25,6 +25,7 @@ import {
   type SettingsTab,
 } from '@/features/settings/components/constants';
 import { MicrophoneSettings } from '@/features/settings/components/microphone-settings';
+import { PhoneRemoteInfo } from '@/features/settings/components/phone-remote-info';
 import { PlaybackPreview } from '@/features/settings/components/playback-preview';
 import { Hint, PageHeader, SettingsSelect } from '@/features/settings/components/settings-controls';
 import { useSettingsNavigation } from '@/features/settings/hooks/use-settings-navigation';
@@ -302,6 +303,8 @@ export const SettingsPage = () => {
                   ))}
                 </ButtonGroup>
               </Field>
+
+              <PhoneRemoteInfo />
 
               <MicrophoneSettings
                 savedMicId={general.preferredMic}

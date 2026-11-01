@@ -3,7 +3,7 @@ use tauri::{AppHandle, Emitter, State};
 
 const QUEUE_CHANGED_EVENT: &str = "playback-queue-changed";
 
-fn emit_queue(app: &AppHandle, entries: &[PlaybackQueueEntry]) -> Result<(), String> {
+pub(crate) fn emit_queue(app: &AppHandle, entries: &[PlaybackQueueEntry]) -> Result<(), String> {
     app.emit(QUEUE_CHANGED_EVENT, entries)
         .map_err(|error| error.to_string())
 }

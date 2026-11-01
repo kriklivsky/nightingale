@@ -103,6 +103,8 @@ export type PlaybackResult = {
   nextPending: boolean;
   onBack: () => void;
   onNext?: (players?: readonly PlaybackPlayer[]) => void;
+  canSkip: boolean;
+  skip: () => void;
 };
 
 const EMPTY_PLAYERS: readonly PlaybackPlayer[] = [];
@@ -118,7 +120,7 @@ export function usePlaybackResult(
   const { t } = useI18n();
   const { data: profileData = EMPTY_PROFILES, isLoading: profilesLoading } = useProfiles();
   const { data: entries = [] } = usePlaybackQueueQuery();
-  const { isPreparing, playNext } = useStartNextPlaybackQueueSong(entries);
+  const { isPreparing, playNext, nextEntryId } = useStartNextPlaybackQueueSong(entries);
 
   const { isFinished } = usePlaybackTransportState();
   const { handleExit } = usePlaybackTransportActions();
@@ -222,7 +224,7 @@ export function usePlaybackResult(
     (nextPlayers: readonly PlaybackPlayer[] = players) => playNext([...nextPlayers]),
     [playNext, players],
   );
-  const hasNext = queuePlayback && entries.length > 0;
+  const hasNext = queuePlayback && nextEntryId !== undefined;
 
   return {
     open: showResult,
@@ -234,5 +236,7 @@ export function usePlaybackResult(
     nextPending: isPreparing,
     onBack,
     onNext: hasNext ? onNext : undefined,
+    canSkip: nextEntryId !== undefined,
+    skip: onNext,
   };
 }

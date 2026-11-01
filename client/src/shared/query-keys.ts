@@ -17,3 +17,4 @@ export const JELLYFIN_HEALTH = ['jellyfin-health'];
 export const NAVIDROME_HEALTH = ['navidrome-health'];
 export const PLEX_HEALTH = ['plex-health'];
 export const MIC_DEVICES = ['mic-devices'];
+export const REMOTE_CONTROL = ['remote-control'];

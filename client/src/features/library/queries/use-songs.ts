@@ -5,7 +5,7 @@ import { getPreloadedSongsMeta, loadAnalysisQueue, loadSongs, loadSongsMeta } fr
 import { useLibraryFilter } from '@/features/menu/hooks/use-library-filter';
 import { useSearch } from '@/features/menu/hooks/use-search';
 import { useConfig } from '@/shared/config/use-config';
-import { ANALYSIS_QUEUE, SONGS, SONGS_META, MENU } from '@/shared/query-keys';
+import { ANALYSIS_QUEUE, MENU, PLAYBACK_QUEUE, SONGS, SONGS_META } from '@/shared/query-keys';
 import type { AnalysisQueue } from '@/types/AnalysisQueue';
 import type { LoadSongsParams } from '@/types/LoadSongsParams';
 import type { QueuedStatus } from '@/types/QueuedStatus';
@@ -112,6 +112,7 @@ export const useAnalysisQueue = () => {
         void queryClient.invalidateQueries({ queryKey: SONGS });
         void queryClient.invalidateQueries({ queryKey: MENU });
         void queryClient.invalidateQueries({ queryKey: SONGS_META });
+        void queryClient.invalidateQueries({ queryKey: PLAYBACK_QUEUE });
       }
 
       prevEntriesRef.current = entries;

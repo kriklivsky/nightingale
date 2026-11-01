@@ -1,5 +1,5 @@
 /**
- * Single source of truth for `invoke`/`listen`/`Channel` so the bridge layer
+ * Single source of truth for `invoke`/`listen` so the bridge layer
  * works identically in two transports:
  *  - Tauri: uses `@tauri-apps/api/core` + `/event` directly.
  *  - Web: posts JSON to `/api/cmd/<name>` and multiplexes events over a single
@@ -9,7 +9,7 @@
  * page reload, which matches Tauri's existing semantics (no IPC hot-swap).
  */
 
-import { Channel as TauriChannel, invoke as tauriInvoke } from '@tauri-apps/api/core';
+import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen, type UnlistenFn } from '@tauri-apps/api/event';
 
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -19,16 +19,6 @@ export type EventCallback<T> = (event: { payload: T }) => void;
 type InvokeArgs = Record<string, unknown> | undefined;
 
 // ─── Web transport ──────────────────────────────────────────────────────────
-
-/**
- * Web-side `Channel` lookalike. The Tauri `Channel` is used by mic capture to
- * stream high-rate PCM frames over IPC; the web build never crosses the
- * bridge for that path (the browser owns the mic), so this class only needs
- * to satisfy the type at construction time and not actually carry traffic.
- */
-class WebChannel {
-  onmessage: ((message: unknown) => void) | null = null;
-}
 
 const apiCall = async (name: string, args: InvokeArgs, token?: string): Promise<unknown> => {
   const res = await fetch(`/api/cmd/${name}`, {
@@ -203,12 +193,6 @@ export function invokeAuthenticated(
 export function listen<T>(event: string, cb: EventCallback<T>): Promise<UnlistenFn>;
 export function listen(event: string, cb: EventCallback<unknown>): Promise<UnlistenFn> {
   return isTauri ? tauriListen(event, cb) : webListen(event, cb);
-}
-
-export type RuntimeChannel<T> = { onmessage: ((message: T) => void) | null };
-
-export function createChannel<T>(): RuntimeChannel<T> {
-  return isTauri ? new TauriChannel<T>() : new WebChannel();
 }
 
 export type { UnlistenFn };

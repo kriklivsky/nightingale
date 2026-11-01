@@ -1,4 +1,4 @@
-mod worker;
+pub(crate) mod worker;
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -217,22 +217,7 @@ pub fn search_song_videos(
     if query.trim().is_empty() || query.chars().count() > 300 {
         return Err("Song title/artist is empty or too long for YouTube search".into());
     }
-    let result = worker::run(
-        serde_json::json!({ "action": "search", "query": query }),
-        90,
-    )?;
-    let mut candidates: Vec<VideoCandidate> =
-        serde_json::from_value(result.get("candidates").cloned().unwrap_or_default())
-            .map_err(|_| "YouTube returned invalid search results".to_string())?;
-    candidates.retain(|candidate| {
-        valid_id(&candidate.id, 11, false)
-            && candidate.title.len() <= 1200
-            && candidate.channel.len() <= 1200
-            && candidate
-                .duration_sec
-                .is_none_or(|duration| duration.is_finite() && duration > 0.0 && duration <= 1200.0)
-    });
-    candidates.truncate(8);
+    let mut candidates = search_videos(&query)?;
     candidates.sort_by(|left, right| {
         let difference = |candidate: &VideoCandidate| {
             candidate.duration_sec.map_or(f64::INFINITY, |duration| {
@@ -242,6 +227,31 @@ pub fn search_song_videos(
         difference(left).total_cmp(&difference(right))
     });
     Ok(candidates)
+}
+
+pub(crate) fn search_videos(query: &str) -> Result<Vec<VideoCandidate>, String> {
+    let result = worker::run(
+        serde_json::json!({ "action": "search", "query": query }),
+        90,
+        worker::Access::Search,
+    )?;
+    let mut candidates: Vec<VideoCandidate> =
+        serde_json::from_value(result.get("candidates").cloned().unwrap_or_default())
+            .map_err(|_| "YouTube returned invalid search results".to_string())?;
+    candidates.retain(|candidate| {
+        valid_video_id(&candidate.id)
+            && candidate.title.len() <= 1200
+            && candidate.channel.len() <= 1200
+            && candidate
+                .duration_sec
+                .is_none_or(|duration| duration.is_finite() && duration > 0.0 && duration <= 1200.0)
+    });
+    candidates.truncate(8);
+    Ok(candidates)
+}
+
+pub(crate) fn valid_video_id(value: &str) -> bool {
+    valid_id(value, 11, false)
 }
 
 fn original_audio(song: &Song) -> Result<PathBuf, String> {
@@ -266,7 +276,7 @@ fn original_audio(song: &Song) -> Result<PathBuf, String> {
     Ok(audio)
 }
 
-struct DownloadDirectory(Option<PathBuf>);
+pub(crate) struct DownloadDirectory(pub(crate) Option<PathBuf>);
 
 impl Drop for DownloadDirectory {
     fn drop(&mut self) {
@@ -280,7 +290,7 @@ impl Drop for DownloadDirectory {
 }
 
 pub fn download_song_video(file_hash: &str, video_id: &str) -> Result<SongVideo, String> {
-    if !valid_id(video_id, 11, false) {
+    if !valid_video_id(video_id) {
         return Err("Invalid YouTube video identifier".into());
     }
     let _guard = VIDEO_WRITE
@@ -299,6 +309,7 @@ pub fn download_song_video(file_hash: &str, video_id: &str) -> Result<SongVideo,
             "directory": pending, "audio_path": audio, "ffmpeg": crate::vendor::ffmpeg_path(),
         }),
         900,
+        worker::Access::Download,
     )?;
     let title = result
         .get("title")

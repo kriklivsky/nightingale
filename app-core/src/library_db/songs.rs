@@ -115,6 +115,15 @@ pub(super) fn append_songs(songs: &[Song]) -> rusqlite::Result<()> {
     })
 }
 
+/// Adds one song outside a scan. A scan that already picked up the same path
+/// wins, so the row is left as it is.
+pub(crate) fn insert_song(song: &Song) -> rusqlite::Result<()> {
+    with_conn_mut(|c| {
+        let mut stmt = c.prepare(&INSERT_SONG_SQL.replacen("INSERT", "INSERT OR IGNORE", 1))?;
+        insert_song_row_prepared(&mut stmt, song)
+    })
+}
+
 pub(crate) fn append_songs_for_scan(songs: &[Song], generation: u64) -> rusqlite::Result<()> {
     if songs.is_empty() || !scan_generation_is_current(generation) {
         return Ok(());

@@ -6,6 +6,11 @@ const BUFFER_FRAMES: [u32; 4] = [512, 1024, 2048, 4096];
 const STABLE_RUN: Duration = Duration::from_secs(60);
 const RETRY_AFTER_FAILURE: Duration = Duration::from_secs(300);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(900);
+/// A stream that fails this soon after opening hit a device reset (an HDMI
+/// link retrain, a replugged interface), not a buffer that is too small.
+const DEVICE_RESET_WINDOW: Duration = Duration::from_secs(5);
+/// Quick failures in a row that still count as an underrun at startup.
+const MAX_QUICK_FAILURES: u32 = 5;
 
 #[derive(Clone, Copy)]
 pub(super) enum Direction {
@@ -34,6 +39,7 @@ struct StreamBuffer {
     stable_since: Instant,
     recovering: bool,
     retry_delay: Duration,
+    quick_failures: u32,
 }
 
 impl Default for StreamBuffer {
@@ -43,12 +49,25 @@ impl Default for StreamBuffer {
             stable_since: Instant::now(),
             recovering: false,
             retry_delay: STABLE_RUN,
+            quick_failures: 0,
         }
     }
 }
 
 impl StreamBuffer {
     fn failed(&mut self, direction: Direction, now: Instant) {
+        let quick = now.duration_since(self.stable_since) < DEVICE_RESET_WINDOW;
+        self.quick_failures = if quick { self.quick_failures + 1 } else { 0 };
+        if quick && !self.recovering && self.quick_failures < MAX_QUICK_FAILURES {
+            self.stable_since = now;
+            info!(
+                "[mic] {} stream failed right after opening; keeping {} frames",
+                direction.label(),
+                BUFFER_FRAMES[self.step]
+            );
+            return;
+        }
+        self.quick_failures = 0;
         self.retry_delay = if self.recovering && now.duration_since(self.stable_since) < STABLE_RUN
         {
             (self.retry_delay * 2).clamp(RETRY_AFTER_FAILURE, MAX_RETRY_DELAY)

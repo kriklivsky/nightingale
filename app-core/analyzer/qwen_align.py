@@ -214,15 +214,21 @@ class _TorchChunkAligner:
         inputs, word_lists = self.processor.prepare_forced_aligner_inputs(
             audio=[audio], transcript=[text], language=language,
         )
+        import qwen_rknn
+
         inputs = inputs.to(self.model.device, self.model.dtype)
         with torch.inference_mode():
             logits = self.model(**inputs).logits
-        return self.processor.decode_forced_alignment(
+        tokens = self.processor.decode_forced_alignment(
             logits=logits,
             input_ids=inputs["input_ids"],
             word_lists=word_lists,
             timestamp_token_id=self.model.config.timestamp_token_id,
         )[0]
+        stamps = inputs["input_ids"][0] == self.model.config.timestamp_token_id
+        return qwen_rknn.with_confidence(
+            tokens, logits[0][stamps].float().cpu().numpy(), self.processor.timestamp_segment_time / 1000,
+        )
 
     def close(self) -> None:
         self.model = None

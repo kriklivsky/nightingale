@@ -5,6 +5,7 @@ import { library } from './ru/library';
 import { menu } from './ru/menu';
 import { playback } from './ru/playback';
 import { players } from './ru/players';
+import { remote } from './ru/remote';
 import { settings } from './ru/settings';
 
 export const ru: Messages = {
@@ -14,5 +15,6 @@ export const ru: Messages = {
   ...menu,
   ...playback,
   ...players,
+  ...remote,
   ...settings,
 };

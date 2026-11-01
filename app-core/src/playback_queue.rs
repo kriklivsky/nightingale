@@ -22,11 +22,30 @@ pub struct PlaybackQueue {
     next_id: AtomicU64,
 }
 
+/// Replaces each entry's song with its current library row so analysis that
+/// finished after the song was queued is visible to callers.
+fn refreshed(entries: &mut VecDeque<PlaybackQueueEntry>) -> Vec<PlaybackQueueEntry> {
+    let hashes: Vec<String> = entries
+        .iter()
+        .map(|entry| entry.song.file_hash.clone())
+        .collect();
+    let songs = SongsStore::load_by_hashes(&hashes);
+    for entry in entries.iter_mut() {
+        if let Some(song) = songs
+            .iter()
+            .find(|song| song.file_hash == entry.song.file_hash && song.path == entry.song.path)
+        {
+            entry.song = song.clone();
+        }
+    }
+    entries.iter().cloned().collect()
+}
+
 impl PlaybackQueue {
     pub fn entries(&self) -> Result<Vec<PlaybackQueueEntry>, String> {
         self.entries
             .lock()
-            .map(|entries| entries.iter().cloned().collect())
+            .map(|mut entries| refreshed(&mut entries))
             .map_err(|_| "playback queue lock poisoned".to_string())
     }
 
@@ -53,7 +72,7 @@ impl PlaybackQueue {
             key_offset,
         });
 
-        Ok(entries.iter().cloned().collect())
+        Ok(refreshed(&mut entries))
     }
 
     pub fn move_entry(
@@ -80,7 +99,7 @@ impl PlaybackQueue {
         let target_index = target_index.min(entries.len());
         entries.insert(target_index, entry);
 
-        Ok(entries.iter().cloned().collect())
+        Ok(refreshed(&mut entries))
     }
 
     pub fn remove(&self, id: &str) -> Result<Vec<PlaybackQueueEntry>, String> {
@@ -91,7 +110,7 @@ impl PlaybackQueue {
 
         entries.retain(|entry| entry.id != id);
 
-        Ok(entries.iter().cloned().collect())
+        Ok(refreshed(&mut entries))
     }
 
     pub fn remove_song_path(&self, path: &Path) -> Result<Vec<PlaybackQueueEntry>, String> {
@@ -100,7 +119,7 @@ impl PlaybackQueue {
             .lock()
             .map_err(|_| "playback queue lock poisoned".to_string())?;
         entries.retain(|entry| entry.song.path != path);
-        Ok(entries.iter().cloned().collect())
+        Ok(refreshed(&mut entries))
     }
 
     pub fn clear(&self) -> Result<Vec<PlaybackQueueEntry>, String> {

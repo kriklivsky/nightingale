@@ -35,6 +35,19 @@ def resolve_bundle(models_dir: str) -> Path:
     return manifest
 
 
+def with_confidence(tokens: list[dict], stamp_logits: np.ndarray, step_seconds: float) -> list[dict]:
+    """Add each token's ``confidence``: the probability the aligner gave the
+    timestamp class its start was decoded to (``stamp_logits`` holds one row
+    per timestamp marker, start and end of every token in turn)."""
+    logits = stamp_logits.astype(np.float64)
+    peak = logits.max(axis=-1, keepdims=True)
+    log_probs = logits - peak - np.log(np.exp(logits - peak).sum(axis=-1, keepdims=True))
+    for index, token in enumerate(tokens):
+        cls = min(int(round(token["start_time"] / step_seconds)), log_probs.shape[1] - 1)
+        token["confidence"] = round(float(np.exp(log_probs[2 * index, cls])), 3)
+    return tokens
+
+
 def _post_cnn_tokens(frames: int) -> int:
     for _ in range(3):
         frames = (frames - 1) // 2 + 1 if frames > 0 else 0
@@ -43,7 +56,9 @@ def _post_cnn_tokens(frames: int) -> int:
 
 class _RknnRunner:
     def __init__(self, path: Path):
-        from rknnlite.api import RKNNLite
+        from uvr_backend import rknn_lite
+
+        RKNNLite = rknn_lite()
 
         self.runtime = RKNNLite(verbose=False)
         if self.runtime.load_rknn(str(path)) != 0:
@@ -190,9 +205,10 @@ class SplitAligner:
         normed = selected / np.sqrt(np.mean(selected**2, axis=-1, keepdims=True) + self.eps) * self.norm
         logits = np.zeros((1, len(ids), self.score.shape[0]), dtype=np.float32)
         logits[0, stamps] = normed @ self.score.T
-        return self.processor.decode_forced_alignment(
+        tokens = self.processor.decode_forced_alignment(
             logits=torch.from_numpy(logits),
             input_ids=inputs["input_ids"],
             word_lists=word_lists,
             timestamp_token_id=self.timestamp_token_id,
         )[0]
+        return with_confidence(tokens, logits[0, stamps], self.processor.timestamp_segment_time / 1000)

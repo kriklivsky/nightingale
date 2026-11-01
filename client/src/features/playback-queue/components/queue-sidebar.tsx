@@ -36,10 +36,10 @@ type QueueSidebarProps = {
 };
 
 const queuePlaybackDisabled = (
-  entryCount: number,
+  hasReadyEntry: boolean,
   preparing: boolean,
   clearing: boolean,
-): boolean => entryCount === 0 || preparing || clearing;
+): boolean => !hasReadyEntry || preparing || clearing;
 
 const dialogFocusClass = (open: boolean, focusedIndex: number, index: number): string =>
   cn(
@@ -50,7 +50,7 @@ const dialogFocusClass = (open: boolean, focusedIndex: number, index: number): s
 export function QueueSidebar({ entries, onClose }: QueueSidebarProps) {
   const { t } = useI18n();
   const [multiplayerOpen, setMultiplayerOpen] = useState(false);
-  const { isPreparing, playNext } = useStartNextPlaybackQueueSong(entries);
+  const { isPreparing, playNext, nextEntryId, analysis } = useStartNextPlaybackQueueSong(entries);
   const { mutate: move, isLoading: reordering } = useMovePlaybackQueueEntry();
   const { mutate: remove, isLoading: removing } = useRemovePlaybackQueueEntry();
   const { mutate: clear, isLoading: clearing } = useClearPlaybackQueue();
@@ -62,7 +62,7 @@ export function QueueSidebar({ entries, onClose }: QueueSidebarProps) {
     closeDialog();
   };
   const playbackDisabled =
-    queuePlaybackDisabled(entries.length, isPreparing, clearing) || reordering;
+    queuePlaybackDisabled(nextEntryId !== undefined, isPreparing, clearing) || reordering;
   const { focusedIndex } = useDialogNav({
     open: confirmOpen,
     itemCount: 2,
@@ -87,6 +87,8 @@ export function QueueSidebar({ entries, onClose }: QueueSidebarProps) {
       <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto p-3">
         <QueueList
           entries={entries}
+          nextEntryId={nextEntryId}
+          analysis={analysis}
           disabled={reordering || removing || clearing}
           onMove={move}
           onRemove={remove}

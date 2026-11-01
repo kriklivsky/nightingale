@@ -5,12 +5,26 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-static ACTIVE_WORKER: Mutex<()> = Mutex::new(());
+static ACTIVE_DOWNLOAD: Mutex<()> = Mutex::new(());
 
-pub(super) fn run(request: Value, timeout_sec: u64) -> Result<Value, String> {
-    let _guard = ACTIVE_WORKER
-        .try_lock()
-        .map_err(|_| "Another YouTube request is running; wait for it to finish".to_string())?;
+pub(crate) enum Access {
+    Search,
+    Download,
+    QueuedDownload,
+}
+
+pub(crate) fn run(request: Value, timeout_sec: u64, access: Access) -> Result<Value, String> {
+    let _guard = match access {
+        Access::Search => None,
+        Access::Download => Some(ACTIVE_DOWNLOAD.try_lock().map_err(|_| {
+            "Another YouTube download is running; wait for it to finish".to_string()
+        })?),
+        Access::QueuedDownload => Some(
+            ACTIVE_DOWNLOAD
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ),
+    };
     let input = serde_json::to_vec(&request).map_err(|_| "Invalid video request".to_string())?;
     if input.len() > 8192 {
         return Err("Video request is too large".into());

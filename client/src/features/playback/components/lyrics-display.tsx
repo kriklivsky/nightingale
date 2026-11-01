@@ -23,12 +23,12 @@ type WordStyle = {
 };
 
 const SUNG_RGB = 'rgb(103,232,249)';
-const UNSUNG_RGB = 'rgba(255,255,255,0.6)';
-const UNSUNG_ESTIMATED_RGB = 'rgba(255,200,100,0.55)';
+const UNSUNG_RGB = 'rgba(255,255,255,0.8)';
+const UNSUNG_ESTIMATED_RGB = 'rgba(255,200,100,0.75)';
 
 const NEXT_LINE_STYLES = {
-  plain: { rgb: 'rgb(255,255,255)', opacity: 0.35 },
-  estimated: { rgb: 'rgb(255,200,100)', opacity: 0.25 },
+  plain: { rgb: 'rgb(255,255,255)', opacity: 0.75 },
+  estimated: { rgb: 'rgb(255,200,100)', opacity: 0.65 },
 } as const;
 
 const nextLineStyle = (word: Word): WordStyle =>
@@ -366,7 +366,7 @@ function LyricsDisplayImpl(props: LyricsDisplayProps) {
     >
       <div
         ref={containerRef}
-        className="relative max-w-full rounded-lg bg-black/40 px-3 py-2 sm:px-5 sm:py-2.5"
+        className="relative max-w-full rounded-lg bg-black/65 px-3 py-2 sm:px-5 sm:py-2.5"
         style={{ display: 'none' }}
       >
         <span ref={countdownRef} className={COUNTDOWN_CLASS} style={{ display: 'none' }} />
@@ -400,7 +400,7 @@ function LyricsDisplayImpl(props: LyricsDisplayProps) {
       {nextSeg && (
         <div
           ref={nextContainerRef}
-          className="max-w-full rounded-md bg-black/25 px-3 py-1.5 sm:px-4"
+          className="max-w-full rounded-md bg-black/55 px-3 py-1.5 sm:px-4"
           style={{ display: 'none' }}
         >
           <p

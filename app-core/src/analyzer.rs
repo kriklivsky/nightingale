@@ -587,7 +587,11 @@ where
     }
 }
 
-fn enqueue_hashes(mut hashes: Vec<String>, skip_persisted: bool) -> Result<usize, String> {
+fn enqueue_hashes(
+    mut hashes: Vec<String>,
+    skip_persisted: bool,
+    first: bool,
+) -> Result<usize, String> {
     let mut seen = HashSet::new();
     hashes.retain(|hash| seen.insert(hash.clone()) && !is_usdx_song(hash));
     let mut state = lock_unpoisoned(&ANALYZER);
@@ -614,7 +618,13 @@ fn enqueue_hashes(mut hashes: Vec<String>, skip_persisted: bool) -> Result<usize
     if !newly_queued.is_empty() {
         library_db::analysis_queue_enqueue_rows(&newly_queued)
             .map_err(|error| error.to_string())?;
-        state.queue.extend(newly_queued.iter().cloned());
+        if first {
+            for hash in newly_queued.iter().rev() {
+                state.queue.push_front(hash.clone());
+            }
+        } else {
+            state.queue.extend(newly_queued.iter().cloned());
+        }
     }
 
     let should_start = !state.worker_running && !state.queue.is_empty();
@@ -631,7 +641,11 @@ fn enqueue_hashes(mut hashes: Vec<String>, skip_persisted: bool) -> Result<usize
 }
 
 pub(crate) fn enqueue_one(file_hash: &str) -> Result<(), String> {
-    enqueue_hashes(vec![file_hash.to_string()], false).map(|_| ())
+    enqueue_hashes(vec![file_hash.to_string()], false, false).map(|_| ())
+}
+
+pub(crate) fn enqueue_first(file_hash: &str) -> Result<(), String> {
+    enqueue_hashes(vec![file_hash.to_string()], false, true).map(|_| ())
 }
 
 pub fn enqueue(target: SongTarget) -> Result<usize, String> {
@@ -643,7 +657,7 @@ pub fn enqueue(target: SongTarget) -> Result<usize, String> {
             filters.status.as_deref() != Some("failed"),
         ),
     };
-    enqueue_hashes(hashes, skip_persisted)
+    enqueue_hashes(hashes, skip_persisted, false)
 }
 
 pub fn cancel_analysis(target: SongTarget) -> Result<usize, String> {
@@ -1132,7 +1146,7 @@ fn process_song(initial_hash: &str, remaining: usize, cache: &CacheDir) {
             (false, Some(path), false, None)
         }
         LyricsPlan::Timed(timed) => {
-            if let Err(error) = write_lrclib_transcript(&song, cache, &timed.parsed) {
+            if let Err(error) = write_lrclib_transcript(&song, cache, &timed) {
                 update_queue_status(file_hash, QueuedStatus::Failed(error));
                 return;
             }

@@ -10,6 +10,7 @@ mod playback;
 mod playback_queue;
 mod playback_session;
 mod profile;
+mod remote_control;
 mod scanner;
 mod song_video;
 mod vendor;
@@ -33,8 +34,8 @@ use lyrics::{
     search_lrclib_lyrics,
 };
 use microphones::{
-    list_microphones, set_monitor_gain, start_configured_monitor, start_mic_capture,
-    stop_mic_capture, update_mic_capture_options,
+    list_microphones, mic_stream_endpoint, set_monitor_gain, start_configured_monitor,
+    start_mic_capture, stop_mic_capture, update_mic_capture_options,
 };
 use playback::{
     ensure_mp3_stems, ensure_playable_source_video, fetch_pixabay_videos, get_audio_paths,
@@ -47,6 +48,9 @@ use playback_queue::{
 use playback_session::{load_playback_session, save_playback_session};
 use profile::{
     add_score, add_scores, create_profile, delete_profile, load_profiles, switch_profile,
+};
+use remote_control::{
+    remote_control_info, report_remote_status, RemoteControlState, TvStatusState,
 };
 use scanner::{
     clear_library_source, delete_local_song, jellyfin_login, jellyfin_ping, load_analysis_queue,
@@ -120,6 +124,8 @@ pub fn run() {
         .manage(window_state::WindowStates::default())
         .manage(PlaybackQueue::default())
         .manage(PlaybackSessionStore::default())
+        .manage(RemoteControlState::default())
+        .manage(TvStatusState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
@@ -215,9 +221,12 @@ pub fn run() {
             set_song_video_offset,
             remove_song_video,
             list_microphones,
+            mic_stream_endpoint,
             start_mic_capture,
             stop_mic_capture,
             update_mic_capture_options,
+            remote_control_info,
+            report_remote_status,
             // Vendor
             is_ready,
             trigger_setup
@@ -229,6 +238,7 @@ pub fn run() {
             app_core::startup()?;
             app_core::media_server::start()?;
             let media_endpoint = app_core::media_server::endpoint();
+            remote_control::start(app.handle());
 
             let config = AppConfig::load();
             set_monitor_gain(config.mic_monitor_gain());

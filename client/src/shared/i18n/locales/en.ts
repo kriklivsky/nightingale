@@ -4,6 +4,7 @@ import { library } from './en/library';
 import { menu } from './en/menu';
 import { playback } from './en/playback';
 import { players } from './en/players';
+import { remote } from './en/remote';
 import { settings } from './en/settings';
 
 export const en = {
@@ -13,5 +14,6 @@ export const en = {
   ...menu,
   ...playback,
   ...players,
+  ...remote,
   ...settings,
 };

@@ -15,6 +15,7 @@ mod playback;
 mod playback_queue;
 mod playback_session;
 mod profile;
+mod remote_control;
 mod scanner;
 mod secret;
 mod song;
@@ -23,10 +24,12 @@ mod source;
 mod usdx;
 mod vendor;
 mod vendor_scripts;
+mod youtube_import;
 
 pub use analyzer::{
-    AnalysisQueue, cancel_analysis, delete_cache, enqueue, realign, reanalyze_force_transcribe,
-    reanalyze_full, reanalyze_transcript, refresh_metadata, shutdown_server,
+    AnalysisQueue, QueuedStatus, cancel_analysis, delete_cache, enqueue, realign,
+    reanalyze_force_transcribe, reanalyze_full, reanalyze_transcript, refresh_metadata,
+    shutdown_server,
 };
 pub use backgrounds::{
     BackgroundSelection, CustomBackground, CustomBackgroundKind, CustomBackgroundSource,
@@ -76,6 +79,7 @@ pub use playback::{
 pub use playback_queue::{PlaybackQueue, PlaybackQueueEntry};
 pub use playback_session::{PlaybackPlayer, PlaybackSession, PlaybackSessionStore};
 pub use profile::ProfileStore;
+pub use remote_control::{REMOTE_SESSION_LIFETIME, RemoteControlSettings};
 pub use scanner::{CacheReconcileSummary, reconcile_cache, start_scan};
 pub use song::{Song, SongOrigin};
 pub use song_video::{
@@ -105,11 +109,22 @@ pub use vendor::{
     step_download_ffmpeg, step_download_uv, step_extract_scripts, step_install_packages,
     step_install_python,
 };
+pub use youtube_import::{
+    ImportCandidate, ImportJob, ImportLyricsCheck, ImportState, YoutubeImports,
+    check_import_lyrics, search_youtube,
+};
 
 pub fn startup() -> Result<(), String> {
     init_library().map_err(|e| e.to_string())?;
 
-    let interrupted = AnalysisQueue::recover_interrupted().map_err(|error| error.to_string())?;
+    let mut interrupted =
+        AnalysisQueue::recover_interrupted().map_err(|error| error.to_string())?;
+    let imported: std::collections::HashSet<String> = SongsStore::load_by_hashes(&interrupted)
+        .into_iter()
+        .filter(youtube_import::is_imported)
+        .map(|song| song.file_hash)
+        .collect();
+    interrupted.sort_by_key(|hash| !imported.contains(hash));
 
     let cache = CacheDir::new();
 

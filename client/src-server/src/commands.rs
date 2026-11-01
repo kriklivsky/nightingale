@@ -77,6 +77,7 @@ async fn dispatch(state: AppState, name: &str, payload: Value) -> CmdResult {
         }
         // ── Init/window stubs ────────────────────────────────────────────
         "frontend_ready" | "window_immersive" | "minimize_window" => Ok(Value::Null),
+        "remote_control_info" => Ok(json!({ "status": "off" })),
 
         // ── Config ───────────────────────────────────────────────────────
         "load_config" => Ok(serde_json::to_value(AppConfig::load()).map_err(serde_err)?),

@@ -37,4 +37,12 @@ export default defineConfig(async () => ({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  build: {
+    rolldownOptions: {
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+        remote: path.resolve(__dirname, 'remote.html'),
+      },
+    },
+  },
 }));

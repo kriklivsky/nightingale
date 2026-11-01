@@ -11,6 +11,7 @@ import atexit
 import ctypes.util
 import hashlib
 import json
+import logging
 import os
 import platform
 import time
@@ -92,6 +93,28 @@ def _read_compatible() -> str:
         return Path("/proc/device-tree/compatible").read_bytes().replace(b"\0", b",").decode()
     except (OSError, UnicodeError):
         return ""
+
+
+def _drop_layout_conversion_notice(record: logging.LogRecord) -> bool:
+    return "need NHWC data format, but NCHW set" not in record.getMessage()
+
+
+def rknn_lite() -> Any:
+    """``RKNNLite`` with the standard ``logging`` level names kept usable.
+
+    Importing rknnlite replaces logging's level-name table with one-letter
+    names, after which ``setLevel("WARNING")`` in later libraries raises.
+    The mask heads deliberately pass NCHW buffers, so the runtime's notice
+    that it converts them to NHWC is dropped instead of logged on every call.
+    """
+    from rknnlite.api import RKNNLite
+
+    for name in ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"):
+        logging.addLevelName(getattr(logging, name), name)
+    rknn_logger = logging.getLogger("acuityLogger")
+    if _drop_layout_conversion_notice not in rknn_logger.filters:
+        rknn_logger.addFilter(_drop_layout_conversion_notice)
+    return RKNNLite
 
 
 def rknn_device_available() -> bool:
@@ -208,7 +231,7 @@ def _rknn_readiness(models_dir: str) -> tuple[bool, str]:
         return False, f"RKNN bundle manifest is missing ({metadata})"
     try:
         _validate_metadata(metadata)
-        from rknnlite.api import RKNNLite  # noqa: F401
+        rknn_lite()
     except (ImportError, UvrBackendError) as exc:
         return False, str(exc)
     return True, "ready"
@@ -295,7 +318,7 @@ class RknnUvrBackend(UvrInferenceBackend):
         self.stft_window = torch.hann_window(self.stft_kwargs["win_length"])
 
     def _load_runtime(self, component: dict[str, Any], core_mask: int | None = None) -> Any:
-        from rknnlite.api import RKNNLite
+        RKNNLite = rknn_lite()
 
         model_path = self.model_path.parent / component["file"]
         started = time.perf_counter()
@@ -315,7 +338,7 @@ class RknnUvrBackend(UvrInferenceBackend):
         return runtime
 
     def _initialise_runtimes(self) -> None:
-        from rknnlite.api import RKNNLite
+        RKNNLite = rknn_lite()
 
         core_name = os.environ.get("NIGHTINGALE_RKNN_CORE", "all").strip().lower()
         masks = {
@@ -420,7 +443,7 @@ class RknnUvrBackend(UvrInferenceBackend):
                 ]
             return np.concatenate(outputs, axis=0)
 
-        from rknnlite.api import RKNNLite
+        RKNNLite = rknn_lite()
 
         masks = (RKNNLite.NPU_CORE_0, RKNNLite.NPU_CORE_1, RKNNLite.NPU_CORE_2)
         runtimes = []

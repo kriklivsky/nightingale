@@ -19,12 +19,16 @@ import type { KeyboardEvent } from 'react';
 
 import type { PlaybackQueueEntry } from '@/bridge/playback-queue';
 import { AlbumArt } from '@/features/library/components/song/album-art';
+import { getSongStatusInfo, songStatusLabel } from '@/features/library/components/song/song-status';
 import { Button } from '@/shared/components/ui/button';
 import { useI18n } from '@/shared/i18n/use-i18n';
 import { cn } from '@/shared/utils/cn';
+import type { AnalysisQueue } from '@/types/AnalysisQueue';
 
 type QueueListProps = {
   entries: PlaybackQueueEntry[];
+  nextEntryId: string | undefined;
+  analysis: AnalysisQueue | undefined;
   disabled: boolean;
   onMove: (input: { id: string; targetIndex: number }) => void;
   onRemove: (id: string) => void;
@@ -32,6 +36,7 @@ type QueueListProps = {
 
 type QueueItemProps = {
   entry: PlaybackQueueEntry;
+  status: string | null;
   index: number;
   count: number;
   disabled: boolean;
@@ -39,7 +44,7 @@ type QueueItemProps = {
   onMove: QueueListProps['onMove'];
 };
 
-function QueueItem({ entry, index, count, disabled, onRemove, onMove }: QueueItemProps) {
+function QueueItem({ entry, status, index, count, disabled, onRemove, onMove }: QueueItemProps) {
   const { t } = useI18n();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: entry.id,
@@ -85,12 +90,12 @@ function QueueItem({ entry, index, count, disabled, onRemove, onMove }: QueueIte
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center text-sm font-medium">
           <p className="truncate">{entry.song.title}</p>
-          {index === 0 ? (
+          {status === null ? null : (
             <span className="shrink-0 text-xs font-medium text-primary">
               {' · '}
-              {t('queue.nextUp')}
+              {status}
             </span>
-          ) : null}
+          )}
         </div>
         <p className="truncate text-xs text-muted-foreground">{entry.song.artist || '—'}</p>
       </div>
@@ -125,8 +130,22 @@ function QueueItem({ entry, index, count, disabled, onRemove, onMove }: QueueIte
   );
 }
 
-export function QueueList({ entries, disabled, onMove, onRemove }: QueueListProps) {
+export function QueueList({
+  entries,
+  nextEntryId,
+  analysis,
+  disabled,
+  onMove,
+  onRemove,
+}: QueueListProps) {
   const { t } = useI18n();
+  const statusFor = (entry: PlaybackQueueEntry): string | null => {
+    if (entry.id === nextEntryId) {
+      return t('queue.nextUp');
+    }
+    const info = getSongStatusInfo(entry.song.is_analyzed, analysis?.entries[entry.song.file_hash]);
+    return info.isReady === true ? null : songStatusLabel(t, info);
+  };
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -156,6 +175,7 @@ export function QueueList({ entries, disabled, onMove, onRemove }: QueueListProp
             <QueueItem
               key={entry.id}
               entry={entry}
+              status={statusFor(entry)}
               index={index}
               count={entries.length}
               disabled={disabled}

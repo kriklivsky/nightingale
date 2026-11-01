@@ -194,38 +194,49 @@ WINDOW_PAD_SECONDS = 0.5
 # Longest stretch of contested lines re-aligned as one passage.
 MAX_JOINT_ALIGN_SECONDS = 30.0
 
-# Qwen chunking: chunk length cap, how far from a (shifted) LRC line boundary
-# a cut may move to reach a vocal pause, and audio kept before the first and
-# after the last line.
+# Qwen chunking: one chunk holds lines spanning up to CHUNK_LRC_SECONDS of LRC
+# time and is searched SEARCH_SECONDS around them once the local LRC offset is
+# known, WIDE_SEARCH_SECONDS before that or after a chunk found nothing.
+CHUNK_LRC_SECONDS = 20.0
+SEARCH_SECONDS = 5.0
+WIDE_SEARCH_SECONDS = 10.0
 MAX_CHUNK_SECONDS = 40.0
-CUT_SEARCH_SECONDS = 2.0
-EDGE_SECONDS = 2.0
-MAX_OFFSET_SECONDS = 8.0
 ENERGY_FRAME_SECONDS = 0.02
-# Aligner prompt size: audio tokens per second, tokens per word (text plus two
-# timestamp markers, with margin) and fixed template tokens.
-TOKENS_PER_SECOND = 13
-TOKENS_PER_WORD = 5
-PROMPT_TOKENS = 48
-# A chunk is re-cut later when its last SQUASH_WORDS words run into the cut,
-# all start within SQUASH_SECONDS of it and one lasts at most one 80 ms
-# timestamp step: the line did not fit and was pressed into the chunk end.
-CHUNK_RETRIES = 2
+# Confidence of a line is the aligner's mean probability for its word starts;
+# misaligned text (a choir drowned in the mix, words that are not there)
+# scores low. A line is kept within CLOSE_DRIFT_SECONDS of its expected offset
+# from MIN_LINE_CONFIDENCE, within LINE_DRIFT_SECONDS from SURE_LINE_CONFIDENCE.
+# The expected offset jumps (a cut in a music video) only when JUMP_LINES lines
+# of a chunk agree on the new one with a mean confidence of SURE_LINE_CONFIDENCE.
+MIN_LINE_CONFIDENCE = 0.2
+SURE_LINE_CONFIDENCE = 0.35
+CLOSE_DRIFT_SECONDS = 1.5
+JUMP_LINES = 2
+# A line whose next word starts this long after the previous one was stretched
+# over a pause it does not have.
+MAX_WORD_GAP_SECONDS = 4.0
+# Singing time of a line: lead-in plus time per syllable. An LRC line counts
+# for at most LRC_LINE_SPAN_FACTOR times that, so a timestamp far from the
+# singing (a first line stamped at 0:00) cannot stretch a chunk.
+LINE_LEAD_SECONDS = 0.5
+SECONDS_PER_SYLLABLE = 0.3
+LRC_LINE_SPAN_FACTOR = 2.0
+SYLLABLE_PATTERN = re.compile(
+    r"[aeiouyàáâãäåæèéêëìíîïòóôõöøœùúûüýÿаеёиоуыэюя]|[぀-ヿ㐀-鿿가-힯]",
+    re.IGNORECASE,
+)
 # Vocal-stem frames below this fraction of the song's 95th-percentile level
 # count as silent; lines whose window is mostly silent are aligned on the mix.
 SILENT_VOCAL_RATIO = 0.08
 MIX_FALLBACK_SILENT_FRACTION = 0.6
-# A line starting further than this from its LRC time plus the song's offset is
-# treated as misplaced and re-aligned within its own window, padded by
-# REPAIR_PAD_SECONDS.
 LINE_DRIFT_SECONDS = 3.0
-# A line starting this much before the previous line's last word overlaps it;
-# smaller overlaps are trimmed by _separate_lines.
-OVERLAP_TOLERANCE_SECONDS = 0.2
+# Neighbours whose offsets differ by less than this are interpolated between;
+# a larger step is a cut in the recording, placed at the longest LRC pause.
+OFFSET_STEP_SECONDS = 1.0
 REPAIR_PAD_SECONDS = 1.0
-SQUASH_WORDS = 3
-SQUASH_SECONDS = 0.8
-CUT_MARGIN_SECONDS = 0.1
+# An estimated line starts at the first sung moment of its window when the
+# stem is silent for longer than this at its LRC time.
+LATE_ENTRY_SECONDS = 1.0
 MIN_WORD_SECONDS = 0.081
 
 
@@ -683,30 +694,99 @@ def _vocal_energy(audio) -> np.ndarray:
     return np.convolve(np.sqrt(np.mean(frames**2, axis=1)), np.ones(5) / 5, mode="same")
 
 
-def _quietest(energy: np.ndarray, lo: float, hi: float) -> float:
-    first = max(0, int(lo / ENERGY_FRAME_SECONDS))
-    last = min(len(energy), int(hi / ENERGY_FRAME_SECONDS))
-    if last <= first:
-        return max(0.0, lo)
-    return (first + int(np.argmin(energy[first:last]))) * ENERGY_FRAME_SECONDS
+# LRC taken from another release of the song (a music video with a longer
+# intro, a live cut) is moved by the shift under which its lines cover the
+# loudest vocal-stem frames. An LRC line lasts until the next one, so each span
+# is capped by its word count; lines moved outside the recording score as
+# silence. Vocal level is z-scored dB at LRC_SHIFT_STEP_SECONDS resolution.
+LRC_SHIFT_STEP_SECONDS = 0.1
+LRC_SECONDS_PER_WORD = 0.35
+LRC_LINE_LEAD_SECONDS = 0.5
+MAX_LRC_LINE_SECONDS = 6.0
 
 
-def _chunk_fits(aligner, seconds: float, words: int) -> bool:
-    if seconds > MAX_CHUNK_SECONDS:
-        return False
-    limit = aligner.max_sequence
-    return limit is None or TOKENS_PER_SECOND * seconds + TOKENS_PER_WORD * words + PROMPT_TOKENS <= limit
+def estimate_lrc_shift(vocals_path: str, lines: list[dict], max_shift: float) -> float:
+    """Seconds to add to the LRC times of ``lines`` for this recording."""
+    import whisperx
+
+    energy = _vocal_energy(whisperx.load_audio(vocals_path))
+    step = int(round(LRC_SHIFT_STEP_SECONDS / ENERGY_FRAME_SECONDS))
+    energy = energy[: len(energy) // step * step].reshape(-1, step).mean(axis=1)
+    level = 20 * np.log10(energy + 1e-5)
+    level = np.clip((level - np.median(level)) / (np.std(level) + 1e-6), -3.0, 3.0)
+    reach = int(max_shift / LRC_SHIFT_STEP_SECONDS)
+    padded = np.concatenate([np.full(reach + 1, level.min()), level, np.full(reach + 1, level.min())])
+    totals = np.concatenate([[0.0], np.cumsum(padded)])
+    spans = []
+    for line in lines:
+        start = float(line["start"])
+        end = min(
+            float(line["end"]),
+            start + MAX_LRC_LINE_SECONDS,
+            start + LRC_LINE_LEAD_SECONDS + LRC_SECONDS_PER_WORD * len(str(line.get("text", "")).split()),
+        )
+        first = int(start / LRC_SHIFT_STEP_SECONDS)
+        spans.append((first, max(first + 1, int(end / LRC_SHIFT_STEP_SECONDS))))
+    best_score, best_shift = -math.inf, 0
+    for shift in range(-reach, reach + 1):
+        score = 0.0
+        for first, last in spans:
+            lo = min(max(first + shift + reach + 1, 0), len(padded))
+            hi = min(max(last + shift + reach + 1, 0), len(padded))
+            score += totals[hi] - totals[lo]
+        if score > best_score:
+            best_score, best_shift = score, shift
+    return best_shift * LRC_SHIFT_STEP_SECONDS
 
 
-def _squashed_at_end(tokens: list[dict], chunk_seconds: float) -> bool:
-    """The chunk's last words were pressed into its final moment."""
-    tail = tokens[-SQUASH_WORDS:]
-    return (
-        len(tail) == SQUASH_WORDS
-        and tail[-1]["end_time"] >= chunk_seconds - CUT_MARGIN_SECONDS
-        and tail[0]["start_time"] >= chunk_seconds - SQUASH_SECONDS
-        and any(t["end_time"] - t["start_time"] <= MIN_WORD_SECONDS for t in tail)
-    )
+def shift_lines(lines: list[dict], shift: float, duration: float) -> list[dict]:
+    """Copies of ``lines`` moved by ``shift`` seconds; lines that end up outside
+    the recording are dropped and the rest are clamped to it."""
+    moved = []
+    for line in lines:
+        start, end = float(line["start"]) + shift, float(line["end"]) + shift
+        if end <= 0 or start >= duration:
+            continue
+        line = dict(line, start=max(0.0, start), end=min(duration, end))
+        if isinstance(line.get("words"), list):
+            line["words"] = [
+                dict(word, **{key: min(duration, max(0.0, float(word[key]) + shift))
+                              for key in ("start", "end") if isinstance(word.get(key), (int, float))})
+                for word in line["words"] if isinstance(word, dict)
+            ]
+        moved.append(line)
+    return moved
+
+
+def _syllables(text: str) -> int:
+    return max(1, len(SYLLABLE_PATTERN.findall(text)))
+
+
+def _sung_seconds(text: str) -> float:
+    return LINE_LEAD_SECONDS + SECONDS_PER_SYLLABLE * _syllables(text)
+
+
+def _line_confidence(segment: dict) -> float:
+    return float(np.mean([word.get("score", 0.0) for word in segment["words"]]))
+
+
+def _spread_words(text: str, start: float, end: float, language: str) -> list[dict]:
+    """The line's words over ``start``..``end`` in proportion to their
+    syllables, marked as estimated (CJK lines stay one unit)."""
+    words = [text] if cjk.is_cjk(language) else text.split() or [text]
+    weights = [_syllables(word) for word in words]
+    total = sum(weights)
+    spread = []
+    elapsed = 0
+    for word, weight in zip(words, weights):
+        spread.append({
+            "word": word,
+            "start": round(start + (end - start) * elapsed / total, 3),
+            "end": round(start + (end - start) * (elapsed + weight) / total, 3),
+            "estimated": True,
+        })
+        elapsed += weight
+    return spread
 
 
 def _align_chunks_qwen(
@@ -720,32 +800,44 @@ def _align_chunks_qwen(
 ) -> list[dict]:
     """Align LRC-timed lines a few verses at a time.
 
-    LRC files are often offset from the recording by a second or more, so line
-    windows only seed the chunking: each chunk ends at the quietest vocal
-    moment near a line boundary shifted by the offset measured on the chunks
-    already aligned, and the aligner places every word of the chunk itself.
-    Lines whose vocal stem is mostly silent (a choir or backing vocals the
-    separator put in the instrumental) form their own chunks, aligned against
-    the original mix. A chunk can still lock onto a repeated chorus elsewhere;
-    the offset therefore only trusts lines near the running offset, and lines
-    left squashed or far from their LRC time are repaired afterwards.
+    LRC timestamps only seed the search: they are often a second or more off
+    the recording, shift by several seconds where a music video cuts or extends
+    a section, and some are plainly wrong. Each chunk is searched around its
+    LRC time moved by the offset of the lines aligned just before it, starting
+    after the last aligned word; its last line is aligned again with the next
+    chunk, so a chunk end cannot squeeze it. A line is kept when the aligner
+    is confident about its words and it starts near the expected offset; the
+    offset jumps only when several lines of a chunk agree on the new one.
+    Lines whose vocal stem is mostly silent (a choir or backing vocals
+    the separator put in the instrumental) are aligned against the original
+    mix, and the other source is tried when a chunk is not fully confident.
+    Lines still missing are aligned again between their aligned neighbours;
+    the rest are spread over their LRC time moved by the neighbours' offset
+    and marked as estimated.
     """
     duration = len(audio) / 16000
     energy = _vocal_energy(audio)
     silent = energy < np.percentile(energy, 95) * SILENT_VOCAL_RATIO
     mix = None
-    word_counts = [len(line.split()) for line in clean_lines]
-    # Line start minus LRC start for lines that look trustworthy; their median
-    # is the LRC offset, so one misaligned chunk cannot drag later cuts away.
-    trusted: list[float] = []
-    offset = 0.0
-    results: list[dict | None] = [None] * len(clean_lines)
-    from_mix = [False] * len(clean_lines)
+    count = len(clean_lines)
+    lrc_start = [window[0] for window in windows]
+    lrc_end = [
+        min(window[1], window[0] + LRC_LINE_SPAN_FACTOR * _sung_seconds(text))
+        for window, text in zip(windows, clean_lines)
+    ]
+    results: list[dict | None] = [None] * count
+    from_mix = [False] * count
 
-    def unvoiced(index: int) -> bool:
-        first_frame = max(0, int((windows[index][0] + offset) / ENERGY_FRAME_SECONDS))
-        frames = silent[first_frame : max(first_frame, int((windows[index][1] + offset) / ENERGY_FRAME_SECONDS))]
-        return bool(mix_path) and len(frames) > 0 and frames.mean() > MIX_FALLBACK_SILENT_FRACTION
+    def offset_of(index: int) -> float:
+        return results[index]["start"] - lrc_start[index]
+
+    def frames(start: float, end: float) -> np.ndarray:
+        first_frame = max(0, int(start / ENERGY_FRAME_SECONDS))
+        return silent[first_frame : max(first_frame, int(end / ENERGY_FRAME_SECONDS))]
+
+    def unvoiced(index: int, offset: float) -> bool:
+        window = frames(lrc_start[index] + offset, lrc_end[index] + offset)
+        return bool(mix_path) and len(window) > 0 and window.mean() > MIX_FALLBACK_SILENT_FRACTION
 
     def source(on_mix: bool):
         nonlocal mix
@@ -757,7 +849,7 @@ def _align_chunks_qwen(
             mix = whisperx.load_audio(mix_path)
         return mix
 
-    def align_span(first: int, last: int, start: float, end: float, on_mix: bool):
+    def align_span(first: int, last: int, start: float, end: float, on_mix: bool) -> list[dict | None]:
         try:
             tokens = aligner.align(
                 source(on_mix)[int(start * 16000) : int(end * 16000)],
@@ -772,6 +864,7 @@ def _align_chunks_qwen(
                 "word": t["text"],
                 "start": round(min(t["start_time"] + start, end), 3),
                 "end": round(min(t["end_time"] + start, end), 3),
+                "score": t.get("confidence", 0.0),
             }
             for t in tokens
         ]
@@ -794,158 +887,200 @@ def _align_chunks_qwen(
                 lines.append(segment)
             else:
                 lines.append(None)
-        return lines, tokens
+        return lines
 
-    def placed(index: int, segment: dict | None) -> bool:
-        return (
-            segment is not None
-            and not _line_squashed(segment)
-            and abs(segment["start"] - windows[index][0] - offset) <= LINE_DRIFT_SECONDS
-        )
+    def sound(segment: dict | None) -> bool:
+        if segment is None or _line_squashed(segment):
+            return False
+        words = segment["words"]
+        return all(b["start"] - a["start"] <= MAX_WORD_GAP_SECONDS for a, b in zip(words, words[1:]))
 
+    def keepable(first: int, lines: list[dict | None], expected: list[float]) -> list[int]:
+        kept = []
+        for index, segment, shift in zip(range(first, first + len(lines)), lines, expected):
+            if not sound(segment):
+                continue
+            confidence = _line_confidence(segment)
+            drift = abs(segment["start"] - lrc_start[index] - shift)
+            if (confidence >= MIN_LINE_CONFIDENCE and drift <= CLOSE_DRIFT_SECONDS) or (
+                confidence >= SURE_LINE_CONFIDENCE and drift <= LINE_DRIFT_SECONDS
+            ):
+                kept.append(index)
+        return kept
+
+    def jump(first: int, lines: list[dict | None]) -> float | None:
+        """An offset JUMP_LINES sound lines agree on with a mean confidence of
+        SURE_LINE_CONFIDENCE, if any."""
+        found = [
+            (segment["start"] - lrc_start[index], _line_confidence(segment))
+            for index, segment in zip(range(first, first + len(lines)), lines)
+            if sound(segment) and _line_confidence(segment) >= MIN_LINE_CONFIDENCE
+        ]
+        groups = [[f for f in found if abs(f[0] - candidate) <= CLOSE_DRIFT_SECONDS] for candidate, _ in found]
+        group = max(groups, key=lambda g: (len(g), sum(c for _, c in g)), default=[])
+        if len(group) < JUMP_LINES or np.mean([c for _, c in group]) < SURE_LINE_CONFIDENCE:
+            return None
+        return float(np.median([o for o, _ in group]))
+
+    def align_confident(
+        first: int, last: int, start: float, end: float, preferred: bool,
+        expected: list[float] | None, may_jump: bool,
+    ) -> tuple[list[dict | None], list[int], bool]:
+        """Lines first..last aligned on start..end, the indices of the ones
+        kept and whether they came from the mix. Lines are kept near their
+        ``expected`` offsets, or near a jump the chunk agrees on when
+        ``may_jump`` (with no expected offsets, only that)."""
+        best: tuple[list[dict | None], list[int], bool] | None = None
+        for on_mix in (preferred, not preferred) if mix_path else (False,):
+            lines = align_span(first, last, start, end, on_mix)
+            kept = keepable(first, lines, expected) if expected is not None else []
+            jumped = jump(first, lines) if may_jump else None
+            if jumped is not None:
+                kept = max(kept, keepable(first, lines, [jumped] * len(lines)), key=len)
+            if best is None or len(kept) > len(best[1]):
+                best = (lines, kept, on_mix)
+            if len(kept) == last - first + 1:
+                break
+        return best
+
+    def neighbours(first: int, last: int) -> tuple[int | None, int | None]:
+        previous = next((i for i in range(first - 1, -1, -1) if results[i] is not None), None)
+        following = next((i for i in range(last + 1, count) if results[i] is not None), None)
+        return previous, following
+
+    def neighbour_offsets(first: int, last: int, fallback: float) -> list[float]:
+        """Offsets for lines first..last from the aligned lines around them:
+        interpolated when the neighbours agree, otherwise split at the longest
+        LRC pause between them, where a recording is most likely cut."""
+        previous, following = neighbours(first, last)
+        span = range(first, last + 1)
+        if previous is None and following is None:
+            return [fallback for _ in span]
+        if previous is None or following is None:
+            return [offset_of(following if previous is None else previous) for _ in span]
+        before, after = offset_of(previous), offset_of(following)
+        if abs(after - before) < OFFSET_STEP_SECONDS:
+            reach = lrc_start[following] - lrc_start[previous]
+            return [
+                before + (after - before) * (lrc_start[i] - lrc_start[previous]) / reach if reach > 0 else before
+                for i in span
+            ]
+        cut = max(range(previous, following), key=lambda i: lrc_start[i + 1] - lrc_end[i])
+        return [before if i <= cut else after for i in span]
+
+    def floor_after(index: int | None) -> float:
+        return 0.0 if index is None else results[index]["words"][-1]["start"] + MIN_WORD_SECONDS
+
+    offset: float | None = None
+    lost = True
+    floor = 0.0
     first = 0
-    start = max(0.0, windows[0][0] - EDGE_SECONDS)
-    while first < len(clean_lines):
-        on_mix = unvoiced(first)
+    while first < count:
+        shift = offset or 0.0
+        search = WIDE_SEARCH_SECONDS if lost else SEARCH_SECONDS
+        on_mix = unvoiced(first, shift)
         last = first
         while (
-            last + 1 < len(clean_lines)
-            and unvoiced(last + 1) == on_mix
-            and _chunk_fits(
-                aligner,
-                windows[last + 1][1] + offset + CUT_SEARCH_SECONDS - start,
-                sum(word_counts[first : last + 2]),
-            )
+            last + 1 < count
+            and unvoiced(last + 1, shift) == on_mix
+            and lrc_end[last + 1] - lrc_start[first] <= CHUNK_LRC_SECONDS
         ):
             last += 1
-        # The token estimate can be short for long words; check the exact
-        # prompt for the longest audio this chunk may get after re-cuts.
+        start = min(max(floor, lrc_start[first] + shift - search), max(floor, duration - 1.0))
+
+        def chunk_end(line: int) -> float:
+            return min(duration, start + MAX_CHUNK_SECONDS, max(start + 1.0, lrc_end[line] + shift + search))
+
         while last > first and not aligner.fits(
-            windows[last + 1][0] + offset + (CHUNK_RETRIES + 1) * (CUT_SEARCH_SECONDS + 0.3) - start
-            if last + 1 < len(clean_lines)
-            else windows[last][1] + offset + EDGE_SECONDS - start,
-            "\n".join(clean_lines[first : last + 1]),
-            language,
+            chunk_end(last) - start, "\n".join(clean_lines[first : last + 1]), language,
         ):
             last -= 1
-        if last + 1 < len(clean_lines):
-            boundary = windows[last + 1][0] + offset
-            end = _quietest(
-                energy, max(start + 1.0, boundary - CUT_SEARCH_SECONDS), boundary + CUT_SEARCH_SECONDS,
-            )
-        else:
-            end = min(duration, windows[last][1] + offset + EDGE_SECONDS)
+        end = chunk_end(last)
         progress(
-            80 + 8 * first // len(clean_lines),
-            f"Aligning lyric lines: {first + 1}-{last + 1}/{len(clean_lines)}",
+            80 + 6 * first // count,
+            f"Aligning lyric lines: {first + 1}-{last + 1}/{count}",
         )
-        if on_mix:
-            print(
-                f"[nightingale:LOG] Vocal stem is silent in lines {first + 1}-{last + 1}; "
-                "aligning them against the original mix",
-                flush=True,
-            )
-        for retry in range(CHUNK_RETRIES + 1):
-            lines, tokens = align_span(first, last, start, end, on_mix)
-            if retry == CHUNK_RETRIES or last + 1 == len(clean_lines) or not _squashed_at_end(tokens, end - start):
-                break
-            # The cut fell inside the chunk's last line: move it to the next pause.
-            end = _quietest(energy, end + 0.3, end + CUT_SEARCH_SECONDS + 0.3)
-        results[first : last + 1] = lines
-        from_mix[first : last + 1] = [on_mix] * len(lines)
+        lines, kept, mixed = align_confident(
+            first, last, start, end, on_mix, None if offset is None else [offset] * (last - first + 1), True,
+        )
+        settled = last if last + 1 == count or last == first else last - 1
+        kept = [index for index in kept if index <= settled]
+        for index in kept:
+            results[index] = lines[index - first]
+            from_mix[index] = mixed
+        if kept:
+            offset = float(np.median([offset_of(index) for index in kept]))
+            floor = floor_after(kept[-1])
+        lost = not kept
+        first = settled + 1
 
-        deltas = [
-            segment["start"] - windows[index][0]
-            for index, segment in zip(range(first, last + 1), lines)
-            if segment is not None and len(segment["words"]) > 1 and not _line_squashed(segment)
-        ]
-        reference = offset if trusted else float(np.median(deltas)) if deltas else 0.0
-        trusted += [delta for delta in deltas if abs(delta - reference) <= LINE_DRIFT_SECONDS]
-        if trusted:
-            offset = max(-MAX_OFFSET_SECONDS, min(MAX_OFFSET_SECONDS, float(np.median(trusted))))
-        first = last + 1
-        start = end
-
-    def overlaps(segments: list[dict | None]) -> list[tuple[int, int]]:
-        """Adjacent lines where the later one starts before the earlier one's
-        last word by more than OVERLAP_TOLERANCE_SECONDS."""
-        pairs = []
-        previous = None
-        for index, segment in enumerate(segments):
-            if segment is None:
-                continue
-            if previous is not None and (
-                segment["start"] < segments[previous]["words"][-1]["start"] - OVERLAP_TOLERANCE_SECONDS
-            ):
-                pairs.append((previous, index))
-            previous = index
-        return pairs
-
-    def at_lrc(index: int) -> dict:
-        window_start = min(duration, max(0.0, windows[index][0] + offset))
-        window_end = min(duration, max(window_start, windows[index][1] + offset))
-        return {
-            "text": clean_lines[index],
-            "start": window_start,
-            "end": window_end,
-            "words": [{"word": clean_lines[index], "start": window_start, "end": window_end, "estimated": True}],
-        }
-
-    # Lines that are squashed, far from their (offset) LRC time or overlapping
-    # a neighbour are aligned again on their own window (overlapping lines
-    # together, which orders them), on the stem and then on the mix.
-    for pair in overlaps([segment if placed(i, segment) else None for i, segment in enumerate(results)]):
-        for index in pair:
-            results[index] = None
-    broken = [index for index in range(len(clean_lines)) if not placed(index, results[index])]
     runs: list[list[int]] = []
-    for index in broken:
-        if runs and runs[-1][-1] == index - 1 and windows[index][1] - windows[runs[-1][0]][0] <= MAX_CHUNK_SECONDS / 2:
+    for index in range(count):
+        if results[index] is not None:
+            continue
+        if runs and runs[-1][-1] == index - 1 and lrc_end[index] - lrc_start[runs[-1][0]] <= CHUNK_LRC_SECONDS:
             runs[-1].append(index)
         else:
             runs.append([index])
+    repaired = 0
     for run in runs:
         first, last = run[0], run[-1]
-        progress(88, f"Re-aligning misplaced lines {first + 1}-{last + 1}")
-        start = max(0.0, windows[first][0] + offset - REPAIR_PAD_SECONDS)
-        end = min(duration, windows[last][1] + offset + REPAIR_PAD_SECONDS)
-        preferred = unvoiced(first)
-        for on_mix in (preferred, not preferred) if mix_path else (False,):
-            lines, _ = align_span(first, last, start, end, on_mix)
-            for index, segment in zip(run, lines):
-                if not placed(index, results[index]) and placed(index, segment):
-                    results[index] = segment
-                    from_mix[index] = on_mix
-            if all(placed(index, results[index]) for index in run):
-                break
+        progress(86 + 2 * first // count, f"Re-aligning missing lines {first + 1}-{last + 1}")
+        previous, following = neighbours(first, last)
+        low = floor_after(previous)
+        high = results[following]["start"] if following is not None else duration
+        offsets = neighbour_offsets(first, last, offset or 0.0)
+        bounded = previous is not None and following is not None and high - low <= MAX_CHUNK_SECONDS
+        if bounded:
+            start, end = low, high
+        else:
+            start = max(low, lrc_start[first] + offsets[0] - REPAIR_PAD_SECONDS)
+            end = min(high, lrc_end[last] + offsets[-1] + REPAIR_PAD_SECONDS)
+        if end - start < 0.5 or not aligner.fits(end - start, "\n".join(clean_lines[first : last + 1]), language):
+            continue
+        lines, kept, mixed = align_confident(
+            first, last, start, end, unvoiced(first, offsets[0]), offsets, False,
+        )
+        for index in kept:
+            results[index] = lines[index - first]
+            from_mix[index] = mixed
+            repaired += 1
 
     # The stem has no voice under lines aligned on the mix, so only stem
     # alignments are trimmed to its sung parts.
     _trim_words_to_vocals(
         [segment for segment, mixed in zip(results, from_mix) if segment is not None and not mixed], audio,
     )
-    segments = [segment if placed(index, segment) else at_lrc(index) for index, segment in enumerate(results)]
-    # Lines that still overlap cannot both be right: an aligned line yields to
-    # one kept at its LRC timing, otherwise the one further from its LRC time
-    # yields. Each step pins one more line to the LRC, so this terminates.
-    while pairs := [
-        pair for pair in overlaps(segments)
-        if not all(segments[i]["words"][0].get("estimated") for i in pair)
-    ]:
-        aligned = [i for i in pairs[0] if not segments[i]["words"][0].get("estimated")]
-        loser = (
-            max(aligned, key=lambda i: abs(segments[i]["start"] - windows[i][0] - offset))
-            if len(aligned) == 2
-            else aligned[0]
-        )
-        segments[loser] = at_lrc(loser)
-    estimated = sum(1 for segment in segments if segment["words"][0].get("estimated"))
+
+    aligned = [index for index in range(count) if results[index] is not None]
+    estimated = 0
+    for index in range(count):
+        if results[index] is not None:
+            continue
+        estimated += 1
+        shift = neighbour_offsets(index, index, offset or 0.0)[0]
+        _, following = neighbours(index, index)
+        low = floor_after(index - 1) if index > 0 else 0.0
+        high = results[following]["start"] if following is not None else duration
+        start = lrc_start[index] + shift
+        reach = max(start, min(windows[index][1] + shift, high))
+        if not unvoiced(index, shift):
+            voiced = np.flatnonzero(~frames(start, reach))
+            if len(voiced) and voiced[0] * ENERGY_FRAME_SECONDS > LATE_ENTRY_SECONDS:
+                start += voiced[0] * ENERGY_FRAME_SECONDS
+        start = min(max(start, low), max(low, high - MIN_WORD_SECONDS))
+        end = max(start + MIN_WORD_SECONDS, min(start + _sung_seconds(clean_lines[index]), lrc_end[index] + shift, high))
+        words = _spread_words(clean_lines[index], start, end, language)
+        results[index] = {"text": clean_lines[index], "start": words[0]["start"], "end": words[-1]["end"], "words": words}
+
+    offsets = [round(results[index]["start"] - lrc_start[index], 1) for index in aligned]
     print(
-        f"[nightingale:LOG] Qwen chunked alignment: {len(segments)} lines, LRC offset {offset:+.2f}s, "
-        f"{len(broken)} re-aligned, {estimated} left at LRC timing",
+        f"[nightingale:LOG] Qwen chunked alignment: {count} lines, {len(aligned)} aligned "
+        f"({sum(from_mix[i] for i in aligned)} on the mix, {repaired} between neighbours), "
+        f"{estimated} estimated; LRC offset {min(offsets, default=0):+.1f}..{max(offsets, default=0):+.1f}s",
         flush=True,
     )
-    return segments
+    return results
 
 
 def _line_squashed(segment: dict) -> bool:

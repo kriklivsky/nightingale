@@ -51,7 +51,7 @@ def run(request):
         raise RuntimeError('YouTube downloader is unavailable. Install yt-dlp[default] in the Nightingale Python environment.') from error
     options = {'quiet': True, 'no_warnings': True, 'logger': QuietLogger(), 'noplaylist': True,
                'socket_timeout': 15, 'retries': 2, 'fragment_retries': 2,
-               'cachedir': False, 'remote_components': [], 'js_runtimes': {'node': {}, 'deno': {}}}
+               'cachedir': False, 'remote_components': [], 'js_runtimes': {'node': {}, 'deno': {}, 'quickjs': {}}}
     if request['action'] == 'search':
         query = request['query']
         if not isinstance(query, str) or not 1 <= len(query) <= 300:
@@ -64,11 +64,28 @@ def run(request):
                                 'duration_sec': seconds(entry.get('duration'))}
                                for entry in (info or {}).get('entries', [])
                                if entry and video_id(entry.get('id')) and not entry.get('is_live')]}
-    if request['action'] != 'download' or not video_id(request.get('video_id')):
+    if request['action'] not in ('download', 'import') or not video_id(request.get('video_id')):
         raise ValueError('Invalid YouTube video identifier')
     directory = Path(request['directory'])
     ffmpeg = request['ffmpeg']
+    clip, info = fetch(yt_dlp, options, request['video_id'], directory, ffmpeg)
+    if request['action'] == 'import':
+        return {'title': text(info.get('title')), 'duration_sec': seconds(info.get('duration'))}
+    local_pcm, video_pcm = directory / 'song.f32', directory / 'video.f32'
+    offset = None
+    try:
+        if decode(ffmpeg, request['audio_path'], local_pcm) and decode(ffmpeg, clip, video_pcm):
+            from video_sync import find_offset
+            offset = find_offset(local_pcm, video_pcm)
+    except (subprocess.TimeoutExpired, ValueError):
+        offset = None
+    finally:
+        for path in (local_pcm, video_pcm):
+            path.unlink(missing_ok=True)
+    return {'title': text(info.get('title')), 'offset_sec': offset}
 
+
+def fetch(yt_dlp, options, video, directory, ffmpeg):
     def check_progress(_progress):
         if sum(path.stat().st_size for path in directory.iterdir() if path.is_file()) > MAX_BYTES:
             raise RuntimeError('Video exceeds the 512 MiB download limit')
@@ -85,22 +102,11 @@ def run(request):
                     'progress_hooks': [check_progress], 'match_filter': check_media,
                     'concurrent_fragment_downloads': 1})
     with yt_dlp.YoutubeDL(options) as downloader:
-        info = downloader.extract_info('https://www.youtube.com/watch?v=' + request['video_id'], download=True)
+        info = downloader.extract_info('https://www.youtube.com/watch?v=' + video, download=True)
     clip = directory / 'clip.mp4'
     if not info or not clip.is_file() or not 0 < clip.stat().st_size <= MAX_BYTES:
         raise RuntimeError('No compatible H.264 video was downloaded')
-    local_pcm, video_pcm = directory / 'song.f32', directory / 'video.f32'
-    offset = None
-    try:
-        if decode(ffmpeg, request['audio_path'], local_pcm) and decode(ffmpeg, clip, video_pcm):
-            from video_sync import find_offset
-            offset = find_offset(local_pcm, video_pcm)
-    except (subprocess.TimeoutExpired, ValueError):
-        offset = None
-    finally:
-        for path in (local_pcm, video_pcm):
-            path.unlink(missing_ok=True)
-    return {'title': text(info.get('title')), 'offset_sec': offset}
+    return clip, info
 
 
 if __name__ == '__main__':

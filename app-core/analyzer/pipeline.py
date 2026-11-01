@@ -10,7 +10,7 @@ from whisper_compat import progress
 from key_detect import detect_key
 from stems import separate_stems, separate_stems_uvr
 from uvr_backend import release_rknn_backend
-from align import align_lyrics
+from align import align_lyrics, estimate_lrc_shift, shift_lines
 from lyricsfile import parse_word_synced
 
 
@@ -197,6 +197,14 @@ def run_pipeline(
             with open(transcript_path, "w", encoding="utf-8") as f:
                 json.dump(transcript, f, ensure_ascii=False, indent=2)
             return
+        shift_search = transcript.get("lrc_shift_search_secs") if skip_transcription else None
+        if timed_lines and isinstance(shift_search, (int, float)) and shift_search > 0:
+            shift = estimate_lrc_shift(vocals_path or audio_path, timed_lines, float(shift_search))
+            timed_lines = shift_lines(timed_lines, shift, float(duration_secs))
+            if not timed_lines:
+                raise ValueError("Timed lyrics do not fit this recording; analysis stopped.")
+            lrc_lines = [line["text"] for line in timed_lines]
+            progress(60, f"Moved LRC from another release by {shift:+.1f}s")
         release_rknn_backend()
         hard_free_gpu("before_alignment")
 

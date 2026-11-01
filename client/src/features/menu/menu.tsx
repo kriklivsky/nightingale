@@ -17,6 +17,7 @@ import { useMenuNav } from '@/features/menu/hooks/use-menu-nav';
 import { CreateProfileDialog } from '@/features/profiles/components/create';
 import { LeaderboardsDialog } from '@/features/profiles/components/leaderboards';
 import { SelectProfileDialog } from '@/features/profiles/components/select';
+import { useRemoteMenuControl } from '@/features/remote-control/use-remote-menu-control';
 import { Setup } from '@/features/setup/components/setup';
 import { useShouldRunSetup } from '@/features/setup/hooks/use-should-run-setup';
 import { SongVideoDialog } from '@/features/song-video/video-dialog';
@@ -61,6 +62,7 @@ export const MenuLayout = () => {
   }, [setMode]);
 
   useMenuNav({ overlayOpen, onBack });
+  useRemoteMenuControl();
 
   return (
     <Sidebar>

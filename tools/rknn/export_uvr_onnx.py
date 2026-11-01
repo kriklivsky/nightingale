@@ -214,6 +214,7 @@ def main() -> None:
         opset_version=args.opset,
         do_constant_folding=False,
         dynamic_axes=None,
+        dynamo=False,
     )
     onnx_model = onnx.load(str(args.output), load_external_data=True)
     if args.component == "band-split":
