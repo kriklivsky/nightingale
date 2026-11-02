@@ -11,6 +11,7 @@
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen, type UnlistenFn } from '@tauri-apps/api/event';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -193,6 +194,13 @@ export function invokeAuthenticated(
 export function listen<T>(event: string, cb: EventCallback<T>): Promise<UnlistenFn>;
 export function listen(event: string, cb: EventCallback<unknown>): Promise<UnlistenFn> {
   return isTauri ? tauriListen(event, cb) : webListen(event, cb);
+}
+
+export function listenCurrentWindow(
+  event: string,
+  cb: EventCallback<unknown>,
+): Promise<UnlistenFn> {
+  return isTauri ? getCurrentWebviewWindow().listen(event, cb) : webListen(event, cb);
 }
 
 export type { UnlistenFn };

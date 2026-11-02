@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use app_core::{AppConfig, PlaybackPlayer, ProfileStore};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, EventTarget, Manager, State, Window};
 
 use crate::microphones::{list_microphones, MicrophoneInfo};
 
@@ -38,15 +38,43 @@ pub(crate) enum TvStatus {
 }
 
 #[derive(Default)]
-pub(crate) struct TvStatusState(Mutex<Option<TvStatus>>);
+pub(crate) struct TvStatusState(Mutex<Option<ReportedStatus>>);
+
+struct ReportedStatus {
+    window_label: String,
+    status: TvStatus,
+}
 
 #[tauri::command]
-pub(crate) fn report_remote_status(state: State<'_, TvStatusState>, status: TvStatus) {
-    *super::lock(&state.0) = Some(status);
+pub(crate) fn report_remote_status(
+    window: Window,
+    state: State<'_, TvStatusState>,
+    status: TvStatus,
+) {
+    *super::lock(&state.0) = Some(ReportedStatus {
+        window_label: window.label().to_string(),
+        status,
+    });
+}
+
+pub(crate) fn playback_window_closed(app: &AppHandle) {
+    let state = app.state::<TvStatusState>();
+    let mut reported = super::lock(&state.0);
+    if reported
+        .as_ref()
+        .is_some_and(|reported| reported.window_label == "playback")
+    {
+        *reported = Some(ReportedStatus {
+            window_label: "main".into(),
+            status: TvStatus::Menu,
+        });
+    }
 }
 
 pub(super) fn current(state: &TvStatusState) -> Option<TvStatus> {
-    super::lock(&state.0).clone()
+    super::lock(&state.0)
+        .as_ref()
+        .map(|reported| reported.status.clone())
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -161,8 +189,30 @@ impl RemoteCommand {
 
 pub(super) fn send(app: &AppHandle, command: &RemoteCommand) -> Result<(), String> {
     command.validate()?;
-    app.emit(COMMAND_EVENT, command)
-        .map_err(|_| "Cannot reach the TV screen".to_string())
+    let window_label = {
+        let state = app.state::<TvStatusState>();
+        let reported = super::lock(&state.0);
+        if matches!(command, RemoteCommand::Start { .. })
+            && reported
+                .as_ref()
+                .is_some_and(|reported| matches!(reported.status, TvStatus::Playback { .. }))
+        {
+            return Err("Stop the current song before starting another one".into());
+        }
+        reported.as_ref().map_or_else(
+            || "main".to_string(),
+            |reported| reported.window_label.clone(),
+        )
+    };
+    if app.get_webview_window(&window_label).is_none() {
+        return Err("Cannot reach the TV screen".into());
+    }
+    app.emit_to(
+        EventTarget::webview_window(window_label),
+        COMMAND_EVENT,
+        command,
+    )
+    .map_err(|_| "Cannot reach the TV screen".to_string())
 }
 
 #[derive(Serialize)]

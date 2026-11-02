@@ -23,7 +23,7 @@ use crate::playback_queue::emit_queue;
 
 mod tv;
 
-pub(crate) use tv::{report_remote_status, TvStatusState};
+pub(crate) use tv::{playback_window_closed, report_remote_status, TvStatusState};
 
 const WORKERS: usize = 4;
 const MAX_BODY_BYTES: u64 = 4096;

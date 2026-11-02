@@ -25,6 +25,7 @@ const MAX_ACTIVE_JOBS: usize = 5;
 const KEPT_JOBS: usize = 20;
 const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_NAME_CHARS: usize = 120;
+const MAX_FILENAME_BYTES: usize = 255;
 /// Up to here LRC from another release still lands after moving it as a whole
 /// (a longer intro in the video); beyond it the recording is a different cut.
 const CRITICAL_RELEASE_DIFFERENCE_SECS: f64 = 30.0;
@@ -252,7 +253,7 @@ fn import_directory(root: &Path) -> Result<PathBuf, String> {
     Ok(directory)
 }
 
-fn file_stem(artist: &str, title: &str) -> String {
+fn file_stem(artist: &str, title: &str, max_bytes: usize) -> String {
     let name: String = format!("{artist} - {title}")
         .chars()
         .map(|c| {
@@ -265,8 +266,10 @@ fn file_stem(artist: &str, title: &str) -> String {
         .collect();
     let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
     name.trim_start_matches('.')
-        .chars()
+        .char_indices()
         .take(MAX_NAME_CHARS)
+        .take_while(|(offset, character)| offset + character.len_utf8() <= max_bytes)
+        .map(|(_, character)| character)
         .collect::<String>()
         .trim()
         .to_string()
@@ -302,13 +305,14 @@ fn target_path(
     if video_in_library(directory, video_id)? {
         return Err("This video is already in the library".into());
     }
-    let stem = file_stem(artist, title);
+    let suffix = video_suffix(video_id);
+    let stem = file_stem(artist, title, MAX_FILENAME_BYTES - suffix.len());
     let stem = if stem.is_empty() {
         video_id.to_string()
     } else {
         stem
     };
-    Ok(directory.join(format!("{stem}{}", video_suffix(video_id))))
+    Ok(directory.join(format!("{stem}{suffix}")))
 }
 
 /// True for a song that YouTube import saved into the library.

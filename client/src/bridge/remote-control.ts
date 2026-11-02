@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { invoke, isTauri, listen, type UnlistenFn } from './runtime';
+import { invoke, isTauri, listenCurrentWindow, type UnlistenFn } from './runtime';
 import { playbackPlayerSchema } from './schemas';
 
 const remoteControlInfoSchema = z.discriminatedUnion('status', [
@@ -82,7 +82,7 @@ export const reportRemoteStatus = async (status: RemoteTvStatus): Promise<void> 
 export const onRemoteCommand = async (
   callback: (command: RemoteCommand) => void,
 ): Promise<UnlistenFn> =>
-  await listen<unknown>('remote-command', ({ payload }) => {
+  await listenCurrentWindow('remote-command', ({ payload }) => {
     const command = remoteCommandSchema.safeParse(payload);
     if (command.success) {
       callback(command.data);

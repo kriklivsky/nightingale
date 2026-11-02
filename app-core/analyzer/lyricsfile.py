@@ -66,12 +66,16 @@ def parse_word_synced(raw, duration_secs):
         if end is None:
             end = min(max_ms, start + 4000) if start is not None else None
         words = line.get("words")
-        if start is None or start > max_ms or not isinstance(words, list) or not words:
+        if (start is None or end is None or not start < end <= max_ms
+                or not isinstance(words, list) or not words):
             return None, language
         if len(words) > 200:
             return None, language
+        if segments and start / 1000 < segments[-1]["start"]:
+            return None, language
 
         parsed_words = []
+        previous_start = start
         for index, word in enumerate(words):
             if not isinstance(word, dict) or not isinstance(word.get("text"), str):
                 return None, language
@@ -83,8 +87,9 @@ def parse_word_synced(raw, duration_secs):
             if word_end is None:
                 word_end = end
             if (not word["text"].strip() or word_start is None or word_end is None
-                    or word_start < start or word_end <= word_start or word_end > max_ms):
+                    or word_start < previous_start or word_end <= word_start or word_end > end):
                 return None, language
+            previous_start = word_start
             parsed_words.append({
                 "word": word["text"],
                 "start": word_start / 1000,
@@ -92,10 +97,6 @@ def parse_word_synced(raw, duration_secs):
             })
 
         if "".join(word["word"] for word in parsed_words).strip() != text.strip():
-            return None, language
-        if end is None:
-            end = int(parsed_words[-1]["end"] * 1000)
-        if end <= start or end > max_ms or parsed_words[-1]["end"] > end / 1000:
             return None, language
 
         total_words += len(parsed_words)

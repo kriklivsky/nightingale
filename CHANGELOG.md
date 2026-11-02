@@ -70,6 +70,13 @@ below.
 
 ### Fixes
 
+- Preserve long sung words during Qwen alignment and establish the initial LRC offset from agreeing lines across separate chunks, while retaining the requirement for multiple independent anchors.
+- Keep LRC timings unchanged when vocal energy provides no shift information, prefer smaller shifts for equal matches, and count every out-of-recording span as silence.
+- Fall back to wav2vec2 when every Qwen chunk fails instead of saving an entirely estimated analysis as a successful model result.
+- Validate every Lyricsfile word against its line boundaries and reject reversed word or line starts, falling back to LRC alignment while preserving valid overlaps.
+- Restore the phone remote's menu state when the separate playback window closes, and deliver commands only to the window reporting the current screen so monitor changes do not also save stale settings from the other window.
+- Bound imported YouTube filenames by UTF-8 bytes including the video-id suffix, so long CJK titles can be saved on filesystems with a 255-byte filename limit.
+- Correct the Orange Pi recovery guide's frontend build requirements to Node.js 22.12 or newer and the repository's pinned pnpm version, with reproducible client build commands.
 - Stop logging the Rockchip NPU runtime's per-call notice that it converts the separator's mask inputs from NCHW to NHWC; other runtime warnings are still logged.
 - Hide the desktop title bar when the window manager makes the window fill the screen after startup (for example a Wayland compositor's fullscreen rule), not only when the app itself enters fullscreen.
 - Keep sung lyrics readable over light video and backgrounds: the current and upcoming lines sit on darker panels, and unsung words and the upcoming line are drawn with stronger contrast.

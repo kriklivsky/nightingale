@@ -67,6 +67,9 @@ pub(crate) fn register(window: &WebviewWindow, state: WindowState) {
         }
         WindowEvent::CloseRequested { .. } => save_open(&app),
         WindowEvent::Destroyed if label == "main" => app.exit(0),
+        WindowEvent::Destroyed if label == "playback" => {
+            crate::remote_control::playback_window_closed(&app);
+        }
         _ => {}
     });
 }

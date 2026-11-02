@@ -307,8 +307,18 @@ Unit'ы: `tvbox-vnc.service` (After/Requires tvbox-session), `tvbox-novnc.servic
 
 ## 17. Nightingale (сборка и рантайм — код в репо)
 
-На борту: `rustc/cargo 1.94 (trixie-backports)`, `nodejs 20`, `pnpm` (corepack), `libwebkit2gtk-4.1-dev` и весь dev-стек из §3.
-Процедура из сессии: исходники форка rsync в `/var/tmp/nightingale-<build>/`, `pnpm install && vite build` для клиента, `cargo build --release`, затем подмена бинарника:
+Для сборки нужны `rustc/cargo 1.94 (trixie-backports)`, **Node.js не ниже 22.12** (требование `client/package.json`), `pnpm` версии из поля `packageManager` того же файла, `libwebkit2gtk-4.1-dev` и весь dev-стек из §3. Пакет `nodejs` из Debian trixie устанавливает Node.js 20; перед сборкой клиента его нужно заменить подходящей версией. Проверить `node --version` и `pnpm --version` в окружении пользователя, который собирает приложение.
+
+Исходники форка скопировать в `/var/tmp/nightingale-<build>/`, затем из корня этой копии выполнить:
+
+```sh
+pnpm --dir client install --frozen-lockfile
+pnpm --dir client build
+cargo build --release --locked -p Nightingale
+```
+
+После успешной сборки подменить бинарник:
+
 ```sh
 install -m 0755 target/release/Nightingale /usr/bin/Nightingale
 systemctl restart tvbox-session.service

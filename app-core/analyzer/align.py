@@ -207,13 +207,13 @@ ENERGY_FRAME_SECONDS = 0.02
 # scores low. A line is kept within CLOSE_DRIFT_SECONDS of its expected offset
 # from MIN_LINE_CONFIDENCE, within LINE_DRIFT_SECONDS from SURE_LINE_CONFIDENCE.
 # The expected offset jumps (a cut in a music video) only when JUMP_LINES lines
-# of a chunk agree on the new one with a mean confidence of SURE_LINE_CONFIDENCE.
+# agree on the new one with a mean confidence of SURE_LINE_CONFIDENCE.
 MIN_LINE_CONFIDENCE = 0.2
 SURE_LINE_CONFIDENCE = 0.35
 CLOSE_DRIFT_SECONDS = 1.5
 JUMP_LINES = 2
-# A line whose next word starts this long after the previous one was stretched
-# over a pause it does not have.
+# A gap this long between one word's end and the next word's start makes the
+# line suspect; a long continuously sung word is not a gap.
 MAX_WORD_GAP_SECONDS = 4.0
 # Singing time of a line: lead-in plus time per syllable. An LRC line counts
 # for at most LRC_LINE_SPAN_FACTOR times that, so a timestamp far from the
@@ -647,6 +647,9 @@ def _align_lyrics_qwen(
             return _align_chunks_qwen(
                 aligner, clean_lines, line_spans, audio, language, line_windows, mix_path,
             )
+        except Exception as e:
+            print(f"[nightingale:LOG] Qwen chunked alignment failed: {e}; using wav2vec2", flush=True)
+            return None
         finally:
             aligner.close()
 
@@ -691,7 +694,12 @@ def _align_lyrics_qwen(
 def _vocal_energy(audio) -> np.ndarray:
     hop = int(ENERGY_FRAME_SECONDS * 16000)
     frames = np.asarray(audio[: len(audio) // hop * hop], dtype=np.float32).reshape(-1, hop)
-    return np.convolve(np.sqrt(np.mean(frames**2, axis=1)), np.ones(5) / 5, mode="same")
+    if not len(frames):
+        return np.empty(0, dtype=np.float32)
+    rms = np.sqrt(np.mean(frames**2, axis=1))
+    kernel = np.ones(5) / 5
+    padding = len(kernel) // 2
+    return np.convolve(np.pad(rms, padding, mode="edge"), kernel, mode="valid")
 
 
 # LRC taken from another release of the song (a music video with a longer
@@ -711,12 +719,17 @@ def estimate_lrc_shift(vocals_path: str, lines: list[dict], max_shift: float) ->
 
     energy = _vocal_energy(whisperx.load_audio(vocals_path))
     step = int(round(LRC_SHIFT_STEP_SECONDS / ENERGY_FRAME_SECONDS))
+    if not lines or len(energy) < step or not np.all(np.isfinite(energy)):
+        return 0.0
     energy = energy[: len(energy) // step * step].reshape(-1, step).mean(axis=1)
     level = 20 * np.log10(energy + 1e-5)
-    level = np.clip((level - np.median(level)) / (np.std(level) + 1e-6), -3.0, 3.0)
+    deviation = float(np.std(level))
+    if deviation <= np.finfo(np.float32).eps:
+        return 0.0
+    level = np.clip((level - np.median(level)) / (deviation + 1e-6), -3.0, 3.0)
     reach = int(max_shift / LRC_SHIFT_STEP_SECONDS)
-    padded = np.concatenate([np.full(reach + 1, level.min()), level, np.full(reach + 1, level.min())])
-    totals = np.concatenate([[0.0], np.cumsum(padded)])
+    totals = np.concatenate([[0.0], np.cumsum(level)])
+    silence = float(level.min())
     spans = []
     for line in lines:
         start = float(line["start"])
@@ -727,15 +740,22 @@ def estimate_lrc_shift(vocals_path: str, lines: list[dict], max_shift: float) ->
         )
         first = int(start / LRC_SHIFT_STEP_SECONDS)
         spans.append((first, max(first + 1, int(end / LRC_SHIFT_STEP_SECONDS))))
-    best_score, best_shift = -math.inf, 0
-    for shift in range(-reach, reach + 1):
-        score = 0.0
+
+    def score(shift: int) -> float:
+        total = 0.0
         for first, last in spans:
-            lo = min(max(first + shift + reach + 1, 0), len(padded))
-            hi = min(max(last + shift + reach + 1, 0), len(padded))
-            score += totals[hi] - totals[lo]
-        if score > best_score:
-            best_score, best_shift = score, shift
+            lo = min(max(first + shift, 0), len(level))
+            hi = min(max(last + shift, 0), len(level))
+            missing = last - first - (hi - lo)
+            total += totals[hi] - totals[lo] + missing * silence
+        return float(total)
+
+    best_score, best_shift = score(0), 0
+    for shift in range(-reach, reach + 1):
+        candidate = score(shift)
+        tied = math.isclose(candidate, best_score, rel_tol=1e-9, abs_tol=1e-9)
+        if (tied and abs(shift) < abs(best_shift)) or (not tied and candidate > best_score):
+            best_score, best_shift = candidate, shift
     return best_shift * LRC_SHIFT_STEP_SECONDS
 
 
@@ -807,7 +827,8 @@ def _align_chunks_qwen(
     after the last aligned word; its last line is aligned again with the next
     chunk, so a chunk end cannot squeeze it. A line is kept when the aligner
     is confident about its words and it starts near the expected offset; the
-    offset jumps only when several lines of a chunk agree on the new one.
+    offset jumps only when several lines agree on the new one; initial anchors
+    can come from separate chunks.
     Lines whose vocal stem is mostly silent (a choir or backing vocals
     the separator put in the instrumental) are aligned against the original
     mix, and the other source is tried when a chunk is not fully confident.
@@ -827,6 +848,8 @@ def _align_chunks_qwen(
     ]
     results: list[dict | None] = [None] * count
     from_mix = [False] * count
+    pending: dict[int, tuple[dict, bool]] = {}
+    successful_calls = 0
 
     def offset_of(index: int) -> float:
         return results[index]["start"] - lrc_start[index]
@@ -850,12 +873,14 @@ def _align_chunks_qwen(
         return mix
 
     def align_span(first: int, last: int, start: float, end: float, on_mix: bool) -> list[dict | None]:
+        nonlocal successful_calls
         try:
             tokens = aligner.align(
                 source(on_mix)[int(start * 16000) : int(end * 16000)],
                 "\n".join(clean_lines[first : last + 1]),
                 language,
             )
+            successful_calls += 1
         except Exception as e:
             print(f"[nightingale:LOG] Qwen chunk {first + 1}-{last + 1} failed: {e}", flush=True)
             tokens = []
@@ -883,6 +908,10 @@ def _align_chunks_qwen(
         for index in range(first, last + 1):
             if mapped and mapped[0]["text"] == clean_lines[index]:
                 segment = mapped.pop(0)
+                words = segment["words"]
+                if any(b["start"] - a["end"] > MAX_WORD_GAP_SECONDS for a, b in zip(words, words[1:])):
+                    lines.append(None)
+                    continue
                 _hold_words_in_window(segment["words"], segment["words"][-1]["end"])
                 lines.append(segment)
             else:
@@ -890,10 +919,7 @@ def _align_chunks_qwen(
         return lines
 
     def sound(segment: dict | None) -> bool:
-        if segment is None or _line_squashed(segment):
-            return False
-        words = segment["words"]
-        return all(b["start"] - a["start"] <= MAX_WORD_GAP_SECONDS for a, b in zip(words, words[1:]))
+        return segment is not None and not _line_squashed(segment)
 
     def keepable(first: int, lines: list[dict | None], expected: list[float]) -> list[int]:
         kept = []
@@ -908,12 +934,14 @@ def _align_chunks_qwen(
                 kept.append(index)
         return kept
 
-    def jump(first: int, lines: list[dict | None]) -> float | None:
+    def jump(first: int, lines: list[dict | None], include_pending: bool) -> float | None:
         """An offset JUMP_LINES sound lines agree on with a mean confidence of
         SURE_LINE_CONFIDENCE, if any."""
+        candidates = {index: segment for index, (segment, _) in pending.items()} if include_pending else {}
+        candidates.update(enumerate(lines, first))
         found = [
             (segment["start"] - lrc_start[index], _line_confidence(segment))
-            for index, segment in zip(range(first, first + len(lines)), lines)
+            for index, segment in candidates.items()
             if sound(segment) and _line_confidence(segment) >= MIN_LINE_CONFIDENCE
         ]
         groups = [[f for f in found if abs(f[0] - candidate) <= CLOSE_DRIFT_SECONDS] for candidate, _ in found]
@@ -928,17 +956,20 @@ def _align_chunks_qwen(
     ) -> tuple[list[dict | None], list[int], bool]:
         """Lines first..last aligned on start..end, the indices of the ones
         kept and whether they came from the mix. Lines are kept near their
-        ``expected`` offsets, or near a jump the chunk agrees on when
+        ``expected`` offsets, or near a jump supported by multiple lines when
         ``may_jump`` (with no expected offsets, only that)."""
         best: tuple[list[dict | None], list[int], bool] | None = None
+        best_rank = (-1, -math.inf)
         for on_mix in (preferred, not preferred) if mix_path else (False,):
             lines = align_span(first, last, start, end, on_mix)
             kept = keepable(first, lines, expected) if expected is not None else []
-            jumped = jump(first, lines) if may_jump else None
+            jumped = jump(first, lines, expected is None) if may_jump else None
             if jumped is not None:
                 kept = max(kept, keepable(first, lines, [jumped] * len(lines)), key=len)
-            if best is None or len(kept) > len(best[1]):
+            rank = (len(kept), sum(_line_confidence(segment) for segment in lines if sound(segment)))
+            if rank > best_rank:
                 best = (lines, kept, on_mix)
+                best_rank = rank
             if len(kept) == last - first + 1:
                 break
         return best
@@ -1009,8 +1040,20 @@ def _align_chunks_qwen(
             results[index] = lines[index - first]
             from_mix[index] = mixed
         if kept:
-            offset = float(np.median([offset_of(index) for index in kept]))
+            next_offset = float(np.median([offset_of(index) for index in kept]))
+            if offset is None:
+                for index, (segment, on_mix) in pending.items():
+                    if keepable(index, [segment], [next_offset]):
+                        results[index] = segment
+                        from_mix[index] = on_mix
+                pending.clear()
+            offset = next_offset
             floor = floor_after(kept[-1])
+        elif offset is None:
+            for index in range(first, settled + 1):
+                segment = lines[index - first]
+                if sound(segment) and _line_confidence(segment) >= MIN_LINE_CONFIDENCE:
+                    pending[index] = (segment, mixed)
         lost = not kept
         first = settled + 1
 
@@ -1045,6 +1088,9 @@ def _align_chunks_qwen(
             results[index] = lines[index - first]
             from_mix[index] = mixed
             repaired += 1
+
+    if successful_calls == 0 and count:
+        raise RuntimeError("Qwen could not process any audio chunks")
 
     # The stem has no voice under lines aligned on the mix, so only stem
     # alignments are trimmed to its sung parts.
